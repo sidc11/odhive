@@ -6,6 +6,10 @@ set -euo pipefail
 
 bin="$1"
 log="$(mktemp)"
+# The container user has no passwd entry; give it a private home.
+HOME="$(mktemp -d)"
+export HOME
+unset XDG_CONFIG_HOME XDG_DATA_HOME
 
 "$bin" --version
 "$bin" --port 7069 >"$log" 2>&1 &
@@ -31,5 +35,9 @@ echo "localhost -> $ok"
 echo "evil.com  -> $bad"
 [[ "$ok" == "HTTP/1.1 200 OK" ]]
 [[ "$bad" == "HTTP/1.1 403 Forbidden" ]]
+
+# First run creates the config (0600) and the workspace layout.
+[[ "$(stat -c %a "$HOME/.config/odhive/config.toml")" == "600" ]]
+[[ -d "$HOME/OdHive/sources" && -d "$HOME/OdHive/projects" ]]
 
 echo "smoke test passed on $(. /etc/os-release && echo "$PRETTY_NAME")"
