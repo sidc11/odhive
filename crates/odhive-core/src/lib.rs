@@ -2,8 +2,11 @@
 #![forbid(unsafe_code)]
 
 pub mod config;
+pub mod fsutil;
+pub mod names;
 pub mod platform;
 pub mod ports;
+pub mod project;
 pub mod sources;
 pub mod version;
 pub mod workspace;
