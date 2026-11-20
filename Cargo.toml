@@ -5,7 +5,7 @@ members = ["crates/odhive-core", "crates/odhive-server", "crates/odhive"]
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["Siddharth Chaudhari"]
 license = "Apache-2.0"
 repository = "https://github.com/sidc11/odhive"

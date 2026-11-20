@@ -41,6 +41,8 @@ jobs:
       - run: pnpm test
       - run: pnpm audit --audit-level high
       - run: pnpm build
+      - name: UI build lands in the server crate
+        run: test -f ../crates/odhive-server/web-dist/index.html
 
   rust:
     name: Rust (${{ matrix.os }})
@@ -83,6 +85,9 @@ jobs:
         run: cargo nextest run --workspace --locked
       - name: build
         run: cargo build -p odhive --locked
+      - name: package (UI must be embedded)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo package -p odhive-server --locked --allow-dirty --list | grep -q '^web-dist/index.html$'
 
   linux-distros:
     name: Linux distros

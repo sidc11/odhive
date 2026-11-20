@@ -1,4 +1,4 @@
-//! Embedded frontend (`web/dist`) served with a single-page-app fallback.
+//! Embedded frontend (`web-dist/`, built from `web/` by Vite) served with a single-page-app fallback.
 
 use axum::body::Body;
 use axum::http::{Method, StatusCode, Uri, header};
@@ -6,7 +6,7 @@ use axum::response::{IntoResponse, Response};
 use rust_embed::Embed;
 
 #[derive(Embed)]
-#[folder = "../../web/dist"]
+#[folder = "web-dist"]
 #[allow_missing = true]
 struct WebDist;
 

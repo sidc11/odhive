@@ -55,7 +55,7 @@ async fn missing_host_is_forbidden() {
 #[tokio::test]
 async fn localhost_is_allowed_and_carries_security_headers() {
     let resp = get(Some("localhost:7069"), "/").await;
-    // 200 with a built UI; 503 "not built" page when web/dist is absent.
+    // 200 with a built UI; 503 "not built" page when web-dist is absent.
     assert!(
         resp.status() == StatusCode::OK || resp.status() == StatusCode::SERVICE_UNAVAILABLE,
         "unexpected status {}",
@@ -106,7 +106,7 @@ async fn non_get_methods_are_rejected() {
 async fn serves_index_html_when_ui_is_built() {
     let resp = get(Some("localhost:7069"), "/").await;
     if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
-        return; // web/dist not built in this environment
+        return; // web-dist not built in this environment
     }
     assert!(
         resp.headers()[header::CONTENT_TYPE]
