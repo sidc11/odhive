@@ -1,4 +1,9 @@
-# OdHive
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/odhive-wordmark-dark.svg">
+    <img src="assets/logo/odhive-wordmark.svg" alt="OdHive" height="72">
+  </picture>
+</h1>
 
 > **The daily driver for Odoo developers. Your Odoo servers, one hive.**
 
@@ -14,8 +19,9 @@ builder, Smart Reload, dependency auto-fix, database manager and a live log view
 ## Scope (v0.1)
 
 - Odoo **19** and **20**
-- **Linux** and **macOS**
-- Binds to `127.0.0.1` only; UI on port `9001` by default
+- **Linux** — every distro family Odoo supports: Debian / Ubuntu (deb) and Fedora / RHEL / Rocky / Alma (rpm); x86_64 and arm64. Release binaries are static (musl), so they don't depend on the system glibc.
+- **macOS**
+- Binds to `127.0.0.1` only; UI on port `7069` by default
 
 ## Building from source
 
@@ -27,7 +33,7 @@ pnpm --dir web build
 cargo run -p odhive
 ```
 
-Then open <http://localhost:9001>.
+Then open <http://localhost:7069>.
 
 ## Contributing
 

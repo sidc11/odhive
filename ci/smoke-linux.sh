@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Smoke test for a release binary inside a Linux distro container (CI only).
+# Usage: smoke-linux.sh /path/to/odhive
+# Runs as a non-root user. Uses bash /dev/tcp so no extra packages are needed.
+set -euo pipefail
+
+bin="$1"
+log="$(mktemp)"
+
+"$bin" --version
+"$bin" --port 7069 >"$log" 2>&1 &
+pid=$!
+trap 'kill "$pid" 2>/dev/null || true' EXIT
+
+for _ in $(seq 1 50); do
+  grep -q 'OdHive is running at' "$log" && break
+  sleep 0.1
+done
+grep -q 'OdHive is running at http://localhost:7069' "$log" || { cat "$log"; exit 1; }
+
+status_for_host() {
+  exec 3<>/dev/tcp/127.0.0.1/7069
+  printf 'GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n' "$1" >&3
+  head -n1 <&3 | tr -d '\r'
+  exec 3>&-
+}
+
+ok="$(status_for_host localhost:7069)"
+bad="$(status_for_host evil.com)"
+echo "localhost -> $ok"
+echo "evil.com  -> $bad"
+[[ "$ok" == "HTTP/1.1 200 OK" ]]
+[[ "$bad" == "HTTP/1.1 403 Forbidden" ]]
+
+echo "smoke test passed on $(. /etc/os-release && echo "$PRETTY_NAME")"
