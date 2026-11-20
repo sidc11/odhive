@@ -141,7 +141,7 @@ def main(argv):
             [("/opt/odoo/odoo/service/server.py", 1388, "start", "rc = server.run(preload, stop)")],
         )
         log("CRITICAL", "odoo.service.server", f"Failed to start server\n{tb}")
-        server.shutdown()
+        server.server_close()
         return 1
 
     deadline = time.monotonic() + args.exit_after if args.exit_after > 0 else None
@@ -155,7 +155,7 @@ def main(argv):
         log("INFO", "odoo.service.server", "Hit CTRL-C again or send a second signal to force the shutdown.")
     else:
         log("INFO", "odoo.service.server", "Initiating shutdown")
-    server.shutdown()
+    # The HTTP thread is a daemon and ends with the process; closing the socket is enough.
     server.server_close()
     return 0
 

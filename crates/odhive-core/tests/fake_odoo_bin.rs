@@ -57,7 +57,16 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> std::process::Exit
         }
         if start.elapsed() > timeout {
             let _ = child.kill();
-            panic!("fixture did not exit within {timeout:?}");
+            let _ = child.wait();
+            let mut out = String::new();
+            let mut err = String::new();
+            if let Some(mut s) = child.stdout.take() {
+                let _ = s.read_to_string(&mut out);
+            }
+            if let Some(mut s) = child.stderr.take() {
+                let _ = s.read_to_string(&mut err);
+            }
+            panic!("fixture did not exit within {timeout:?}\nstdout:\n{out}\nstderr:\n{err}");
         }
         std::thread::sleep(Duration::from_millis(20));
     }
