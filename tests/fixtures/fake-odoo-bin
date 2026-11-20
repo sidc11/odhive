@@ -19,6 +19,7 @@ import http.server
 import os
 import signal
 import socket
+import socketserver
 import sys
 import threading
 import time
@@ -55,6 +56,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *args):  # silence default stderr logging
         pass
+
+
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer.server_bind() calls socket.getfqdn(), a reverse DNS lookup
+        # that can stall for seconds on some machines (e.g. macOS CI runners).
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def parse_args(argv):
@@ -98,7 +107,7 @@ def main(argv):
         log("CRITICAL", "odoo.modules.module", f"Couldn't load module base\n{tb}")
         return 1
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", args.http_port), Handler)
+    server = Server(("127.0.0.1", args.http_port), Handler)
     server.odoo_version = args.odoo_version
     server.db = args.database
     threading.Thread(target=server.serve_forever, daemon=True).start()
