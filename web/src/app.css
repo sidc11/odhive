@@ -1,0 +1,6 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-hive-purple: #714b67;
+  --color-hive-amber: #f5a524;
+}
