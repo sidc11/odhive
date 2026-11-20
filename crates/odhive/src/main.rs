@@ -3,8 +3,10 @@
 
 use anyhow::Context;
 use clap::Parser;
+use odhive_core::config::AppPaths;
 use odhive_core::platform::{effective_uid, ensure_not_root};
 use odhive_core::ports::{DEFAULT_PORT_ATTEMPTS, DEFAULT_UI_PORT, bind_loopback};
+use odhive_core::workspace::bootstrap;
 use tracing_subscriber::EnvFilter;
 
 /// Your Odoo servers, one hive.
@@ -26,6 +28,16 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     ensure_not_root(effective_uid())?;
+
+    let paths = AppPaths::discover()?;
+    let boot = bootstrap(&paths).context("could not prepare the OdHive workspace")?;
+    if boot.config_created {
+        tracing::info!(path = %paths.config_file().display(), "created config");
+    }
+    for dir in &boot.created {
+        tracing::info!(path = %dir.display(), "created folder");
+    }
+    tracing::info!(root = %boot.workspace.root().display(), "workspace ready");
 
     let listeners = bind_loopback(cli.port, DEFAULT_PORT_ATTEMPTS)
         .await
