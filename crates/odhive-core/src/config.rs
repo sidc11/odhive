@@ -17,6 +17,8 @@ use directories::{ProjectDirs, UserDirs};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::version::OdooVersion;
+
 /// Schema version written by this build. Newer files are refused, never rewritten.
 pub const CONFIG_VERSION: u32 = 1;
 
@@ -152,7 +154,7 @@ pub struct SourceEntry {
     /// Community or Enterprise.
     pub edition: Edition,
     /// Odoo series detected from the tree, e.g. `19.0`.
-    pub odoo_version: String,
+    pub odoo_version: OdooVersion,
     /// Absolute path of the source tree.
     pub path: PathBuf,
 }
@@ -360,13 +362,13 @@ mod tests {
         cfg.sources.push(SourceEntry {
             id: "odoo-19.0".into(),
             edition: Edition::Community,
-            odoo_version: "19.0".into(),
+            odoo_version: "19.0".parse().expect("version"),
             path: "/home/dev/OdHive/sources/odoo-19.0".into(),
         });
         cfg.sources.push(SourceEntry {
             id: "enterprise-20.0".into(),
             edition: Edition::Enterprise,
-            odoo_version: "20.0".into(),
+            odoo_version: "20.0".parse().expect("version"),
             path: "/srv/enterprise".into(),
         });
         cfg.projects.push(ProjectEntry {
@@ -482,6 +484,22 @@ mod tests {
                 GlobalConfig::from_toml(text, Path::new("t")),
                 Err(ConfigError::Parse { .. })
             ));
+        }
+    }
+
+    #[test]
+    fn unsupported_odoo_version_is_rejected() {
+        for version in ["18.0", "19", "nineteen"] {
+            let text = format!(
+                "version = 1\nworkspace_root = \"/w\"\n[[sources]]\nid = \"x\"\nedition = \"community\"\nodoo_version = \"{version}\"\npath = \"/x\"\n"
+            );
+            assert!(
+                matches!(
+                    GlobalConfig::from_toml(&text, Path::new("t")),
+                    Err(ConfigError::Parse { .. })
+                ),
+                "{version}"
+            );
         }
     }
 
