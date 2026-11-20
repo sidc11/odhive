@@ -1,0 +1,24 @@
+[package]
+name = "odhive"
+description = "The daily driver for Odoo developers. Your Odoo servers, one hive."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["odoo", "developer-tools", "server", "erp"]
+categories = ["development-tools", "command-line-utilities"]
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.9", features = ["derive"] }
+odhive-core = { version = "0.0.1", path = "../odhive-core" }
+odhive-server = { version = "0.0.1", path = "../odhive-server" }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
