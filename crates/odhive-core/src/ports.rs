@@ -7,7 +7,18 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 
 /// Default port for the OdHive web UI.
-pub const DEFAULT_UI_PORT: u16 = 9001;
+///
+/// 7069 is unassigned in the IANA registry and has no well-known unofficial use. It
+/// sits away from Odoo's own ports (8069/8072 and the range OdHive hands out to
+/// instances) and from common dev ports such as 9001 (Supervisor, MinIO console).
+pub const DEFAULT_UI_PORT: u16 = 7069;
+
+/// Ports the UI must never default to: Odoo, PostgreSQL and common developer tools.
+pub const AVOIDED_PORTS: &[u16] = &[
+    80, 443, 1433, 3000, 3001, 3306, 4000, 4200, 5000, 5173, 5432, 5433, 5672, 6379, 6969, 8000,
+    8001, 8008, 8069, 8070, 8071, 8072, 8080, 8081, 8088, 8443, 8888, 9000, 9001, 9002, 9090, 9200,
+    9229, 9300, 11211, 15672, 27017,
+];
 
 /// How many consecutive ports are tried before giving up.
 pub const DEFAULT_PORT_ATTEMPTS: u16 = 20;
@@ -109,6 +120,18 @@ mod tests {
     async fn free_port() -> u16 {
         let l = bind_loopback(20_000, 5_000).await.expect("free port");
         l.port
+    }
+
+    #[test]
+    fn default_ui_port_range_avoids_known_ports() {
+        let range = DEFAULT_UI_PORT..DEFAULT_UI_PORT + DEFAULT_PORT_ATTEMPTS;
+        for p in AVOIDED_PORTS {
+            assert!(!range.contains(p), "fallback range {range:?} contains {p}");
+        }
+        // Below the Linux (32768+) and macOS (49152+) ephemeral ranges.
+        assert!(range.end < 32_768);
+        // Unprivileged: no root needed to bind.
+        assert!(range.start >= 1024);
     }
 
     #[tokio::test]

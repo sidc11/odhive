@@ -108,28 +108,28 @@ mod tests {
 
     #[test]
     fn allows_loopback_names_on_serving_port() {
-        let g = HostGuard::new(9001);
-        assert!(g.is_allowed("localhost:9001"));
-        assert!(g.is_allowed("LocalHost:9001"));
-        assert!(g.is_allowed("127.0.0.1:9001"));
-        assert!(g.is_allowed("[::1]:9001"));
+        let g = HostGuard::new(7069);
+        assert!(g.is_allowed("localhost:7069"));
+        assert!(g.is_allowed("LocalHost:7069"));
+        assert!(g.is_allowed("127.0.0.1:7069"));
+        assert!(g.is_allowed("[::1]:7069"));
     }
 
     #[test]
     fn rejects_foreign_or_malformed_hosts() {
-        let g = HostGuard::new(9001);
+        let g = HostGuard::new(7069);
         for bad in [
             "evil.com",
-            "evil.com:9001",
+            "evil.com:7069",
             "localhost",
-            "localhost:9002",
-            "localhost.:9001",
-            "localhost.evil.com:9001",
-            "127.0.0.2:9001",
-            "0.0.0.0:9001",
-            "[::2]:9001",
+            "localhost:7070",
+            "localhost.:7069",
+            "localhost.evil.com:7069",
+            "127.0.0.2:7069",
+            "0.0.0.0:7069",
+            "[::2]:7069",
             "[::1]",
-            "::1:9001",
+            "::1:7069",
             "localhost:abc",
             "localhost:99999",
             "",

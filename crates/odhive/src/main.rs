@@ -60,9 +60,9 @@ mod tests {
     }
 
     #[test]
-    fn default_port_is_9001() {
+    fn default_port_is_7069() {
         let cli = Cli::try_parse_from(["odhive"]).expect("parse");
-        assert_eq!(cli.port, 9001);
+        assert_eq!(cli.port, 7069);
     }
 
     #[test]

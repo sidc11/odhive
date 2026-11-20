@@ -7,7 +7,7 @@ use odhive_server::security::CONTENT_SECURITY_POLICY;
 use odhive_server::{AppConfig, app};
 use tower::ServiceExt;
 
-const PORT: u16 = 9001;
+const PORT: u16 = 7069;
 
 async fn get(host: Option<&str>, path: &str) -> axum::response::Response {
     let mut req = Request::builder().uri(path);
@@ -42,7 +42,7 @@ async fn foreign_host_is_forbidden() {
 
 #[tokio::test]
 async fn rebinding_host_with_matching_port_is_forbidden() {
-    let resp = get(Some("evil.com:9001"), "/").await;
+    let resp = get(Some("evil.com:7069"), "/").await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
@@ -54,7 +54,7 @@ async fn missing_host_is_forbidden() {
 
 #[tokio::test]
 async fn localhost_is_allowed_and_carries_security_headers() {
-    let resp = get(Some("localhost:9001"), "/").await;
+    let resp = get(Some("localhost:7069"), "/").await;
     // 200 with a built UI; 503 "not built" page when web/dist is absent.
     assert!(
         resp.status() == StatusCode::OK || resp.status() == StatusCode::SERVICE_UNAVAILABLE,
@@ -66,7 +66,7 @@ async fn localhost_is_allowed_and_carries_security_headers() {
 
 #[tokio::test]
 async fn ipv4_and_ipv6_loopback_hosts_are_allowed() {
-    for host in ["127.0.0.1:9001", "[::1]:9001"] {
+    for host in ["127.0.0.1:7069", "[::1]:7069"] {
         let resp = get(Some(host), "/").await;
         assert_ne!(resp.status(), StatusCode::FORBIDDEN, "{host}");
     }
@@ -74,16 +74,16 @@ async fn ipv4_and_ipv6_loopback_hosts_are_allowed() {
 
 #[tokio::test]
 async fn unknown_asset_is_not_found() {
-    let resp = get(Some("localhost:9001"), "/assets/does-not-exist.js").await;
+    let resp = get(Some("localhost:7069"), "/assets/does-not-exist.js").await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     assert_security_headers(&resp);
 }
 
 #[tokio::test]
 async fn path_traversal_does_not_escape_embedded_files() {
-    let resp = get(Some("localhost:9001"), "/../../Cargo.toml").await;
+    let resp = get(Some("localhost:7069"), "/../../Cargo.toml").await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    let resp = get(Some("localhost:9001"), "/%2e%2e/%2e%2e/Cargo.toml").await;
+    let resp = get(Some("localhost:7069"), "/%2e%2e/%2e%2e/Cargo.toml").await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
@@ -92,7 +92,7 @@ async fn non_get_methods_are_rejected() {
     let req = Request::builder()
         .method("POST")
         .uri("/")
-        .header(header::HOST, "localhost:9001")
+        .header(header::HOST, "localhost:7069")
         .body(Body::empty())
         .expect("request");
     let resp = app(AppConfig { port: PORT })
@@ -104,7 +104,7 @@ async fn non_get_methods_are_rejected() {
 
 #[tokio::test]
 async fn serves_index_html_when_ui_is_built() {
-    let resp = get(Some("localhost:9001"), "/").await;
+    let resp = get(Some("localhost:7069"), "/").await;
     if resp.status() == StatusCode::SERVICE_UNAVAILABLE {
         return; // web/dist not built in this environment
     }
