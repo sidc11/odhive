@@ -8,15 +8,14 @@
 //! write is atomic (temp file in the same directory, then rename).
 
 use std::collections::HashSet;
-use std::fs::{self, DirBuilder, File, Permissions};
-use std::io::{self, Read, Write};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use directories::{ProjectDirs, UserDirs};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::fsutil;
 use crate::version::OdooVersion;
 
 /// Schema version written by this build. Newer files are refused, never rewritten.
@@ -30,9 +29,6 @@ pub const DEFAULT_WORKSPACE_DIR: &str = "OdHive";
 
 /// Config files larger than this are rejected instead of being read into memory.
 pub const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
-
-const FILE_MODE: u32 = 0o600;
-const DIR_MODE: u32 = 0o700;
 
 /// Errors returned while locating, reading or writing the global config.
 #[derive(Debug, Error)]
@@ -264,35 +260,15 @@ impl GlobalConfig {
     /// # Errors
     /// Returns I/O, size, parse or validation errors.
     pub fn load(path: &Path) -> Result<Option<Self>, ConfigError> {
-        let io_err = |source| ConfigError::Io {
-            path: path.to_path_buf(),
-            source,
-        };
-        let file = match File::open(path) {
-            Ok(f) => f,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(io_err(e)),
-        };
-        let meta = file.metadata().map_err(io_err)?;
-        if meta.len() > MAX_CONFIG_BYTES {
-            return Err(ConfigError::TooLarge {
-                path: path.to_path_buf(),
-            });
+        match fsutil::read_private(path, MAX_CONFIG_BYTES) {
+            Ok(Some(text)) => Self::from_toml(&text, path).map(Some),
+            Ok(None) => Ok(None),
+            Err(e) if e.is_too_large() => Err(ConfigError::TooLarge { path: e.path }),
+            Err(e) => Err(ConfigError::Io {
+                path: e.path,
+                source: e.source,
+            }),
         }
-        if meta.permissions().mode() & 0o077 != 0 {
-            fs::set_permissions(path, Permissions::from_mode(FILE_MODE)).map_err(io_err)?;
-        }
-        let mut text = String::new();
-        // `take` guards against the file growing between `metadata` and `read`.
-        file.take(MAX_CONFIG_BYTES + 1)
-            .read_to_string(&mut text)
-            .map_err(io_err)?;
-        if text.len() as u64 > MAX_CONFIG_BYTES {
-            return Err(ConfigError::TooLarge {
-                path: path.to_path_buf(),
-            });
-        }
-        Self::from_toml(&text, path).map(Some)
     }
 
     /// Loads the config from `paths`, or returns the default (`~/OdHive`) without
@@ -312,33 +288,10 @@ impl GlobalConfig {
     /// Returns validation, serialization or I/O errors.
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
         let text = self.to_toml()?;
-        let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
-        let dir = dir.unwrap_or_else(|| Path::new("."));
-        let io_err = |p: &Path| {
-            let p = p.to_path_buf();
-            move |source| ConfigError::Io { path: p, source }
-        };
-
-        DirBuilder::new()
-            .recursive(true)
-            .mode(DIR_MODE)
-            .create(dir)
-            .map_err(io_err(dir))?;
-
-        // NamedTempFile is created with mode 0600 and removed if we bail out early.
-        let mut tmp = tempfile::Builder::new()
-            .prefix(".config.")
-            .suffix(".tmp")
-            .permissions(Permissions::from_mode(FILE_MODE))
-            .tempfile_in(dir)
-            .map_err(io_err(dir))?;
-        tmp.write_all(text.as_bytes()).map_err(io_err(tmp.path()))?;
-        tmp.as_file().sync_all().map_err(io_err(tmp.path()))?;
-        tmp.persist(path).map_err(|e| ConfigError::Io {
-            path: path.to_path_buf(),
-            source: e.error,
-        })?;
-        Ok(())
+        fsutil::write_private_atomic(path, text.as_bytes()).map_err(|e| ConfigError::Io {
+            path: e.path,
+            source: e.source,
+        })
     }
 }
 
@@ -355,6 +308,9 @@ fn require_absolute(field: &'static str, path: &Path) -> Result<(), ConfigError>
 
 #[cfg(test)]
 mod tests {
+    use std::fs::{self, Permissions};
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
     fn sample() -> GlobalConfig {
