@@ -4,4 +4,6 @@
 pub mod config;
 pub mod platform;
 pub mod ports;
+pub mod sources;
+pub mod version;
 pub mod workspace;
