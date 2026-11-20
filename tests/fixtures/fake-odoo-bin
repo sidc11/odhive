@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""Fake odoo-bin used by OdHive tests.
+
+Prints realistic Odoo log lines, binds --http-port on 127.0.0.1, handles
+SIGINT/SIGTERM like Odoo, and can simulate common failures.
+
+Simulation flags (not real Odoo options):
+  --simulate traceback           log an ERROR with a Python traceback, keep running
+  --simulate module-not-found    fail at import with ModuleNotFoundError, exit 1
+  --simulate crash               crash after startup, exit 1
+  --missing-module NAME          module name used by module-not-found (default: xlrd)
+  --exit-after SECONDS           stop by itself after SECONDS (0 = run until signalled)
+  --odoo-version VERSION         version reported in logs (default: 19.0)
+"""
+
+import argparse
+import datetime
+import http.server
+import os
+import signal
+import socket
+import sys
+import threading
+import time
+
+PID = os.getpid()
+
+
+def log(level, logger, message, db="?"):
+    now = datetime.datetime.now()
+    stamp = now.strftime("%Y-%m-%d %H:%M:%S") + ",%03d" % (now.microsecond // 1000)
+    sys.stdout.write(f"{stamp} {PID} {level} {db} {logger}: {message}\n")
+    sys.stdout.flush()
+
+
+def traceback_lines(exc_line, frames):
+    lines = ["Traceback (most recent call last):"]
+    for path, lineno, func, code in frames:
+        lines.append(f'  File "{path}", line {lineno}, in {func}')
+        lines.append(f"    {code}")
+    lines.append(exc_line)
+    return "\n".join(lines)
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802 (stdlib naming)
+        body = b'{"server_version": "%s"}' % self.server.odoo_version.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        log("INFO", "werkzeug", f'127.0.0.1 - - "GET {self.path} HTTP/1.1" 200 - 1 0.001 0.002',
+            db=self.server.db or "?")
+
+    def log_message(self, *args):  # silence default stderr logging
+        pass
+
+
+def parse_args(argv):
+    p = argparse.ArgumentParser(prog="odoo-bin", add_help=True)
+    p.add_argument("-c", "--config")
+    p.add_argument("-d", "--database", default=None)
+    p.add_argument("-u", "--update", default=None)
+    p.add_argument("-i", "--init", default=None)
+    p.add_argument("--http-port", type=int, default=8069)
+    p.add_argument("--gevent-port", type=int, default=8072)
+    p.add_argument("--addons-path", default=None)
+    p.add_argument("--dev", default=None)
+    p.add_argument("--simulate", choices=["traceback", "module-not-found", "crash"])
+    p.add_argument("--missing-module", default="xlrd")
+    p.add_argument("--exit-after", type=float, default=0.0)
+    p.add_argument("--odoo-version", default="19.0")
+    args, _unknown = p.parse_known_args(argv)
+    return args
+
+
+def main(argv):
+    args = parse_args(argv)
+    db = args.database or "?"
+
+    log("INFO", "odoo", f"Odoo version {args.odoo_version}")
+    if args.config:
+        log("INFO", "odoo", f"Using configuration file at {args.config} ")
+    log("INFO", "odoo", f"addons paths: {args.addons_path or '/opt/odoo/addons'}")
+    log("INFO", "odoo", "database: default@default:default")
+
+    if args.simulate == "module-not-found":
+        mod = args.missing_module
+        tb = traceback_lines(
+            f"ModuleNotFoundError: No module named '{mod}'",
+            [
+                ("/opt/odoo/odoo-bin", 6, "<module>", "import odoo"),
+                ("/opt/odoo/odoo/addons/base/models/ir_actions_report.py", 24,
+                 "<module>", f"import {mod}"),
+            ],
+        )
+        log("CRITICAL", "odoo.modules.module", f"Couldn't load module base\n{tb}")
+        return 1
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", args.http_port), Handler)
+    server.odoo_version = args.odoo_version
+    server.db = args.database
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    log("INFO", "odoo.service.server", f"HTTP service (werkzeug) running on {socket.gethostname()}:{args.http_port}")
+
+    stop = threading.Event()
+    received = {}
+
+    def on_signal(signum, _frame):
+        received["sig"] = signum
+        stop.set()
+
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+
+    if args.database:
+        log("INFO", "odoo.modules.loading", "loading 1 modules...", db=db)
+        log("INFO", "odoo.modules.loading", "1 modules loaded in 0.01s, 0 queries (+0 extra)", db=db)
+        if args.update:
+            log("INFO", "odoo.modules.loading", "updating modules list", db=db)
+            for mod in args.update.split(","):
+                log("INFO", "odoo.modules.loading", f"Loading module {mod} (2/42)", db=db)
+        log("INFO", "odoo.modules.loading", "42 modules loaded in 0.52s, 0 queries (+0 extra)", db=db)
+        log("INFO", "odoo.registry", "Registry loaded in 0.734s", db=db)
+
+    if args.simulate == "traceback":
+        tb = traceback_lines(
+            "ValueError: Expected singleton: res.partner(1, 2)",
+            [
+                ("/opt/odoo/odoo/http.py", 2104, "_serve_db", "return service_model.retrying(self._serve_ir_http, self.env)"),
+                ("/opt/custom/my_module/models/sale_order.py", 57, "action_confirm", "partner.ensure_one()"),
+            ],
+        )
+        log("ERROR", "odoo.http", f"Exception during request handling.\n{tb}", db=db)
+
+    if args.simulate == "crash":
+        time.sleep(0.2)
+        tb = traceback_lines(
+            "RuntimeError: simulated fatal error",
+            [("/opt/odoo/odoo/service/server.py", 1388, "start", "rc = server.run(preload, stop)")],
+        )
+        log("CRITICAL", "odoo.service.server", f"Failed to start server\n{tb}")
+        server.shutdown()
+        return 1
+
+    deadline = time.monotonic() + args.exit_after if args.exit_after > 0 else None
+    while not stop.is_set():
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        stop.wait(0.1)
+
+    if received.get("sig") == signal.SIGINT:
+        log("INFO", "odoo.service.server", "Initiating shutdown")
+        log("INFO", "odoo.service.server", "Hit CTRL-C again or send a second signal to force the shutdown.")
+    else:
+        log("INFO", "odoo.service.server", "Initiating shutdown")
+    server.shutdown()
+    server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
