@@ -29,6 +29,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::conf::{self, ConfError, OdooOptions};
 use crate::config::{Edition, GlobalConfig, SourceEntry};
 use crate::fsutil;
 use crate::names::{
@@ -107,6 +108,9 @@ pub enum ProjectError {
     /// A name, id, database or env key is invalid.
     #[error(transparent)]
     Name(#[from] NameError),
+    /// An Odoo option in `[odoo_options]` / `[odoo_sections]` is invalid.
+    #[error(transparent)]
+    Conf(#[from] ConfError),
     /// A project needs at least one instance.
     #[error("a project needs at least one instance")]
     NoInstances,
@@ -304,6 +308,12 @@ pub struct ProjectConfig {
     /// Environment variables for every instance.
     #[serde(default, skip_serializing_if = "EnvVars::is_empty")]
     pub env: EnvVars,
+    /// Odoo options written to `odoo.conf` (secrets masked in `Debug`).
+    #[serde(default, skip_serializing_if = "OdooOptions::is_empty")]
+    pub odoo_options: OdooOptions,
+    /// Extra `odoo.conf` sections read by third-party modules.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub odoo_sections: BTreeMap<String, OdooOptions>,
     /// Instances (at least one).
     pub instances: Vec<Instance>,
 }
@@ -322,6 +332,8 @@ impl ProjectConfig {
                 enterprise: None,
             },
             env: EnvVars::default(),
+            odoo_options: OdooOptions::default(),
+            odoo_sections: BTreeMap::new(),
             instances: vec![Instance::new(DEFAULT_INSTANCE)],
         }
     }
@@ -349,6 +361,7 @@ impl ProjectConfig {
                 return Err(ProjectError::InvalidValue(format!("env {k}")));
             }
         }
+        conf::validate_model(&self.odoo_options, &self.odoo_sections)?;
         self.validate_instances()
     }
 
@@ -563,6 +576,13 @@ mod tests {
         p.addons_paths.push("/home/dev/src/acme-addons".into());
         p.env.0.insert("PGHOST".into(), "localhost".into());
         p.env.0.insert("SECRET_TOKEN".into(), "hunter2".into());
+        p.odoo_options
+            .0
+            .insert("admin_passwd".into(), "master-pw".into());
+        p.odoo_options.0.insert("log_level".into(), "debug".into());
+        let mut qj = OdooOptions::default();
+        qj.0.insert("channels".into(), "root:2".into());
+        p.odoo_sections.insert("queue_job".into(), qj);
         let main = &mut p.instances[0];
         main.http_port = Some(8069);
         main.gevent_port = Some(8072);
@@ -609,6 +629,8 @@ mod tests {
         assert!(text.contains("[[instances]]"));
         assert!(text.contains("reload_mode = \"restart\""));
         assert!(text.contains("autofix_mode = \"ask\""));
+        assert!(text.contains("[odoo_options]"));
+        assert!(text.contains("[odoo_sections.queue_job]"));
     }
 
     #[test]
@@ -680,6 +702,8 @@ mod tests {
         assert!(shown.contains("SECRET_TOKEN"));
         assert!(!shown.contains("hunter2"));
         assert!(!shown.contains("localhost"));
+        assert!(!shown.contains("master-pw"));
+        assert!(shown.contains("debug"));
     }
 
     #[test]
@@ -861,6 +885,27 @@ mod tests {
         assert!(matches!(
             p.resolve_sources(&cfg),
             Err(ProjectError::VersionMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn invalid_odoo_options_are_rejected() {
+        for (key, value) in [
+            ("http_port", "8069"),
+            ("addons_path", "/x"),
+            ("Bad Key", "1"),
+            ("ok", "a\nb"),
+        ] {
+            let mut p = sample();
+            p.odoo_options.0.insert(key.into(), value.into());
+            assert!(matches!(err(&p), ProjectError::Conf(_)), "{key}");
+        }
+        let mut p = sample();
+        p.odoo_sections
+            .insert("options".into(), OdooOptions::default());
+        assert!(matches!(
+            err(&p),
+            ProjectError::Conf(ConfError::BadSection(_))
         ));
     }
 
