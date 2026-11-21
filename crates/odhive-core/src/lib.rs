@@ -4,6 +4,7 @@
 pub mod conf;
 pub mod config;
 pub mod fsutil;
+pub mod manager;
 pub mod names;
 pub mod paths;
 pub mod pidfile;

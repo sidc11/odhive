@@ -8,6 +8,9 @@ Simulation flags (not real Odoo options):
   --simulate traceback           log an ERROR with a Python traceback, keep running
   --simulate module-not-found    fail at import with ModuleNotFoundError, exit 1
   --simulate crash               crash after startup, exit 1
+  --simulate port-in-use         fail to bind the HTTP port ("Address already in use"), exit 1
+  --marker PATH                  with port-in-use: fail only when PATH does not exist yet
+                                 (and create it), so the next run starts normally
   --missing-module NAME          module name used by module-not-found (default: xlrd)
   --exit-after SECONDS           stop by itself after SECONDS (0 = run until signalled)
   --odoo-version VERSION         version reported in logs (default: 19.0)
@@ -76,7 +79,8 @@ def parse_args(argv):
     p.add_argument("--gevent-port", type=int, default=8072)
     p.add_argument("--addons-path", default=None)
     p.add_argument("--dev", default=None)
-    p.add_argument("--simulate", choices=["traceback", "module-not-found", "crash"])
+    p.add_argument("--simulate", choices=["traceback", "module-not-found", "crash", "port-in-use"])
+    p.add_argument("--marker", default=None)
     p.add_argument("--missing-module", default="xlrd")
     p.add_argument("--exit-after", type=float, default=0.0)
     p.add_argument("--odoo-version", default="19.0")
@@ -118,6 +122,16 @@ def main(argv):
 
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
+
+    if args.simulate == "port-in-use" and not (args.marker and os.path.exists(args.marker)):
+        if args.marker:
+            open(args.marker, "w").close()
+        tb = traceback_lines(
+            "OSError: [Errno 98] Address already in use",
+            [("/opt/odoo/odoo/service/server.py", 564, "http_spawn", "self.httpd = ThreadedWSGIServerReloadable(self.interface, self.port, self.app)")],
+        )
+        log("ERROR", "odoo.service.server", f"Failed to bind the HTTP port\n{tb}")
+        return 1
 
     server = Server(("127.0.0.1", args.http_port), Handler)
     server.odoo_version = args.odoo_version
