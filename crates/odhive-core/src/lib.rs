@@ -5,6 +5,7 @@ pub mod conf;
 pub mod config;
 pub mod fsutil;
 pub mod names;
+pub mod paths;
 pub mod platform;
 pub mod ports;
 pub mod project;
