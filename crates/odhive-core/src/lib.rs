@@ -13,5 +13,6 @@ pub mod project;
 pub mod python;
 pub mod schema;
 pub mod sources;
+pub mod venv;
 pub mod version;
 pub mod workspace;
