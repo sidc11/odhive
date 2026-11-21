@@ -803,8 +803,16 @@ async fn sleep_until(at: Option<Instant>) {
 }
 
 async fn accepts(addr: SocketAddr) -> bool {
-    matches!(
-        tokio::time::timeout(READY_CONNECT_TIMEOUT, TcpStream::connect(addr)).await,
-        Ok(Ok(_))
-    )
+    match tokio::time::timeout(READY_CONNECT_TIMEOUT, TcpStream::connect(addr)).await {
+        Ok(Ok(stream)) => !connected_to_itself(&stream),
+        _ => false,
+    }
+}
+
+/// A connect to a loopback port in the ephemeral range can get that very
+/// port as its local port and connect to itself (TCP simultaneous open).
+/// Nothing listens then, and while the socket lives the instance cannot bind
+/// the port; it is closed right away.
+fn connected_to_itself(stream: &TcpStream) -> bool {
+    matches!((stream.local_addr(), stream.peer_addr()), (Ok(l), Ok(p)) if l == p)
 }

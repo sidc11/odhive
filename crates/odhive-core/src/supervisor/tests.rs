@@ -143,3 +143,29 @@ fn status_serializes_with_a_state_tag() {
     assert_eq!(json["event"], "status");
     assert_eq!(json["status"]["state"], "running");
 }
+
+#[tokio::test]
+async fn a_connection_to_itself_is_not_a_listening_instance() {
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let real = TcpStream::connect(addr).await.expect("connect");
+    assert!(!connected_to_itself(&real));
+    assert!(accepts(addr).await);
+}
+
+/// Linux completes a connect from a port to that same port (simultaneous
+/// open); the probe must not take that for a listener.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_self_connected_socket_is_detected() {
+    let socket = tokio::net::TcpSocket::new_v4().expect("socket");
+    socket.set_reuseaddr(true).expect("reuseaddr");
+    socket
+        .bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+        .expect("bind");
+    let addr = socket.local_addr().expect("addr");
+    let stream = socket.connect(addr).await.expect("self-connect");
+    assert!(connected_to_itself(&stream));
+}
