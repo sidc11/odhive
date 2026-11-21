@@ -14,6 +14,7 @@ pub mod python;
 pub mod requirements;
 pub mod schema;
 pub mod sources;
+pub mod supervisor;
 pub mod venv;
 pub mod version;
 pub mod workspace;
