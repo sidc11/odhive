@@ -107,12 +107,8 @@ def main(argv):
         log("CRITICAL", "odoo.modules.module", f"Couldn't load module base\n{tb}")
         return 1
 
-    server = Server(("127.0.0.1", args.http_port), Handler)
-    server.odoo_version = args.odoo_version
-    server.db = args.database
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    log("INFO", "odoo.service.server", f"HTTP service (werkzeug) running on {socket.gethostname()}:{args.http_port}")
-
+    # Like Odoo: handlers are installed before the HTTP port is bound, so a
+    # signal sent as soon as the port answers is handled gracefully.
     stop = threading.Event()
     received = {}
 
@@ -122,6 +118,12 @@ def main(argv):
 
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
+
+    server = Server(("127.0.0.1", args.http_port), Handler)
+    server.odoo_version = args.odoo_version
+    server.db = args.database
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    log("INFO", "odoo.service.server", f"HTTP service (werkzeug) running on {socket.gethostname()}:{args.http_port}")
 
     if args.database:
         log("INFO", "odoo.modules.loading", "loading 1 modules...", db=db)

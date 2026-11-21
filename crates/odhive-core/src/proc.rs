@@ -26,8 +26,18 @@ pub(crate) async fn read_capped(r: impl AsyncRead + Unpin, cap: u64) -> io::Resu
 /// whitespace trimmed, invalid UTF-8 replaced) to `tx`. A line longer than
 /// [`MAX_LINE_BYTES`] is passed on in chunks instead of being buffered.
 pub(crate) async fn forward_lines(
-    mut r: impl AsyncRead + Unpin,
+    r: impl AsyncRead + Unpin,
     tx: UnboundedSender<String>,
+) -> io::Result<()> {
+    forward_lines_with(r, tx, |line| line).await
+}
+
+/// Like [`forward_lines`], but passes each line through `wrap` first (to tag
+/// it with the stream it came from, say).
+pub(crate) async fn forward_lines_with<T>(
+    mut r: impl AsyncRead + Unpin,
+    tx: UnboundedSender<T>,
+    wrap: impl Fn(String) -> T,
 ) -> io::Result<()> {
     let mut pending = Vec::new();
     let mut buf = [0u8; 4096];
@@ -39,22 +49,22 @@ pub(crate) async fn forward_lines(
         pending.extend_from_slice(&buf[..n]);
         while let Some(pos) = pending.iter().position(|b| *b == b'\n' || *b == b'\r') {
             let line: Vec<u8> = pending.drain(..=pos).collect();
-            send_line(&line[..pos], &tx);
+            send_line(&line[..pos], &tx, &wrap);
         }
         while pending.len() >= MAX_LINE_BYTES {
             let chunk: Vec<u8> = pending.drain(..MAX_LINE_BYTES).collect();
-            send_line(&chunk, &tx);
+            send_line(&chunk, &tx, &wrap);
         }
     }
-    send_line(&pending, &tx);
+    send_line(&pending, &tx, &wrap);
     Ok(())
 }
 
-fn send_line(raw: &[u8], tx: &UnboundedSender<String>) {
+fn send_line<T>(raw: &[u8], tx: &UnboundedSender<T>, wrap: &impl Fn(String) -> T) {
     let line = String::from_utf8_lossy(raw).trim_end().to_owned();
     if !line.trim().is_empty() {
         // The receiver only goes away when the caller itself was dropped.
-        let _ = tx.send(line);
+        let _ = tx.send(wrap(line));
     }
 }
 
@@ -105,12 +115,7 @@ pub(crate) async fn run_streaming(
         .kill_on_drop(true)
         .spawn()
         .map_err(RunError::Spawn)?;
-    let mut group = GroupKill(
-        child
-            .id()
-            .and_then(|id| i32::try_from(id).ok())
-            .and_then(Pid::from_raw),
-    );
+    let mut group = GroupKill(group_of(&child));
     let stdout = child.stdout.take().expect("stdout is piped");
     let stderr = child.stderr.take().expect("stderr is piped");
 
@@ -141,8 +146,16 @@ pub(crate) async fn run_streaming(
     })
 }
 
+/// The process group led by `child` (spawned with `process_group(0)`).
+pub(crate) fn group_of(child: &tokio::process::Child) -> Option<Pid> {
+    child
+        .id()
+        .and_then(|id| i32::try_from(id).ok())
+        .and_then(Pid::from_raw)
+}
+
 /// Sends SIGKILL to a process group on drop, unless cleared.
-struct GroupKill(Option<Pid>);
+pub(crate) struct GroupKill(pub(crate) Option<Pid>);
 
 impl Drop for GroupKill {
     fn drop(&mut self) {
