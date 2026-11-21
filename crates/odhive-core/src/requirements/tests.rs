@@ -702,9 +702,11 @@ async fn uv_install_gets_a_fixed_argument_vector_and_validated_file() {
     );
     assert!(rec("perm").starts_with("drwx------"), "{}", rec("perm"));
     // Ran inside the private dir, which is gone afterwards.
+    // Compared by the random dir name: on macOS `pwd` reports /private/var.
     let cwd = PathBuf::from(rec("cwd").trim());
-    assert_eq!(cwd, Path::new(&argv[6]).parent().expect("parent"));
-    assert!(!cwd.exists());
+    let work = Path::new(&argv[6]).parent().expect("parent");
+    assert_eq!(cwd.file_name(), work.file_name());
+    assert!(!work.exists());
     assert!(!rec("env").lines().any(|l| l.starts_with("VIRTUAL_ENV=")));
 
     let log = log.lock().expect("lock");
