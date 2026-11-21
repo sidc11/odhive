@@ -2,9 +2,9 @@
 //! paths (security principle 6).
 //!
 //! - [`ensure_within`]: resolve a path on disk (following symlinks) and require
-//!   the result to stay inside a root. Parts that do not exist yet are resolved
-//!   lexically after the deepest existing ancestor, so a new file can be checked
-//!   before it is created.
+//!   the result to stay inside a root. Components are resolved one at a time:
+//!   existing ones are canonicalized (symlinks followed), missing ones kept, so a
+//!   new file can be checked before it is created.
 //! - [`safe_join`]: purely lexical join of an untrusted relative path (e.g. a
 //!   name from an archive): only plain components are accepted.
 //!
@@ -140,50 +140,39 @@ pub fn normalize_lexical(path: &Path) -> PathBuf {
     out
 }
 
-/// Canonicalizes the deepest existing ancestor of `full` and applies the rest of
-/// the components lexically.
+/// Resolves `full` one component at a time, like `realpath` but tolerating
+/// missing parts: every component that exists is canonicalized (so a symlink is
+/// followed wherever it appears, including after a `..`), missing ones are kept
+/// as-is, and `..` steps back from the already-resolved path.
 fn resolve(full: &Path) -> Result<PathBuf, PathError> {
-    for ancestor in full.ancestors() {
-        match ancestor.symlink_metadata() {
-            Ok(_) => {
-                let base = match std::fs::canonicalize(ancestor) {
-                    Ok(b) => b,
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                        return Err(PathError::DanglingSymlink(ancestor.to_path_buf()));
-                    }
-                    Err(source) => {
-                        return Err(PathError::Io {
-                            path: ancestor.to_path_buf(),
-                            source,
-                        });
-                    }
-                };
-                let rest = full.strip_prefix(ancestor).unwrap_or(Path::new(""));
-                let mut out = base;
-                for c in rest.components() {
-                    match c {
-                        Component::Normal(part) => out.push(part),
-                        Component::ParentDir => {
-                            out.pop();
-                        }
-                        _ => {}
-                    }
-                }
-                return Ok(out);
+    let mut out = PathBuf::new();
+    for c in full.components() {
+        match c {
+            Component::RootDir | Component::Prefix(_) => out.push(c),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(source) => {
-                return Err(PathError::Io {
-                    path: ancestor.to_path_buf(),
-                    source,
-                });
+            Component::Normal(part) => {
+                let next = out.join(part);
+                match next.symlink_metadata() {
+                    Ok(_) => out = canonicalize_existing(&next)?,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => out = next,
+                    Err(source) => return Err(PathError::Io { path: next, source }),
+                }
             }
         }
     }
-    // Unreachable for absolute paths: `/` always exists.
-    Err(PathError::Io {
-        path: full.to_path_buf(),
-        source: io::Error::from(io::ErrorKind::NotFound),
+    Ok(out)
+}
+
+fn canonicalize_existing(path: &Path) -> Result<PathBuf, PathError> {
+    std::fs::canonicalize(path).map_err(|e| match e.kind() {
+        io::ErrorKind::NotFound => PathError::DanglingSymlink(path.to_path_buf()),
+        _ => PathError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        },
     })
 }
 
@@ -261,6 +250,8 @@ mod tests {
             "out/new-file",
             "in/../../outside",
             "new/../../outside",
+            "b/../out",
+            "b/../out/secret",
             "/etc/passwd",
         ] {
             assert!(
