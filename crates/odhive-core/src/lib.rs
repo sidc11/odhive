@@ -11,6 +11,7 @@ pub mod ports;
 pub(crate) mod proc;
 pub mod project;
 pub mod python;
+pub mod requirements;
 pub mod schema;
 pub mod sources;
 pub mod venv;

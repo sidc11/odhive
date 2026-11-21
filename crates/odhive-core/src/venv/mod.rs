@@ -11,18 +11,16 @@
 //! and even then only if it looks like a venv (has `pyvenv.cfg`) and is a real
 //! directory, not a symlink.
 
-use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
 use serde::Serialize;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
+use crate::proc::{self, RunError};
 use crate::python::{self, PyVersion, PythonError};
 
 /// Name of the venv directory inside a project.
@@ -33,8 +31,6 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Lines of tool output kept for error messages.
 const OUTPUT_TAIL_LINES: usize = 20;
-/// Longest output line passed on; longer lines are split.
-const MAX_LINE_BYTES: usize = 4096;
 
 /// Errors returned while creating a venv.
 #[derive(Debug, Error)]
@@ -333,100 +329,32 @@ async fn run_tool(
     };
     // An activated venv or a Python override in OdHive's own environment must
     // not leak into the new one.
-    for var in [
-        "VIRTUAL_ENV",
-        "PYTHONHOME",
-        "PYTHONPATH",
-        "UV_PYTHON",
-        "CONDA_PREFIX",
-    ] {
+    for var in proc::PYTHON_ENV_OVERRIDES {
         cmd.env_remove(var);
     }
-    let mut child = cmd
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|source| VenvError::Spawn {
-            path: exe.clone(),
-            source,
-        })?;
-    let stdout = child.stdout.take().expect("stdout is piped");
-    let stderr = child.stderr.take().expect("stderr is piped");
-
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let out_task = tokio::spawn(forward_lines(stdout, tx.clone()));
-    let err_task = tokio::spawn(forward_lines(stderr, tx));
-    let mut tail = VecDeque::with_capacity(OUTPUT_TAIL_LINES);
-    while let Some(line) = rx.recv().await {
-        if tail.len() == OUTPUT_TAIL_LINES {
-            tail.pop_front();
-        }
-        tail.push_back(line.clone());
+    cmd.env("LC_ALL", "C");
+    let done = proc::run_streaming(cmd, OUTPUT_TAIL_LINES, |line| {
         on_event(VenvEvent::Output { line });
-    }
-    let io_err = |source| VenvError::Io {
-        path: exe.clone(),
-        source,
-    };
-    for task in [out_task, err_task] {
-        task.await
-            .map_err(|e| io_err(io::Error::other(e)))?
-            .map_err(io_err)?;
-    }
-    let status = child.wait().await.map_err(io_err)?;
-    if status.success() {
+    })
+    .await
+    .map_err(|e| match e {
+        RunError::Spawn(source) => VenvError::Spawn { path: exe, source },
+        RunError::Io(source) => VenvError::Io { path: exe, source },
+    })?;
+    if done.status.success() {
         return Ok(());
     }
-    let output = Vec::from(tail).join("\n");
     // Debian/Ubuntu wrap this message: "...because ensurepip is not\navailable."
-    if opts.tool == VenvTool::Stdlib && output.contains("ensurepip is not") {
+    if opts.tool == VenvTool::Stdlib && done.tail.contains("ensurepip is not") {
         return Err(VenvError::StdlibVenvMissing {
             python: opts.python.clone(),
         });
     }
     Err(VenvError::Failed {
         tool: opts.tool.clone(),
-        status,
-        output,
+        status: done.status,
+        output: done.tail,
     })
-}
-
-/// Sends each non-empty line of `r` (split on `\n` or `\r`) to `tx`.
-async fn forward_lines(
-    mut r: impl AsyncRead + Unpin,
-    tx: tokio::sync::mpsc::UnboundedSender<String>,
-) -> io::Result<()> {
-    let mut pending = Vec::new();
-    let mut buf = [0u8; 4096];
-    loop {
-        let n = r.read(&mut buf).await?;
-        if n == 0 {
-            break;
-        }
-        pending.extend_from_slice(&buf[..n]);
-        while let Some(pos) = pending.iter().position(|b| *b == b'\n' || *b == b'\r') {
-            let line: Vec<u8> = pending.drain(..=pos).collect();
-            send_line(&line[..pos], &tx);
-        }
-        // A huge line without a terminator is passed on in chunks, not buffered.
-        while pending.len() >= MAX_LINE_BYTES {
-            let chunk: Vec<u8> = pending.drain(..MAX_LINE_BYTES).collect();
-            send_line(&chunk, &tx);
-        }
-    }
-    send_line(&pending, &tx);
-    Ok(())
-}
-
-fn send_line(raw: &[u8], tx: &tokio::sync::mpsc::UnboundedSender<String>) {
-    let line = String::from_utf8_lossy(raw).trim_end().to_owned();
-    if !line.trim().is_empty() {
-        // The receiver only goes away when `create` itself was dropped.
-        let _ = tx.send(line);
-    }
 }
 
 /// Probes the venv's interpreter: it must report being a venv of `expected`.

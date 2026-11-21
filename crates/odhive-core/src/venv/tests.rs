@@ -342,24 +342,6 @@ async fn missing_project_dir_is_an_error() {
     assert!(matches!(err, VenvError::NoProjectDir(_)), "{err}");
 }
 
-#[tokio::test]
-async fn output_is_split_into_bounded_lines() {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut input = b"one\r\ntwo\rthree\n\n   \n".to_vec();
-    input.extend(std::iter::repeat_n(b'x', MAX_LINE_BYTES * 3));
-    forward_lines(&input[..], tx).await.expect("forward");
-    let mut lines = Vec::new();
-    while let Some(l) = rx.recv().await {
-        lines.push(l);
-    }
-    assert_eq!(&lines[..3], ["one", "two", "three"]);
-    assert!(lines[3..].iter().all(|l| l.len() <= MAX_LINE_BYTES));
-    assert_eq!(
-        lines[3..].iter().map(String::len).sum::<usize>(),
-        MAX_LINE_BYTES * 3
-    );
-}
-
 /// The real uv, when installed (dev machines; CI runners usually lack it).
 #[tokio::test]
 async fn creates_with_real_uv_when_available() {
