@@ -6,6 +6,7 @@ pub mod config;
 pub mod fsutil;
 pub mod names;
 pub mod paths;
+pub mod pidfile;
 pub mod platform;
 pub mod ports;
 pub(crate) mod proc;

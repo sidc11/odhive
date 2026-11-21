@@ -125,6 +125,12 @@ impl AppPaths {
         self.config_dir.join(CONFIG_FILE_NAME)
     }
 
+    /// Folder holding instance PID files, see [`crate::pidfile`].
+    #[must_use]
+    pub fn run_dir(&self) -> PathBuf {
+        self.data_dir.join(crate::pidfile::RUN_DIR_NAME)
+    }
+
     /// Default workspace root: `~/OdHive`.
     #[must_use]
     pub fn default_workspace_root(&self) -> PathBuf {
