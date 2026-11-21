@@ -4,6 +4,8 @@
 pub mod conf;
 pub mod config;
 pub mod fsutil;
+pub mod launch;
+pub mod logs;
 pub mod manager;
 pub mod names;
 pub mod paths;
@@ -15,6 +17,7 @@ pub mod project;
 pub mod python;
 pub mod requirements;
 pub mod schema;
+pub mod setup;
 pub mod sources;
 pub mod supervisor;
 pub mod venv;

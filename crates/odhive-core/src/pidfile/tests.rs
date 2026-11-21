@@ -312,3 +312,103 @@ async fn stale_leader_with_live_group_members_gets_them_killed() {
         .expect("group member still alive");
     assert!(run.list().expect("list").is_empty());
 }
+
+#[test]
+fn record_state_reports_running_supervised_and_stale() {
+    let mut r = record("shop", "main", me());
+    assert_eq!(
+        r.state(),
+        RecordState::Running {
+            pid: me().pid,
+            supervisor: None
+        }
+    );
+    r.supervisor = Some(me());
+    assert_eq!(
+        r.state(),
+        RecordState::Running {
+            pid: me().pid,
+            supervisor: Some(me().pid)
+        }
+    );
+    // A supervisor whose pid was reused counts as gone.
+    r.supervisor = Some(ProcessId {
+        start_time: me().start_time + 9,
+        ..me()
+    });
+    assert!(matches!(
+        r.state(),
+        RecordState::Running {
+            supervisor: None,
+            ..
+        }
+    ));
+    r.process = ProcessId {
+        start_time: me().start_time + 9,
+        ..me()
+    };
+    assert_eq!(r.state(), RecordState::Stale { pid: me().pid });
+}
+
+/// The process is a child of this test, like an instance supervised by
+/// another OdHive: it is stopped by SIGINT and seen as gone while it is a
+/// zombie that only its parent can reap.
+#[tokio::test]
+async fn stop_recorded_interrupts_a_process_supervised_elsewhere() {
+    let mut child = tokio::process::Command::new("sleep")
+        .arg("300")
+        .process_group(0)
+        .spawn()
+        .expect("spawn");
+    let process = ProcessId::of(child.id().expect("pid")).expect("identity");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let run = RunDir::new(dir.path());
+    let mut r = record("shop", "main", process);
+    r.supervisor = Some(me());
+    run.write(&r).expect("write");
+
+    let stop = stop_recorded(&run, &r, Duration::from_secs(5))
+        .await
+        .expect("stop");
+    assert_eq!(
+        stop,
+        AttachedStop {
+            already_gone: false,
+            killed: false
+        }
+    );
+    let status = child.wait().await.expect("wait");
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&status),
+        Some(2)
+    );
+    assert!(run.list().expect("list").is_empty());
+}
+
+#[tokio::test]
+async fn stop_recorded_never_signals_a_reused_pid_and_removes_the_record() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let run = RunDir::new(dir.path());
+    let reused = record(
+        "shop",
+        "main",
+        ProcessId {
+            start_time: me().start_time + 5,
+            ..me()
+        },
+    );
+    run.write(&reused).expect("write");
+    let stop = stop_recorded(&run, &reused, Duration::from_secs(1))
+        .await
+        .expect("stop");
+    assert!(stop.already_gone && !stop.killed);
+    assert!(me().is_alive());
+    assert!(run.list().expect("list").is_empty());
+
+    let mut bad = reused.clone();
+    bad.process.pid = 1;
+    assert!(matches!(
+        stop_recorded(&run, &bad, Duration::from_secs(1)).await,
+        Err(PidFileError::Invalid(_))
+    ));
+}

@@ -569,24 +569,79 @@ impl Attached {
     /// # Errors
     /// I/O errors while removing the record (the process is stopped anyway).
     pub async fn stop(self, timeout: Duration) -> Result<AttachedStop, PidFileError> {
-        let leader = self.record.process;
-        let mut result = AttachedStop {
-            already_gone: !leader.is_alive(),
-            killed: false,
-        };
-        if let Some(pgid) = leader.rustix_pid()
-            && !result.already_gone
-        {
-            let _ = kill_process_group(pgid, Signal::INT);
-            if !wait_dead(leader, timeout).await && leader.owns_group() {
-                result.killed = true;
-                let _ = kill_process_group(pgid, Signal::KILL);
-                wait_dead(leader, KILL_WAIT).await;
+        stop_recorded(&self.run, &self.record, timeout).await
+    }
+}
+
+/// Stops the process of `record`, whoever supervises it: SIGINT to its group,
+/// SIGKILL to the group after `timeout`, then kills what is left of the group
+/// and removes the record. A supervising OdHive sees an ordinary exit.
+///
+/// Only the exact recorded process is signalled (pid *and* start time): a
+/// record whose pid now belongs to another process is treated as gone.
+///
+/// # Errors
+/// Validation errors for a bad record (nothing is signalled), or I/O errors
+/// while removing the record (the process is stopped anyway).
+pub async fn stop_recorded(
+    run: &RunDir,
+    record: &PidRecord,
+    timeout: Duration,
+) -> Result<AttachedStop, PidFileError> {
+    record.validate()?;
+    let leader = record.process;
+    let mut result = AttachedStop {
+        already_gone: !leader.is_alive(),
+        killed: false,
+    };
+    if let Some(pgid) = leader.rustix_pid()
+        && !result.already_gone
+    {
+        let _ = kill_process_group(pgid, Signal::INT);
+        if !wait_dead(leader, timeout).await && leader.owns_group() {
+            result.killed = true;
+            let _ = kill_process_group(pgid, Signal::KILL);
+            wait_dead(leader, KILL_WAIT).await;
+        }
+    }
+    kill_leftovers(leader);
+    run.remove(&record.owner(), leader)?;
+    Ok(result)
+}
+
+/// Where a record's process stands, without changing anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum RecordState {
+    /// The recorded process runs. `supervisor` is the OdHive process that
+    /// captures its output, if that one is still alive.
+    Running {
+        /// Process id.
+        pid: u32,
+        /// Supervising OdHive process, if alive.
+        supervisor: Option<u32>,
+    },
+    /// The process is gone or its pid was reused; the record is left over.
+    Stale {
+        /// Process id it had.
+        pid: u32,
+    },
+}
+
+impl PidRecord {
+    /// Checks the process table for this record. Read-only.
+    #[must_use]
+    pub fn state(&self) -> RecordState {
+        if self.process.is_alive() {
+            RecordState::Running {
+                pid: self.process.pid,
+                supervisor: self.supervisor.filter(ProcessId::is_alive).map(|p| p.pid),
+            }
+        } else {
+            RecordState::Stale {
+                pid: self.process.pid,
             }
         }
-        kill_leftovers(leader);
-        self.run.remove(&self.owner(), leader)?;
-        Ok(result)
     }
 }
 
