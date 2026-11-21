@@ -375,6 +375,7 @@ async fn ignored_sigint_falls_back_to_sigkill_of_the_group() {
     let reg = PortRegistry::new();
     let opts = SuperviseOptions {
         stop_timeout: Duration::from_millis(300),
+        ..SuperviseOptions::default()
     };
     let events = Events::default();
     let sup =

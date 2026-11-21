@@ -20,6 +20,10 @@
 //!
 //! The reservation is held until the handle is shut down or dropped, so a
 //! restart reuses the same ports.
+//!
+//! With [`SuperviseOptions::run_dir`] set, every spawned process gets a PID
+//! file (see [`crate::pidfile`]) that is removed once the process is gone, so
+//! an instance left behind by an OdHive that was killed hard can be found.
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
@@ -40,6 +44,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::names::{self, NameError};
+use crate::pidfile::{PidFileError, PidGuard, PidRecord, ProcessId, RECORD_VERSION, RunDir};
 use crate::ports::{PortChange, PortOwner, Reservation};
 use crate::proc::{self, GroupKill};
 use crate::project::{self, EnvVars, MAX_WORKERS};
@@ -86,6 +91,9 @@ pub enum SupervisorError {
     /// A restart stopped the process but could not start it again.
     #[error("restart failed: {0}")]
     Restart(String),
+    /// The PID file could not be written; the process was killed again.
+    #[error("could not write the pid file: {0}")]
+    PidFile(#[from] PidFileError),
     /// The supervisor task is gone (the runtime is shutting down).
     #[error("the supervisor for {0} is no longer running")]
     Gone(PortOwner),
@@ -207,16 +215,19 @@ impl LaunchSpec {
 }
 
 /// Supervisor settings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SuperviseOptions {
     /// Time between SIGINT and SIGKILL when stopping.
     pub stop_timeout: Duration,
+    /// Where PID files are kept; `None` writes none.
+    pub run_dir: Option<RunDir>,
 }
 
 impl Default for SuperviseOptions {
     fn default() -> Self {
         Self {
             stop_timeout: DEFAULT_STOP_TIMEOUT,
+            run_dir: None,
         }
     }
 }
@@ -372,8 +383,9 @@ pub struct Supervised {
 /// `on_event` receives every [`Event`], starting with [`Event::Spawned`].
 ///
 /// # Errors
-/// A validation error from [`LaunchSpec::validate`], or
-/// [`SupervisorError::Spawn`] when the process cannot be started.
+/// A validation error from [`LaunchSpec::validate`],
+/// [`SupervisorError::Spawn`] when the process cannot be started, or
+/// [`SupervisorError::PidFile`] when its PID file cannot be written.
 pub fn start(
     spec: LaunchSpec,
     ports: Reservation,
@@ -384,6 +396,14 @@ pub fn start(
     let (http, gevent) = (ports.http(), ports.gevent());
     let child = spec.spawn(http, gevent)?;
     let pid = child.id().unwrap_or_default();
+    let me = opts.run_dir.as_ref().and_then(|_| ProcessId::current());
+    let pid_file = match track(&opts, &spec, &ports, me, pid) {
+        Ok(guard) => guard,
+        Err(e) => {
+            drop(GroupKill(proc::group_of(&child)));
+            return Err(e.into());
+        }
+    };
     let mut on_event: OnEvent = Box::new(on_event);
     on_event(Event::Spawned {
         pid,
@@ -406,6 +426,8 @@ pub fn start(
         status: status_tx,
         cmds: cmd_rx,
         cmds_open: true,
+        me,
+        pid_file,
     };
     Ok(Supervised {
         owner,
@@ -531,6 +553,40 @@ struct Task {
     status: watch::Sender<Status>,
     cmds: mpsc::UnboundedReceiver<Cmd>,
     cmds_open: bool,
+    /// This OdHive process, recorded in PID files.
+    me: Option<ProcessId>,
+    /// PID file of the current process; removed when dropped.
+    pid_file: Option<PidGuard>,
+}
+
+/// Writes the PID file for `pid`, when PID files are on.
+fn track(
+    opts: &SuperviseOptions,
+    spec: &LaunchSpec,
+    ports: &Reservation,
+    me: Option<ProcessId>,
+    pid: u32,
+) -> Result<Option<PidGuard>, PidFileError> {
+    let Some(run) = &opts.run_dir else {
+        return Ok(None);
+    };
+    let Some(process) = ProcessId::of(pid) else {
+        // Exited and reaped already: nothing is left to find later.
+        return Ok(None);
+    };
+    let owner = ports.owner();
+    let record = PidRecord {
+        version: RECORD_VERSION,
+        project: owner.project.clone(),
+        instance: owner.instance.clone(),
+        process,
+        http_port: ports.http(),
+        gevent_port: ports.gevent(),
+        db: spec.db.clone(),
+        odoo_bin: spec.odoo_bin.clone(),
+        supervisor: me,
+    };
+    PidGuard::write(run, &record).map(Some)
 }
 
 impl Task {
@@ -570,6 +626,18 @@ impl Task {
         match self.spec.spawn(http, gevent) {
             Ok(child) => {
                 let pid = child.id().unwrap_or_default();
+                match track(&self.opts, &self.spec, &self.ports, self.me, pid) {
+                    Ok(guard) => self.pid_file = guard,
+                    Err(e) => {
+                        drop(GroupKill(proc::group_of(&child)));
+                        let error = SupervisorError::from(e).to_string();
+                        self.set(Status::FailedToStart {
+                            error: error.clone(),
+                        });
+                        let _ = reply.send(Err(error));
+                        return None;
+                    }
+                }
                 (self.on_event)(Event::Spawned {
                     pid,
                     http_port: http,
@@ -658,6 +726,8 @@ impl Task {
         // what is left of it (workers, report renderers).
         signal_group(&group, Signal::KILL);
         group.0 = None;
+        // Nothing of the process is left: forget its PID file.
+        self.pid_file = None;
         // Leftovers are dead, so the pipes close; read what is still in them.
         if lines_open {
             let drain = async {
