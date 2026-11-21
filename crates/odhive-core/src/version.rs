@@ -166,6 +166,14 @@ pub fn parse_release_py(text: &str) -> Result<OdooVersion, VersionError> {
 /// # Errors
 /// Returns I/O, size or parse errors.
 pub fn detect_version(source: &Path) -> Result<OdooVersion, VersionError> {
+    parse_release_py(&read_release_py(source)?)
+}
+
+/// Reads `<source>/odoo/release.py` as text, capped at [`MAX_RELEASE_PY_BYTES`].
+///
+/// # Errors
+/// Returns I/O or size errors.
+pub fn read_release_py(source: &Path) -> Result<String, VersionError> {
     let path = source.join(RELEASE_PY);
     let io_err = |source| VersionError::Io {
         path: path.clone(),
@@ -179,7 +187,7 @@ pub fn detect_version(source: &Path) -> Result<OdooVersion, VersionError> {
     if text.len() as u64 > MAX_RELEASE_PY_BYTES {
         return Err(VersionError::TooLarge(path));
     }
-    parse_release_py(&text)
+    Ok(text)
 }
 
 /// Returns the right-hand side of a top-level `version_info = ...` line.

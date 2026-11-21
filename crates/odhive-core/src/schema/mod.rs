@@ -19,11 +19,11 @@ use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 use crate::config::{Edition, SourceEntry};
 use crate::fsutil;
+use crate::proc::read_capped;
 use crate::version::{OdooVersion, RELEASE_PY};
 
 /// The introspection script passed to `python -c`.
@@ -380,15 +380,6 @@ pub async fn introspect(
         return Err(SchemaError::OutputTooLarge);
     }
     OptionSchema::from_raw_json(&String::from_utf8_lossy(&out))
-}
-
-async fn read_capped(r: impl AsyncRead + Unpin, cap: u64) -> std::io::Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    let mut r = r.take(cap + 1);
-    r.read_to_end(&mut buf).await?;
-    // Drain the rest so the child never blocks on a full pipe.
-    tokio::io::copy(&mut r.into_inner(), &mut tokio::io::sink()).await?;
-    Ok(buf)
 }
 
 /// Where a schema came from.
