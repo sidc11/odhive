@@ -35,6 +35,23 @@ cargo run -p odhive
 
 Then open <http://localhost:7069>.
 
+## Command line (preview)
+
+Until the background service lands, `odhive start` runs in the foreground and
+stops its instances on Ctrl+C. The other commands work from any terminal.
+
+```sh
+odhive source add ~/src/odoo                 # or: odhive source clone 19.0
+odhive project add shop --source odoo-19.0   # folders, venv, requirements
+odhive start shop                            # every instance; shop#test for one
+odhive status
+odhive logs shop -f
+odhive stop shop
+```
+
+Instances listen on `127.0.0.1` unless the project sets `http_interface`.
+Output is also written to `projects/<name>/logs/<instance>.log`.
+
 ## Contributing
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the

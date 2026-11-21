@@ -656,6 +656,8 @@ dependencies = [
  "clap",
  "odhive-core",
  "odhive-server",
+ "rustix",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
