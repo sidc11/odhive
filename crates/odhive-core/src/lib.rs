@@ -7,6 +7,7 @@ pub mod names;
 pub mod platform;
 pub mod ports;
 pub mod project;
+pub mod schema;
 pub mod sources;
 pub mod version;
 pub mod workspace;
