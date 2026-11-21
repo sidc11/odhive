@@ -1,10 +1,18 @@
-//! Binding loopback listeners with automatic fallback to the next free port.
+//! Ports: binding OdHive's own loopback listeners ([`bind_loopback`]) and allocating
+//! ports for Odoo instances ([`PortRegistry`]).
 
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use thiserror::Error;
 use tokio::net::TcpListener;
+
+mod alloc;
+
+pub use alloc::{
+    AllocError, AllocOptions, DEFAULT_GEVENT_PORT, DEFAULT_HTTP_PORT, DEFAULT_SCAN, PortChange,
+    PortKind, PortOwner, PortRegistry, Reservation, Unavailable, is_free,
+};
 
 /// Default port for the OdHive web UI.
 ///
