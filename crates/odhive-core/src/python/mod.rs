@@ -10,7 +10,7 @@
 //! `MIN_PY_VERSION` / `MAX_PY_VERSION` in `odoo/release.py` (text only, never
 //! executed). [`pick`] chooses the newest supported, standard CPython build.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
@@ -324,7 +324,8 @@ pub async fn discover(opts: &DiscoverOptions) -> Discovery {
         }
     }
 
-    let mut seen_candidates = HashSet::new();
+    // Candidate path → index of the interpreter it probed to (`None`: skipped).
+    let mut seen: HashMap<PathBuf, Option<usize>> = HashMap::new();
     for (path, origin) in candidates {
         if out.interpreters.len() + out.skipped.len() >= MAX_CANDIDATES {
             break;
@@ -333,14 +334,15 @@ pub async fn discover(opts: &DiscoverOptions) -> Discovery {
         // canonicalized first: version-manager shims (mise, pyenv) are links to
         // one dispatcher binary that picks the Python from argv[0]. Different
         // paths to one interpreter are merged after probing, by `sys.executable`.
-        if !seen_candidates.insert(path.clone()) {
-            if let Some(i) = out.interpreters.iter_mut().find(|i| i.path == path)
+        if let Some(idx) = seen.get(&path) {
+            if let Some(i) = idx.map(|idx| &mut out.interpreters[idx])
                 && !i.origins.contains(&origin)
             {
                 i.origins.push(origin);
             }
             continue;
         }
+        seen.insert(path.clone(), None);
         if let Some(reason) = excluded(&path) {
             out.skipped.push(Skipped { path, reason });
             continue;
@@ -350,7 +352,10 @@ pub async fn discover(opts: &DiscoverOptions) -> Discovery {
                 path,
                 reason: "is a virtual environment".into(),
             }),
-            Ok(found) => merge(&mut out.interpreters, found.interpreter, origin),
+            Ok(found) => {
+                let idx = merge(&mut out.interpreters, found.interpreter, origin);
+                seen.insert(path, Some(idx));
+            }
             Err(e) => out.skipped.push(Skipped {
                 path,
                 reason: e.to_string(),
@@ -496,14 +501,17 @@ pub fn pick(interpreters: &[Interpreter], support: PySupport) -> Result<&Interpr
     Err(PickError::NoneSupported { support, found })
 }
 
-fn merge(list: &mut Vec<Interpreter>, mut found: Interpreter, origin: Origin) {
-    if let Some(existing) = list.iter_mut().find(|i| i.path == found.path) {
-        if !existing.origins.contains(&origin) {
-            existing.origins.push(origin);
+/// Adds `found` or merges it into an entry with the same real path; returns its index.
+fn merge(list: &mut Vec<Interpreter>, mut found: Interpreter, origin: Origin) -> usize {
+    if let Some(idx) = list.iter().position(|i| i.path == found.path) {
+        if !list[idx].origins.contains(&origin) {
+            list[idx].origins.push(origin);
         }
+        idx
     } else {
         found.origins = vec![origin];
         list.push(found);
+        list.len() - 1
     }
 }
 

@@ -439,3 +439,30 @@ async fn real_probe_ignores_python_env() {
     );
     parse_probe(&python, &out.stdout).expect("parse");
 }
+
+/// A path seen again (PATH, then uv) merges its origin even when the path is not
+/// canonical — e.g. macOS temp dirs under `/var`, which is `/private/var`.
+#[tokio::test]
+async fn repeated_non_canonical_path_keeps_both_origins() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = dir.path().join("real");
+    fs::create_dir(&real).expect("mkdir");
+    std::os::unix::fs::symlink(&real, dir.path().join("link")).expect("symlink");
+    let exe = fake_python(&real, "python3.12", [3, 12, 5]);
+    let via_link = dir.path().join("link/python3.12");
+    let uv = fake(
+        dir.path(),
+        "uv",
+        &serde_json::json!([{ "path": via_link }]).to_string(),
+        0,
+    );
+    let mut o = opts(Some(&dir.path().join("link")));
+    o.uv = Some(uv);
+    let d = discover(&o).await;
+    assert_eq!(d.interpreters.len(), 1);
+    assert_eq!(
+        d.interpreters[0].path,
+        fs::canonicalize(&exe).expect("canon")
+    );
+    assert_eq!(d.interpreters[0].origins, [Origin::Path, Origin::Uv]);
+}
