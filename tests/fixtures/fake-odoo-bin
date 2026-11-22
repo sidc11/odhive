@@ -19,6 +19,7 @@ Simulation flags (not real Odoo options):
   --missing-keeps-running        with --simulate-missing: log the error and keep
                                  serving, as Odoo does when a database fails to load
   --exit-after SECONDS           stop by itself after SECONDS (0 = run until signalled)
+  --start-delay SECONDS          wait SECONDS before binding the HTTP port (a slow start)
   --odoo-version VERSION         version reported in logs (default: 19.0)
 """
 
@@ -92,6 +93,7 @@ def parse_args(argv):
     p.add_argument("--simulate-missing", default=None)
     p.add_argument("--missing-keeps-running", action="store_true")
     p.add_argument("--exit-after", type=float, default=0.0)
+    p.add_argument("--start-delay", type=float, default=0.0)
     p.add_argument("--odoo-version", default="19.0")
     args, _unknown = p.parse_known_args(argv)
     return args
@@ -147,6 +149,8 @@ def main(argv):
         log("ERROR", "odoo.service.server", f"Failed to bind the HTTP port\n{tb}")
         return 1
 
+    if args.start_delay > 0 and stop.wait(args.start_delay):
+        return 0
     server = Server(("127.0.0.1", args.http_port), Handler)
     server.odoo_version = args.odoo_version
     server.db = args.database

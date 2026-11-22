@@ -166,12 +166,13 @@ fn info_and_recovery_serialize() {
         port_retried: false,
         status: Status::Running { pid: 7 },
         autofix: None,
+        reload: None,
     };
     let json = serde_json::to_value(&info).expect("json");
     assert_eq!(json["project"], "shop");
     assert_eq!(json["supervised"], false);
     assert_eq!(json["status"]["state"], "running");
-    assert!(json.get("autofix").is_none());
+    assert!(json.get("autofix").is_none() && json.get("reload").is_none());
 
     let rec = Recovery::Stale {
         owner: PortOwner::new("shop", "main"),
@@ -191,6 +192,82 @@ fn info_and_recovery_serialize() {
     let json = serde_json::to_value(&stop).expect("json");
     assert_eq!(json["kind"], "attached");
     assert_eq!(json["stop"]["killed"], true);
+}
+
+#[test]
+fn a_crash_while_reload_watches_is_not_done() {
+    use crate::project::ReloadMode;
+    use crate::supervisor::ExitInfo;
+    let exit = ExitInfo {
+        code: Some(1),
+        signal: None,
+        port_in_use: false,
+        tail: String::new(),
+    };
+    let mut info = InstanceInfo {
+        owner: PortOwner::new("shop", "main"),
+        http_port: None,
+        gevent_port: None,
+        db: None,
+        supervised: true,
+        port_retried: false,
+        status: Status::Crashed { exit: exit.clone() },
+        autofix: None,
+        reload: Some(ReloadInfo {
+            mode: ReloadMode::Auto,
+            watching: true,
+            pending_update: vec!["m1".into()],
+        }),
+    };
+    assert!(!info.is_done());
+    let json = serde_json::to_value(&info).expect("json");
+    assert_eq!(
+        json["reload"],
+        serde_json::json!({"mode": "auto", "watching": true, "pending_update": ["m1"]})
+    );
+    info.status = Status::FailedToStart { error: "x".into() };
+    assert!(!info.is_done());
+    // A clean exit is the end, watched or not.
+    info.status = Status::Stopped { exit };
+    assert!(info.is_done());
+    info.status = Status::Crashed {
+        exit: ExitInfo {
+            code: Some(1),
+            signal: None,
+            port_in_use: false,
+            tail: String::new(),
+        },
+    };
+    info.reload.as_mut().expect("reload").watching = false;
+    assert!(info.is_done());
+}
+
+#[test]
+fn reload_notices_serialize() {
+    use crate::reload::Action;
+    let n = Notice::Reload {
+        action: Action::Update {
+            modules: vec!["m1".into()],
+        },
+        files: vec!["/a/m1/views/x.xml".into()],
+        file_count: 1,
+    };
+    assert_eq!(
+        serde_json::to_value(&n).expect("json"),
+        serde_json::json!({
+            "event": "reload",
+            "action": {"kind": "update", "modules": ["m1"]},
+            "files": ["/a/m1/views/x.xml"],
+            "file_count": 1,
+        })
+    );
+    let n = Notice::ModuleAdded {
+        module: "m9".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&n).expect("json"),
+        serde_json::json!({"event": "module_added", "module": "m9"})
+    );
 }
 
 #[tokio::test]

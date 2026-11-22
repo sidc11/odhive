@@ -10,6 +10,10 @@
 //! A missing Python module is handled by the manager's auto-fix; `start`
 //! prints what it does and, in `ask` mode or for an untrusted package, asks
 //! on the terminal (without a terminal nothing is installed).
+//!
+//! Smart Reload (the instance's `reload_mode`) restarts instances when their
+//! custom modules change; a crashed instance then waits for the fix instead
+//! of ending the run.
 
 use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, IsTerminal, Write};
@@ -25,6 +29,7 @@ use odhive_core::manager::{
 };
 use odhive_core::pidfile::{self, RecordState};
 use odhive_core::ports::PortOwner;
+use odhive_core::reload::Action;
 use odhive_core::requirements::Origin;
 use odhive_core::schema::SchemaOrigin;
 use odhive_core::supervisor::{DEFAULT_STOP_TIMEOUT, Event, ExitInfo, Status};
@@ -453,6 +458,11 @@ impl Output {
                             "hint: its port is in use by another program; free it or change http_port in odhive.toml",
                         );
                     }
+                    if reloading(manager, owner) {
+                        say(format!(
+                            "{owner}: waiting for a file change to restart it (Ctrl+C to quit)"
+                        ));
+                    }
                 }
                 Status::FailedToStart { error } => {
                     self.failed.insert(owner.clone());
@@ -517,8 +527,61 @@ impl Output {
             InstanceEvent::Manager(Notice::SystemLibraryMissing { hint }) => {
                 say(format!("{owner}: hint: {hint}"));
             }
+            InstanceEvent::Manager(Notice::ReloadWatching {
+                roots,
+                modules,
+                unwatched,
+            }) => {
+                let roots: Vec<String> = roots.iter().map(|r| r.display().to_string()).collect();
+                say(format!(
+                    "{owner}: smart reload watching {} ({modules} modules)",
+                    roots.join(", ")
+                ));
+                for u in unwatched {
+                    say(format!(
+                        "note: {} links outside its addons folder and is not watched; add its real folder to addons_paths",
+                        u.display()
+                    ));
+                }
+            }
+            InstanceEvent::Manager(Notice::ReloadFailed { error }) => {
+                say(format!("warning: {owner}: smart reload is off: {error}"));
+            }
+            InstanceEvent::Manager(Notice::Reload {
+                action,
+                files,
+                file_count,
+            }) => {
+                let changed = match (files.first(), file_count) {
+                    (Some(f), 1) => f.display().to_string(),
+                    _ => format!("{file_count} files"),
+                };
+                say(match action {
+                    Action::Restart => format!("{owner}: {changed} changed; restarting"),
+                    Action::Update { modules } => format!(
+                        "{owner}: {changed} changed; restarting with -u {}",
+                        modules.join(",")
+                    ),
+                    Action::RefreshBrowser { modules } => format!(
+                        "{owner}: static files of {} changed; refresh the browser",
+                        modules.join(", ")
+                    ),
+                });
+            }
+            InstanceEvent::Manager(Notice::ModuleAdded { module }) => {
+                say(format!(
+                    "{owner}: new module {module}; install it from Apps (after Update Apps List) or with -i {module}"
+                ));
+            }
         }
     }
+}
+
+fn reloading(manager: &Manager, owner: &PortOwner) -> bool {
+    manager
+        .get(owner)
+        .and_then(|i| i.reload)
+        .is_some_and(|r| r.watching)
 }
 
 fn trust_text(trust: &Trust) -> String {

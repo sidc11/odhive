@@ -17,6 +17,7 @@ pub mod ports;
 pub(crate) mod proc;
 pub mod project;
 pub mod python;
+pub mod reload;
 pub mod requirements;
 pub mod schema;
 pub mod setup;
