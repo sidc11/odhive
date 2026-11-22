@@ -565,3 +565,23 @@ proptest! {
         let _ = parse_all(&text);
     }
 }
+
+#[test]
+fn display_is_odoo_text_and_parses_back() {
+    let entry = one(LINE_20);
+    assert_eq!(entry.to_string(), LINE_20);
+    let nodb = one("2026-11-22 06:27:39,726 6340 INFO ? odoo: hi\n  more");
+    assert_eq!(
+        nodb.to_string(),
+        "2026-11-22 06:27:39,726 6340 INFO ? odoo: hi\n  more"
+    );
+    assert_eq!(one("plain text").to_string(), "plain text");
+    for sample in samples() {
+        for entry in parse_all(sample.text) {
+            if entry.truncated {
+                continue;
+            }
+            assert_eq!(one(&entry.to_string()), entry, "{}", sample.name);
+        }
+    }
+}

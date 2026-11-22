@@ -19,7 +19,14 @@
 //!   An attached instance that exits by itself is noticed by polling.
 //! - **Status:** each instance has one status stream that survives restarts
 //!   and the port retry ([`Manager::wait_for`]); events of all instances go
-//!   to one broadcast channel ([`Manager::subscribe`]).
+//!   to the bus's instance topic ([`Manager::subscribe`]).
+//! - **Logs:** output lines of a supervised instance go straight from its
+//!   supervisor into the instance's log (parser, in-memory buffer and
+//!   `<logs_dir>/<instance>.log`), so none is lost to a slow subscriber.
+//!   Completed entries go to the bus's log topic ([`Manager::subscribe_logs`])
+//!   and stay readable by sequence number ([`Manager::read_log`]). The log
+//!   survives restarts and the port retry, and goes when the instance is
+//!   stopped. Re-attached instances have no output, so no log.
 //!
 //! Dropping the last [`Manager`] clone kills supervised instances and leaves
 //! attached ones running; [`Manager::shutdown`] stops all of them gracefully.
@@ -32,9 +39,12 @@ use std::time::Duration;
 
 use serde::Serialize;
 use thiserror::Error;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 
+use crate::events::{BusOptions, EventBus, LogEvent, Subscription};
+use crate::logs::store::{Page, Record};
+use crate::logs::{LOGS_DIR, LogSettings};
 use crate::pidfile::{self, Attached, AttachedStop, PidFileError, PidRecord, Recovered, RunDir};
 use crate::ports::{AllocError, AllocOptions, PortOwner, PortRegistry};
 use crate::project::{ProjectConfig, ProjectError};
@@ -43,14 +53,15 @@ use crate::supervisor::{
     SupervisorError,
 };
 
+mod log;
 #[cfg(test)]
 mod tests;
 
+pub use log::IDLE_FLUSH;
+use log::{LogSlot, LogTarget};
+
 /// How often a re-attached instance is checked for having exited.
 pub const DEFAULT_ATTACHED_POLL: Duration = Duration::from_secs(1);
-
-/// Events buffered per subscriber before the oldest are dropped.
-pub const DEFAULT_EVENT_CAPACITY: usize = 4096;
 
 /// Errors returned by the manager.
 #[derive(Debug, Error)]
@@ -109,12 +120,17 @@ pub struct InstancePlan {
     pub gevent_port: Option<u16>,
     /// What to run.
     pub spec: LaunchSpec,
+    /// Folder of the instance's log file; `None` keeps its log in memory.
+    pub logs_dir: Option<PathBuf>,
+    /// Log buffer and file limits.
+    pub log_settings: LogSettings,
 }
 
 impl InstancePlan {
     /// The plan for instance `instance_id` of `project`, run from
     /// `project_dir` by `python odoo_bin -c conf`. Ports, database, workers
-    /// and extra arguments come from the instance, env from the project.
+    /// and extra arguments come from the instance, env and log settings from
+    /// the project. The log file goes to `<project_dir>/logs/`.
     ///
     /// # Errors
     /// [`ManagerError::Project`] if the project is invalid, or
@@ -147,6 +163,8 @@ impl InstancePlan {
             http_port: instance.http_port,
             gevent_port: instance.gevent_port,
             spec,
+            logs_dir: Some(project_dir.join(LOGS_DIR)),
+            log_settings: project.logs,
         })
     }
 
@@ -171,8 +189,8 @@ pub struct ManagerOptions {
     pub port_retry: bool,
     /// How often re-attached instances are checked.
     pub attached_poll: Duration,
-    /// Events buffered per subscriber.
-    pub event_capacity: usize,
+    /// Event bus capacities.
+    pub bus: BusOptions,
 }
 
 impl Default for ManagerOptions {
@@ -183,7 +201,7 @@ impl Default for ManagerOptions {
             run_dir: None,
             port_retry: true,
             attached_poll: DEFAULT_ATTACHED_POLL,
-            event_capacity: DEFAULT_EVENT_CAPACITY,
+            bus: BusOptions::default(),
         }
     }
 }
@@ -212,6 +230,12 @@ pub enum Notice {
         /// Gevent port.
         gevent_port: u16,
     },
+    /// The instance's log file could not be opened or written; its log is
+    /// kept in memory only until it is started again.
+    LogFile {
+        /// What failed.
+        error: String,
+    },
 }
 
 /// One event of one instance.
@@ -219,7 +243,8 @@ pub enum Notice {
 #[serde(untagged)]
 pub enum InstanceEvent {
     /// From the instance's supervisor (attached instances report their
-    /// status changes this way too).
+    /// status changes this way too). Never [`Event::Output`]: output lines
+    /// reach the log topic as parsed entries.
     Supervisor(Event),
     /// From the manager.
     Manager(Notice),
@@ -330,7 +355,7 @@ pub struct Manager {
 struct Inner {
     registry: PortRegistry,
     opts: ManagerOptions,
-    events: broadcast::Sender<ManagerEvent>,
+    bus: EventBus,
     entries: Mutex<BTreeMap<PortOwner, Entry>>,
     next_gen: AtomicU64,
 }
@@ -347,6 +372,8 @@ struct Entry {
     gevent_port: Option<u16>,
     db: Option<String>,
     port_retried: bool,
+    /// `None` for attached instances.
+    log: Option<Arc<LogSlot>>,
     slot: Slot,
 }
 
@@ -391,12 +418,12 @@ impl Manager {
     /// A manager that allocates from `registry`.
     #[must_use]
     pub fn with_registry(registry: PortRegistry, opts: ManagerOptions) -> Self {
-        let (events, _) = broadcast::channel(opts.event_capacity.max(1));
+        let bus = EventBus::new(opts.bus);
         Self {
             inner: Arc::new(Inner {
                 registry,
                 opts,
-                events,
+                bus,
                 entries: Mutex::new(BTreeMap::new()),
                 next_gen: AtomicU64::new(1),
             }),
@@ -409,10 +436,49 @@ impl Manager {
         &self.inner.registry
     }
 
-    /// Events of all instances from now on.
+    /// The bus the manager publishes to.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<ManagerEvent> {
-        self.inner.events.subscribe()
+    pub fn bus(&self) -> &EventBus {
+        &self.inner.bus
+    }
+
+    /// Spawns, status changes and notices of all instances from now on.
+    #[must_use]
+    pub fn subscribe(&self) -> Subscription<ManagerEvent> {
+        self.inner.bus.instances().subscribe()
+    }
+
+    /// Log entries of all instances from now on. After a
+    /// [`crate::events::Delivery::Lagged`], [`Manager::read_log`] from the
+    /// last sequence number seen fills the gap.
+    #[must_use]
+    pub fn subscribe_logs(&self) -> Subscription<LogEvent> {
+        self.inner.bus.logs().subscribe()
+    }
+
+    fn log_of(&self, owner: &PortOwner) -> Option<Arc<LogSlot>> {
+        self.inner.lock().get(owner).and_then(|e| e.log.clone())
+    }
+
+    /// Up to `limit` buffered entries of the instance, from sequence number
+    /// `from` on (see [`crate::logs::store::LogBuffer::read_from`]). `None`
+    /// for an unknown or re-attached instance.
+    #[must_use]
+    pub fn read_log(&self, owner: &PortOwner, from: u64, limit: usize) -> Option<Page> {
+        Some(self.log_of(owner)?.read_from(from, limit))
+    }
+
+    /// The last `n` buffered entries of the instance.
+    #[must_use]
+    pub fn tail_log(&self, owner: &PortOwner, n: usize) -> Option<Vec<Arc<Record>>> {
+        Some(self.log_of(owner)?.tail(n))
+    }
+
+    /// The sequence number the instance's next entry gets: subscribe, then
+    /// read up to it to see every entry exactly once.
+    #[must_use]
+    pub fn log_next_seq(&self, owner: &PortOwner) -> Option<u64> {
+        Some(self.log_of(owner)?.next_seq())
     }
 
     /// Checks the PID files and attaches instances that still run. Call it
@@ -474,6 +540,7 @@ impl Manager {
                         gevent_port: Some(record.gevent_port),
                         db: record.db.clone(),
                         port_retried: false,
+                        log: None,
                         slot: Slot::Attached(Some(Box::new(instance))),
                     },
                 );
@@ -517,18 +584,18 @@ impl Manager {
                 None => None,
             }
         };
-        let status = match old {
+        let (status, log) = match old {
             Some(old) => {
                 release(old.slot).await;
-                Some(old.status)
+                (Some(old.status), old.log)
             }
-            None => None,
+            None => (None, None),
         };
         let mut entries = self.inner.lock();
         if entries.contains_key(&owner) {
             return Err(ManagerError::AlreadyRunning(owner));
         }
-        self.inner.launch(&mut entries, plan, status, false)
+        self.inner.launch(&mut entries, plan, status, log, false)
     }
 
     /// Stops an instance gracefully and forgets it. Its ports are released.
@@ -723,8 +790,7 @@ impl Inner {
     }
 
     fn send(&self, owner: &PortOwner, event: InstanceEvent) {
-        // No subscribers is fine.
-        let _ = self.events.send(ManagerEvent {
+        self.bus.instances().publish(ManagerEvent {
             owner: owner.clone(),
             event,
         });
@@ -753,13 +819,16 @@ impl Inner {
         }
     }
 
-    /// Allocates, spawns and inserts. `status` carries the status stream of
-    /// an earlier run, so waiters follow the instance across runs.
+    /// Allocates, spawns and inserts. `status` and `log` carry the status
+    /// stream and log of an earlier run, so waiters and readers follow the
+    /// instance across runs; the log is kept only if it goes to the same
+    /// place with the same limits.
     fn launch(
         self: &Arc<Self>,
         entries: &mut BTreeMap<PortOwner, Entry>,
         plan: InstancePlan,
         status: Option<Arc<watch::Sender<Status>>>,
+        log: Option<Arc<LogSlot>>,
         port_retried: bool,
     ) -> Result<InstanceInfo, ManagerError> {
         let owner = plan.owner.clone();
@@ -782,12 +851,26 @@ impl Inner {
         let generation = self.next_generation();
         let status =
             status.unwrap_or_else(|| Arc::new(watch::channel(Status::Starting { pid: 0 }).0));
+        let target = LogTarget {
+            dir: plan.logs_dir.clone(),
+            settings: plan.log_settings,
+        };
+        let mut log_error = None;
+        let log = match log.filter(|l| *l.target() == target) {
+            Some(log) => log,
+            None => {
+                let (log, error) = LogSlot::new(owner.clone(), target, self.bus.logs().clone());
+                log_error = error;
+                log
+            }
+        };
         let retry = self.opts.port_retry && !port_retried && plan.ports_automatic();
         let on_event = forward(
             Arc::downgrade(self),
             owner.clone(),
             generation,
             status.clone(),
+            log.clone(),
             retry,
         );
         let opts = SuperviseOptions {
@@ -803,9 +886,18 @@ impl Inner {
             plan: Some(plan),
             status,
             port_retried,
+            log: Some(log),
             slot: Slot::Supervised(Arc::new(handle)),
         };
         let info = entry.info(&owner);
+        if let Some(e) = log_error {
+            self.notify(
+                &owner,
+                Notice::LogFile {
+                    error: e.to_string(),
+                },
+            );
+        }
         entries.insert(owner, entry);
         Ok(info)
     }
@@ -834,22 +926,51 @@ async fn release(slot: Slot) {
     }
 }
 
-/// The supervisor's event callback: keeps the instance's status stream and
-/// forwards events, and turns the first port-race crash into a retry.
+/// The supervisor's event callback: feeds output into the instance's log,
+/// keeps its status stream and forwards events, and turns the first
+/// port-race crash into a retry.
 fn forward(
     inner: Weak<Inner>,
     owner: PortOwner,
     generation: u64,
     status: Arc<watch::Sender<Status>>,
+    log: Arc<LogSlot>,
     retry: bool,
 ) -> impl FnMut(Event) + Send + 'static {
     let mut spawns = 0_u32;
+    // The file error is reported once; the log then stays in memory.
+    let mut file_failed = false;
     move |event| {
         let Some(me) = inner.upgrade() else {
             return;
         };
+        let file_error = match &event {
+            Event::Output { line, .. } => log.line(line),
+            Event::Spawned { pid, .. } => {
+                spawns += 1;
+                log.marker(&format!("----- odhive: started pid {pid} -----"))
+            }
+            Event::Status { status: s } => {
+                if s.is_terminal() {
+                    log.flush();
+                }
+                None
+            }
+        };
+        if let Some(e) = file_error
+            && !file_failed
+        {
+            file_failed = true;
+            me.notify(
+                &owner,
+                Notice::LogFile {
+                    error: e.to_string(),
+                },
+            );
+        }
         match &event {
-            Event::Spawned { .. } => spawns += 1,
+            Event::Output { .. } => return,
+            Event::Spawned { .. } => {}
             Event::Status {
                 status: Status::Crashed { exit },
             } if retry && spawns == 1 && exit.port_in_use => {
@@ -859,7 +980,6 @@ fn forward(
             Event::Status { status: s } => {
                 status.send_replace(s.clone());
             }
-            Event::Output { .. } => {}
         }
         me.send(&owner, InstanceEvent::Supervisor(event));
     }
@@ -892,7 +1012,7 @@ async fn retry_ports(inner: Arc<Inner>, owner: PortOwner, generation: u64, exit:
         entry.http_port.unwrap_or_default(),
         entry.gevent_port.unwrap_or_default(),
     );
-    let (plan, status) = (entry.plan.clone(), entry.status.clone());
+    let (plan, status, log) = (entry.plan.clone(), entry.status.clone(), entry.log.clone());
     release(entry.slot).await;
     let Some(plan) = plan else {
         return;
@@ -910,7 +1030,13 @@ async fn retry_ports(inner: Arc<Inner>, owner: PortOwner, generation: u64, exit:
         // Started again by someone else in the meantime.
         return;
     }
-    if let Err(e) = inner.launch(&mut entries, plan.clone(), Some(status.clone()), true) {
+    if let Err(e) = inner.launch(
+        &mut entries,
+        plan.clone(),
+        Some(status.clone()),
+        log.clone(),
+        true,
+    ) {
         inner.set_status(
             &owner,
             &status,
@@ -928,6 +1054,7 @@ async fn retry_ports(inner: Arc<Inner>, owner: PortOwner, generation: u64, exit:
                 http_port: None,
                 gevent_port: None,
                 port_retried: true,
+                log,
                 slot: Slot::Failed,
             },
         );
