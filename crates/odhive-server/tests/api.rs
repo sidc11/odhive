@@ -54,6 +54,53 @@ async fn health_and_unknown_api_routes() {
 }
 
 #[tokio::test]
+async fn quit_asks_the_service_to_end() {
+    let env = Env::new();
+    let api = env.app();
+    let waiter = {
+        let svc = api.service.clone();
+        tokio::spawn(async move { svc.quit_requested().await })
+    };
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(!waiter.is_finished(), "not asked yet");
+
+    // A mutation like any other: signed in and marked.
+    let req = Request::post("/api/v1/service/quit")
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, common::ORIGIN)
+        .header("x-odhive", "1")
+        .body(Body::empty())
+        .expect("request");
+    assert_eq!(api.send(req).await.status(), StatusCode::UNAUTHORIZED);
+    let req = Request::post("/api/v1/service/quit")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &api.cookie)
+        .header(header::ORIGIN, common::ORIGIN)
+        .body(Body::empty())
+        .expect("request");
+    assert_eq!(api.send(req).await.status(), StatusCode::FORBIDDEN);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(!waiter.is_finished(), "refused requests change nothing");
+
+    // The CLI: bearer token, no Origin.
+    let req = Request::post("/api/v1/service/quit")
+        .header(header::HOST, HOST)
+        .header(header::AUTHORIZATION, &api.bearer)
+        .header("x-odhive", "1")
+        .body(Body::empty())
+        .expect("request");
+    assert_eq!(api.send(req).await.status(), StatusCode::ACCEPTED);
+    tokio::time::timeout(WAIT, waiter)
+        .await
+        .expect("quit seen")
+        .expect("join");
+    // Also seen by whoever starts waiting later.
+    tokio::time::timeout(WAIT, api.service.quit_requested())
+        .await
+        .expect("late waiter");
+}
+
+#[tokio::test]
 async fn api_keeps_the_host_check() {
     let env = Env::new();
     let api = env.app();

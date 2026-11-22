@@ -71,6 +71,7 @@ pub async fn dispatch(command: Command) -> anyhow::Result<ExitCode> {
         Command::Stop(args) => run::stop(&ctx, &args.target).await,
         Command::Status(args) => status::status(&ctx, args.target.as_ref()),
         Command::Logs(args) => logs::logs(&ctx, &args.target.target, args.follow, args.lines).await,
+        Command::Serve(_) | Command::Quit => unreachable!("handled by the service module"),
     }
 }
 

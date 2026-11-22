@@ -2,34 +2,28 @@
 #![forbid(unsafe_code)]
 
 mod cli;
+mod client;
 mod commands;
+mod service;
 
 use std::process::ExitCode;
 
-use anyhow::Context;
 use clap::Parser;
-use odhive_core::config::AppPaths;
-use odhive_core::manager::{Manager, ManagerOptions, Recovery};
-use odhive_core::pidfile::RunDir;
 use odhive_core::platform::{effective_uid, ensure_not_root};
-use odhive_core::ports::{DEFAULT_PORT_ATTEMPTS, bind_loopback};
-use odhive_core::workspace::bootstrap;
-use odhive_server::Service;
 use tracing_subscriber::EnvFilter;
 
-use crate::cli::Cli;
+use crate::cli::{Cli, Command};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
-    // Commands print their own output; the UI server logs what it does.
-    let default_level = if cli.command.is_some() {
-        "warn"
-    } else {
-        "info"
-    };
+    // Commands print their own output; the service logs what it does.
+    let serving = matches!(&cli.command, Some(Command::Serve(a)) if a.foreground);
+    let default_level = if serving { "info" } else { "warn" };
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        // No colour codes in the service log.
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level)),
         )
@@ -37,92 +31,19 @@ async fn main() -> anyhow::Result<ExitCode> {
     ensure_not_root(effective_uid())?;
 
     match cli.command {
+        None => service::open(cli.port, !cli.no_browser).await,
+        Some(Command::Serve(args)) if args.foreground => {
+            let mode = if args.detached {
+                service::Mode::Detached
+            } else {
+                service::Mode::Foreground
+            };
+            service::run(cli.port, mode).await
+        }
+        Some(Command::Serve(_)) => service::start(cli.port).await,
+        Some(Command::Quit) => service::quit().await,
         Some(command) => commands::dispatch(command).await,
-        None => serve(cli.port).await.map(|()| ExitCode::SUCCESS),
     }
-}
-
-/// How long running jobs get to clean up when the service ends.
-const JOB_CANCEL_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
-
-async fn serve(port: u16) -> anyhow::Result<()> {
-    let paths = AppPaths::discover()?;
-    let boot = bootstrap(&paths).context("could not prepare the OdHive workspace")?;
-    if boot.config_created {
-        tracing::info!(path = %paths.config_file().display(), "created config");
-    }
-    for dir in &boot.created {
-        tracing::info!(path = %dir.display(), "created folder");
-    }
-    tracing::info!(root = %boot.workspace.root().display(), "workspace ready");
-    // Refuses a token file others could read: they could drive OdHive.
-    let token = odhive_core::token::load_or_create(&paths.token_file())
-        .context("could not read the OdHive API token")?;
-    let auth = odhive_server::Auth::new(token);
-
-    let listeners = bind_loopback(port, DEFAULT_PORT_ATTEMPTS)
-        .await
-        .context("could not bind the OdHive UI port")?;
-    if listeners.port != port {
-        tracing::warn!(
-            requested = port,
-            actual = listeners.port,
-            "port {} is busy, using {}",
-            port,
-            listeners.port
-        );
-    }
-
-    let manager = Manager::new(ManagerOptions {
-        run_dir: Some(RunDir::new(paths.run_dir())),
-        ..ManagerOptions::default()
-    });
-    for r in manager.recover().context("could not read the PID files")? {
-        match r {
-            Recovery::Attached { owner, pid, .. } => {
-                tracing::info!(instance = %owner, pid, "re-attached running instance");
-            }
-            Recovery::SupervisedElsewhere { owner, pid, by } => {
-                tracing::info!(instance = %owner, pid, by, "instance runs in another OdHive");
-            }
-            Recovery::Stale { owner, pid, .. } => {
-                tracing::info!(instance = %owner, pid, "removed stale PID file");
-            }
-            Recovery::Invalid { path, reason } => {
-                tracing::warn!(path = %path.display(), %reason, "removed unusable PID file");
-            }
-        }
-    }
-    let service = Service::new(paths, auth.clone(), boot.workspace, manager.clone());
-    // Registered now, so a Ctrl+C right after the link is printed is caught.
-    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-        .context("could not watch for Ctrl+C")?;
-    let login = auth
-        .issue_code()
-        .context("could not create a sign-in code")?;
-    // The URL holds a secret: printed for the user only, never logged.
-    eprintln!(
-        "Open OdHive (link valid for {} s, once): {}{}",
-        login.expires_in,
-        listeners.url(),
-        login.path
-    );
-
-    let served = odhive_server::serve(listeners, service.clone(), async move {
-        interrupt.recv().await;
-        tracing::info!("shutting down");
-    })
-    .await;
-    // A half-done clone or setup is undone rather than left behind.
-    service.cancel_jobs(JOB_CANCEL_WAIT).await;
-    // Until the background service exists (5.5), instances end with the UI.
-    for (owner, result) in manager.shutdown().await {
-        if let Err(e) = result {
-            tracing::warn!(instance = %owner, "could not stop: {e}");
-        }
-    }
-    served.context("server error")?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -143,6 +64,23 @@ mod tests {
         let cli = Cli::try_parse_from(["odhive"]).expect("parse");
         assert_eq!(cli.port, 7069);
         assert!(cli.command.is_none());
+        assert!(!cli.no_browser);
+    }
+
+    #[test]
+    fn serve_runs_detached_only_in_the_foreground() {
+        let cli = Cli::try_parse_from(["odhive", "--port", "7070", "serve", "--foreground"])
+            .expect("parse");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Serve(cli::ServeArgs {
+                foreground: true,
+                detached: false
+            }))
+        ));
+        assert_eq!(cli.port, 7070);
+        assert!(Cli::try_parse_from(["odhive", "serve", "--detached"]).is_err());
+        assert!(Cli::try_parse_from(["odhive", "quit"]).is_ok());
     }
 
     #[test]

@@ -58,6 +58,10 @@ impl Env {
             .env("XDG_CONFIG_HOME", self.home.join(".config"))
             .env("XDG_DATA_HOME", self.home.join(".local/share"))
             .env_remove("RUST_LOG")
+            // Never a real browser.
+            .env_remove("BROWSER")
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
             .stdin(Stdio::null());
         cmd
     }
@@ -571,7 +575,7 @@ fn http_get(port: u16, path: &str) -> String {
 #[test]
 fn serve_creates_a_private_token_and_prints_a_one_time_sign_in_link() {
     let env = Env::new();
-    let mut run = env.start(&["--port", "18950"]);
+    let mut run = env.start(&["--port", "18950", "serve", "--foreground"]);
     let line = run.wait_for("Open OdHive");
     let url = line.split_whitespace().last().expect("url").to_owned();
     let rest = url.strip_prefix("http://localhost:").expect("url");
@@ -605,7 +609,7 @@ fn serve_creates_a_private_token_and_prints_a_one_time_sign_in_link() {
     assert!(!all.contains(hex), "{all}");
 
     // The next start keeps the token.
-    let mut run = env.start(&["--port", "18950"]);
+    let mut run = env.start(&["--port", "18950", "serve", "--foreground"]);
     run.wait_for("Open OdHive");
     assert_eq!(fs::read_to_string(&token).expect("read").trim_end(), hex);
     kill_process(run.pid(), Signal::INT).expect("SIGINT");
@@ -619,10 +623,177 @@ fn serve_refuses_a_token_file_others_can_read() {
     fs::create_dir_all(token.parent().expect("parent")).expect("mkdir");
     fs::write(&token, format!("{}\n", "ab".repeat(32))).expect("write");
     fs::set_permissions(&token, fs::Permissions::from_mode(0o644)).expect("chmod");
-    let err = env.fails(&["--port", "18951"]);
+    let err = env.fails(&["--port", "18951", "serve", "--foreground"]);
     assert!(err.contains("too wide"), "{err}");
     assert!(port_free(18_951));
     // Left as it was for the user to fix.
     let mode = fs::metadata(&token).expect("token").permissions().mode() & 0o777;
     assert_eq!(mode, 0o644);
+}
+
+/// Sends a GET with the API token; returns the raw response.
+fn api_get(env: &Env, port: u16, path: &str) -> String {
+    use std::io::{Read, Write};
+    let token = fs::read_to_string(data_dir(env).join("token")).expect("token");
+    let mut s = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("connect");
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+        token.trim_end()
+    )
+    .expect("write");
+    let mut out = String::new();
+    s.read_to_string(&mut out).expect("read");
+    out
+}
+
+/// The published state of the running service: `(pid, port)`.
+fn service_state(env: &Env) -> Option<(i32, u16)> {
+    let text = fs::read_to_string(data_dir(env).join("service.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some((
+        i32::try_from(v["pid"].as_u64()?).ok()?,
+        u16::try_from(v["port"].as_u64()?).ok()?,
+    ))
+}
+
+fn alive(pid: i32) -> bool {
+    rustix::process::test_kill_process(Pid::from_raw(pid).expect("pid")).is_ok()
+}
+
+/// Kills a background service a failed test left running.
+struct ServiceGuard<'a>(&'a Env);
+
+impl Drop for ServiceGuard<'_> {
+    fn drop(&mut self) {
+        if let Some((pid, _)) = service_state(self.0) {
+            let _ = kill_process(Pid::from_raw(pid).expect("pid"), Signal::KILL);
+        }
+    }
+}
+
+/// A `$BROWSER` that saves the file it is asked to open as `opened.html`.
+fn fake_browser(env: &Env) -> PathBuf {
+    let script = env.home.join("fake-browser");
+    fs::write(&script, "#!/bin/sh\ncp \"$1\" \"$HOME/opened.html\"\n").expect("write");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
+    script
+}
+
+#[test]
+fn launcher_starts_one_background_service_that_outlives_it() {
+    let env = Env::new();
+    let _guard = ServiceGuard(&env);
+    let browser = fake_browser(&env);
+    let out = env
+        .cmd(&["--port", "18952"])
+        .env("BROWSER", &browser)
+        .output()
+        .expect("run");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(err.contains("Started OdHive in the background"), "{err}");
+    assert!(err.contains("Opened OdHive in your browser"), "{err}");
+    assert!(
+        !err.contains("login?t="),
+        "the link went to the browser: {err}"
+    );
+
+    // The launcher is gone; the service runs on.
+    let (pid, port) = service_state(&env).expect("state");
+    assert_eq!(port, 18_952);
+    assert!(alive(pid));
+    let health = api_get(&env, port, "/api/v1/health");
+    assert!(health.starts_with("HTTP/1.1 200"), "{health}");
+
+    // The browser got a private page, not the link: the page signs in once.
+    let page = data_dir(&env).join("open.html");
+    let mode = fs::metadata(&page).expect("page").permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    let opened = fs::read_to_string(env.home.join("opened.html")).expect("opened");
+    let path = opened
+        .split("url=http://localhost:18952")
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .expect("redirect")
+        .to_owned();
+    assert!(path.starts_with("/login?t="), "{opened}");
+    assert!(http_get(port, &path).starts_with("HTTP/1.1 303"));
+    assert!(http_get(port, &path).starts_with("HTTP/1.1 401"), "reused");
+
+    // Only one service: the others say so and leave it alone.
+    let err = env.fails(&["--port", "18953", "serve"]);
+    assert!(
+        err.contains("already running at http://localhost:18952"),
+        "{err}"
+    );
+    let err = env.fails(&["--port", "18953", "serve", "--foreground"]);
+    assert!(err.contains(&format!("(pid {pid})")), "{err}");
+    assert!(port_free(18_953));
+
+    // Running again reuses it and, without a browser, prints a fresh link.
+    let out = env.run(&["--no-browser"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(!err.contains("Started"), "{err}");
+    assert!(err.contains("http://localhost:18952/login?t="), "{err}");
+    assert_eq!(service_state(&env), Some((pid, port)));
+
+    let err = String::from_utf8_lossy(&env.run(&["quit"]).stderr).into_owned();
+    assert!(err.contains("OdHive stopped"), "{err}");
+    eventually("the service exits", || !alive(pid));
+    assert!(service_state(&env).is_none(), "state removed");
+    assert!(port_free(18_952));
+    let log = fs::read_to_string(data_dir(&env).join("service.log")).expect("log");
+    assert!(log.contains("asked to quit"), "{log}");
+    assert!(!log.contains('\u{1b}'), "no colour codes: {log:?}");
+    assert!(
+        !log.contains("login?t="),
+        "no sign-in link in the log: {log}"
+    );
+
+    let err = String::from_utf8_lossy(&env.run(&["quit"]).stderr).into_owned();
+    assert!(err.contains("not running"), "{err}");
+}
+
+#[test]
+fn serve_starts_the_service_without_a_browser_and_quit_stops_its_instances() {
+    let env = Env::new();
+    let _guard = ServiceGuard(&env);
+    // Started in a terminal and left running there by `odhive start`, the
+    // instance is the service's once it re-attaches it.
+    env.project("shop", &[("main", 18_960, 18_961, &[])]);
+    let mut run = env.start(&["start", "shop", "-q"]);
+    run.wait_for("shop#main: running");
+    kill_process(run.pid(), Signal::KILL).expect("SIGKILL");
+    let _ = run.finish();
+    assert!(!port_free(18_960), "orphan keeps running");
+
+    let err = String::from_utf8_lossy(&env.run(&["--port", "18954", "serve"]).stderr).into_owned();
+    assert!(
+        err.contains("OdHive is running at http://localhost:18954"),
+        "{err}"
+    );
+    assert!(!env.home.join("opened.html").exists());
+    let (pid, _) = service_state(&env).expect("state");
+    let log = fs::read_to_string(data_dir(&env).join("service.log")).expect("log");
+    assert!(log.contains("re-attached running instance"), "{log}");
+
+    assert!(env.run(&["quit"]).status.success());
+    eventually("the service exits", || !alive(pid));
+    eventually("port 18960 free", || port_free(18_960));
+}
+
+#[test]
+fn sigterm_ends_a_foreground_service_cleanly() {
+    let env = Env::new();
+    let mut run = env.start(&["--port", "18955", "serve", "--foreground"]);
+    run.wait_for("Open OdHive");
+    assert!(service_state(&env).is_some());
+    kill_process(run.pid(), Signal::TERM).expect("SIGTERM");
+    let (ok, all) = run.finish();
+    assert!(ok, "{all}");
+    assert!(all.contains("terminated"), "{all}");
+    assert!(service_state(&env).is_none());
+    assert!(port_free(18_955));
 }

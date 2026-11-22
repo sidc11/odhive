@@ -54,6 +54,7 @@ struct ApiDoc;
 fn api_router() -> OpenApiRouter<Service> {
     OpenApiRouter::new()
         .routes(routes!(health))
+        .routes(routes!(quit))
         .routes(routes!(crate::auth::create_code))
         .routes(routes!(sources::list, sources::add))
         .routes(routes!(sources::clone))
@@ -156,4 +157,13 @@ async fn health() -> Json<Health> {
     Json(Health {
         version: env!("CARGO_PKG_VERSION").to_owned(),
     })
+}
+
+/// Ends the service: running jobs are cancelled and the instances it runs
+/// are stopped, then it exits. Answers before it begins.
+#[utoipa::path(operation_id = "quit", post, path = "/service/quit", tag = "service",
+    responses((status = ACCEPTED, description = "The service is shutting down")))]
+async fn quit(axum::extract::State(svc): axum::extract::State<Service>) -> StatusCode {
+    svc.request_quit();
+    StatusCode::ACCEPTED
 }
