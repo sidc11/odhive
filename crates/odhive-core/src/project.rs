@@ -12,6 +12,10 @@
 //! [env]
 //! PGHOST = "localhost"
 //!
+//! [logs]                    # all optional; see logs::LogSettings
+//! buffer_entries = 50000
+//! file_keep = 5
+//!
 //! [[instances]]
 //! id = "main"
 //! http_port = 8069
@@ -32,6 +36,7 @@ use thiserror::Error;
 use crate::conf::{self, ConfError, OdooOptions};
 use crate::config::{Edition, GlobalConfig, SourceEntry};
 use crate::fsutil;
+use crate::logs::LogSettings;
 use crate::names::{
     NameError, validate_db_name, validate_env_key, validate_instance_id, validate_project_name,
 };
@@ -153,6 +158,9 @@ pub enum ProjectError {
     /// An argument or env value contains a NUL byte or is empty.
     #[error("{0}: contains a NUL byte or is empty")]
     InvalidValue(String),
+    /// A `[logs]` value is out of range.
+    #[error("[logs]: {0}")]
+    LogSettings(String),
     /// A relative addons path leaves the project folder.
     #[error("addons path {0:?} must be absolute or stay inside the project folder")]
     BadAddonsPath(PathBuf),
@@ -314,6 +322,9 @@ pub struct ProjectConfig {
     /// Extra `odoo.conf` sections read by third-party modules.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub odoo_sections: BTreeMap<String, OdooOptions>,
+    /// Log buffer and file limits.
+    #[serde(default, skip_serializing_if = "LogSettings::is_default")]
+    pub logs: LogSettings,
     /// Instances (at least one).
     pub instances: Vec<Instance>,
 }
@@ -334,6 +345,7 @@ impl ProjectConfig {
             env: EnvVars::default(),
             odoo_options: OdooOptions::default(),
             odoo_sections: BTreeMap::new(),
+            logs: LogSettings::default(),
             instances: vec![Instance::new(DEFAULT_INSTANCE)],
         }
     }
@@ -362,6 +374,7 @@ impl ProjectConfig {
             }
         }
         conf::validate_model(&self.odoo_options, &self.odoo_sections)?;
+        self.logs.validate().map_err(ProjectError::LogSettings)?;
         self.validate_instances()
     }
 
@@ -583,6 +596,7 @@ mod tests {
         let mut qj = OdooOptions::default();
         qj.0.insert("channels".into(), "root:2".into());
         p.odoo_sections.insert("queue_job".into(), qj);
+        p.logs.file_keep = 9;
         let main = &mut p.instances[0];
         main.http_port = Some(8069);
         main.gevent_port = Some(8072);
@@ -630,6 +644,7 @@ mod tests {
         assert!(text.contains("reload_mode = \"restart\""));
         assert!(text.contains("autofix_mode = \"ask\""));
         assert!(text.contains("[odoo_options]"));
+        assert!(text.contains("[logs]") && text.contains("file_keep = 9"));
         assert!(text.contains("[odoo_sections.queue_job]"));
     }
 
@@ -662,6 +677,27 @@ mod tests {
         assert_eq!(i.http_port, None);
         assert_eq!(i.db_name("acme"), "acme_main");
         assert!(p.addons_paths.is_empty() && p.env.is_empty());
+        assert!(p.logs.is_default());
+    }
+
+    #[test]
+    fn default_log_settings_are_not_written() {
+        let text = ProjectConfig::new("shop", "odoo-20.0")
+            .to_toml()
+            .expect("toml");
+        assert!(!text.contains("[logs]"), "{text}");
+    }
+
+    #[test]
+    fn rejects_bad_log_settings() {
+        let mut p = ProjectConfig::new("shop", "odoo-20.0");
+        p.logs.file_keep = 0;
+        assert!(matches!(err(&p), ProjectError::LogSettings(m) if m.contains("file_keep")));
+        p.logs.file_keep = 5;
+        p.logs.buffer_entries = 10_000_000;
+        assert!(matches!(err(&p), ProjectError::LogSettings(m) if m.contains("buffer_entries")));
+        let text = "version = 1\nname = \"acme\"\n[sources]\ncommunity = \"odoo-19.0\"\n[logs]\nkeep = 3\n[[instances]]\nid = \"main\"\n";
+        assert!(ProjectConfig::from_toml(text, Path::new("t")).is_err());
     }
 
     #[test]
