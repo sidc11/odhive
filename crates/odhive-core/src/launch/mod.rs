@@ -11,22 +11,26 @@ use std::fs::{self, DirBuilder};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::autofix::Trusted;
 use crate::conf::{self, ConfContext, ConfError, DATA_DIR};
 use crate::config::{AppPaths, GlobalConfig, ProjectEntry};
 use crate::fsutil::DIR_MODE;
 use crate::logs::LOGS_DIR;
-use crate::manager::{InstancePlan, ManagerError};
+use crate::manager::{AutoFix, InstancePlan, ManagerError};
 use crate::names::{self, NameError};
 use crate::pidfile::{PidFileError, PidRecord, RecordState, RunDir};
 use crate::ports::PortOwner;
-use crate::project::{Instance, ProjectConfig, ProjectError};
+use crate::project::{AutofixMode, Instance, ProjectConfig, ProjectError};
+use crate::python::find_executable;
+use crate::requirements::{self, InstallOptions};
 use crate::schema::{self, SchemaError, SchemaOrigin};
-use crate::venv::{VENV_DIR, venv_python};
+use crate::venv::{VENV_DIR, VenvTool, venv_python};
 
 /// Folder for cached option schemas, inside the app data dir.
 pub const SCHEMA_CACHE_DIR: &str = "schema";
@@ -238,6 +242,9 @@ pub struct Prepared {
     /// Custom addons folders left out of `addons_path`: missing, or without
     /// any module (Odoo refuses an addons folder with no module in it).
     pub skipped_addons: Vec<PathBuf>,
+    /// Why the project's requirements could not be read for the dependency
+    /// auto-fix (only the built-in table is trusted then).
+    pub trusted_error: Option<String>,
 }
 
 /// Writes the project's `odoo.conf` and builds the plans of `instances`.
@@ -303,24 +310,56 @@ pub async fn prepare(
         .or_insert_with(|| DEFAULT_HTTP_INTERFACE.into());
     let conf = conf::write_conf(&config, dir, &ctx, Some(&loaded.schema))?;
 
+    let mut trusted_error = None;
+    let trusted = if instances.iter().all(|i| i.autofix_mode == AutofixMode::Off) {
+        Arc::new(Trusted::builtin())
+    } else {
+        // Same sources as the requirements install of `project setup`.
+        let mut extra: Vec<PathBuf> = enterprise.iter().map(|e| e.path.clone()).collect();
+        extra.extend(
+            project
+                .config
+                .resolved_addons_paths(dir)
+                .into_iter()
+                .filter(|p| has_modules(p)),
+        );
+        match requirements::collect(&community.path, &extra) {
+            Ok(plan) => Arc::new(Trusted::from_plan(&plan)),
+            Err(e) => {
+                trusted_error = Some(e.to_string());
+                Arc::new(Trusted::builtin())
+            }
+        }
+    };
+    // uv venvs have no pip; uv installs into any venv.
+    let uv = std::env::var_os("PATH").and_then(|p| find_executable(&p, "uv"));
+    let install = InstallOptions::new(python.clone(), VenvTool::prefer_uv(uv));
+
     let plans = instances
         .iter()
         .map(|i| {
-            InstancePlan::for_instance(
+            let mut plan = InstancePlan::for_instance(
                 &project.config,
                 dir,
                 &i.id,
                 python.clone(),
                 odoo_bin.clone(),
                 Some(conf.clone()),
-            )
+            )?;
+            plan.autofix = Some(AutoFix {
+                mode: i.autofix_mode,
+                install: install.clone(),
+                trusted: trusted.clone(),
+            });
+            Ok(plan)
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, ManagerError>>()?;
     Ok(Prepared {
         plans,
         conf,
         schema_origin: loaded.origin,
         skipped_addons,
+        trusted_error,
     })
 }
 

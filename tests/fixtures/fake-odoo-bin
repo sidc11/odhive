@@ -12,6 +12,11 @@ Simulation flags (not real Odoo options):
   --marker PATH                  with port-in-use: fail only when PATH does not exist yet
                                  (and create it), so the next run starts normally
   --missing-module NAME          module name used by module-not-found (default: xlrd)
+  --simulate-missing NAME        like module-not-found, but only while NAME cannot be
+                                 imported by the interpreter running this script
+                                 (installing it fixes the next start)
+  --missing-keeps-running        with --simulate-missing: log the error and keep
+                                 serving, as Odoo does when a database fails to load
   --exit-after SECONDS           stop by itself after SECONDS (0 = run until signalled)
   --odoo-version VERSION         version reported in logs (default: 19.0)
 """
@@ -19,6 +24,7 @@ Simulation flags (not real Odoo options):
 import argparse
 import datetime
 import http.server
+import importlib.util
 import os
 import signal
 import socket
@@ -82,6 +88,8 @@ def parse_args(argv):
     p.add_argument("--simulate", choices=["traceback", "module-not-found", "crash", "port-in-use"])
     p.add_argument("--marker", default=None)
     p.add_argument("--missing-module", default="xlrd")
+    p.add_argument("--simulate-missing", default=None)
+    p.add_argument("--missing-keeps-running", action="store_true")
     p.add_argument("--exit-after", type=float, default=0.0)
     p.add_argument("--odoo-version", default="19.0")
     args, _unknown = p.parse_known_args(argv)
@@ -98,8 +106,13 @@ def main(argv):
     log("INFO", "odoo", f"addons paths: {args.addons_path or '/opt/odoo/addons'}")
     log("INFO", "odoo", "database: default@default:default")
 
+    missing = None
     if args.simulate == "module-not-found":
-        mod = args.missing_module
+        missing = args.missing_module
+    elif args.simulate_missing and importlib.util.find_spec(args.simulate_missing) is None:
+        missing = args.simulate_missing
+    if missing and not args.missing_keeps_running:
+        mod = missing
         tb = traceback_lines(
             f"ModuleNotFoundError: No module named '{mod}'",
             [
@@ -139,7 +152,13 @@ def main(argv):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log("INFO", "odoo.service.server", f"HTTP service (werkzeug) running on {socket.gethostname()}:{args.http_port}")
 
-    if args.database:
+    if missing:
+        tb = traceback_lines(
+            f"ModuleNotFoundError: No module named '{missing}'",
+            [("/opt/custom/my_module/models/report.py", 3, "<module>", f"import {missing}")],
+        )
+        log("CRITICAL", "odoo.service.server", f"Failed to initialize database `{db}`.\n{tb}", db=db)
+    elif args.database:
         log("INFO", "odoo.modules.loading", "loading 1 modules...", db=db)
         log("INFO", "odoo.modules.loading", "1 modules loaded in 0.01s, 0 queries (+0 extra)", db=db)
         if args.update:

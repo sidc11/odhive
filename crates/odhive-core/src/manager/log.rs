@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Notify;
 
+use super::fix::Watcher;
 use crate::events::{LogEvent, Topic};
 use crate::logs::LogSettings;
 use crate::logs::store::{InstanceLog, Page, Record};
@@ -33,6 +34,8 @@ pub(super) struct LogTarget {
 struct State {
     log: InstanceLog,
     last_line: Instant,
+    /// Processes started so far; entries belong to the latest.
+    run: u64,
 }
 
 #[derive(Debug)]
@@ -42,6 +45,8 @@ pub(super) struct LogSlot {
     state: Mutex<State>,
     topic: Topic<LogEvent>,
     idle: Arc<Notify>,
+    /// Sees every completed entry of the instance's output.
+    watcher: Mutex<Option<Watcher>>,
 }
 
 impl Drop for LogSlot {
@@ -73,9 +78,11 @@ impl LogSlot {
             state: Mutex::new(State {
                 log,
                 last_line: Instant::now(),
+                run: 0,
             }),
             topic,
             idle: idle.clone(),
+            watcher: Mutex::new(None),
         });
         tokio::spawn(flush_when_idle(Arc::downgrade(&slot), idle));
         (slot, error)
@@ -88,6 +95,20 @@ impl LogSlot {
     fn lock(&self) -> MutexGuard<'_, State> {
         // Every update leaves the log usable, so it is valid after a panic.
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Who sees completed output entries from now on.
+    pub fn set_watcher(&self, watcher: Option<Watcher>) {
+        *self.watcher.lock().unwrap_or_else(PoisonError::into_inner) = watcher;
+    }
+
+    /// Hands an output entry to the watcher, then publishes it. Called with
+    /// the state lock held, so events keep log order.
+    fn output(&self, state: &State, record: Arc<Record>) {
+        if let Some(w) = &*self.watcher.lock().unwrap_or_else(PoisonError::into_inner) {
+            w.observe(&record.entry, state.run);
+        }
+        self.publish(record);
     }
 
     /// Publishes while the lock is held, so events keep log order.
@@ -104,7 +125,7 @@ impl LogSlot {
         let pushed = state.log.push_line(line);
         state.last_line = Instant::now();
         if let Some(record) = pushed.record {
-            self.publish(record);
+            self.output(&state, record);
         }
         if state.log.has_pending() {
             self.idle.notify_one();
@@ -112,12 +133,28 @@ impl LogSlot {
         pushed.file_error
     }
 
-    /// A line OdHive writes itself, e.g. a start marker.
+    /// A new process was started: writes the start marker.
+    pub fn started(&self, pid: u32) -> Option<io::Error> {
+        self.write_marker(&format!("----- odhive: started pid {pid} -----"), true)
+    }
+
+    /// A line OdHive writes itself. Never handed to the watcher.
     pub fn marker(&self, text: &str) -> Option<io::Error> {
+        self.write_marker(text, false)
+    }
+
+    fn write_marker(&self, text: &str, new_run: bool) -> Option<io::Error> {
         let mut state = self.lock();
+        // The pending output entry is completed first; it belongs to the run.
+        if let Some(record) = state.log.flush() {
+            self.output(&state, record);
+        }
         let (records, error) = state.log.push_marker(text);
         for record in records {
             self.publish(record);
+        }
+        if new_run {
+            state.run += 1;
         }
         error
     }
@@ -126,7 +163,7 @@ impl LogSlot {
     pub fn flush(&self) {
         let mut state = self.lock();
         if let Some(record) = state.log.flush() {
-            self.publish(record);
+            self.output(&state, record);
         }
     }
 
@@ -142,7 +179,7 @@ impl LogSlot {
             return Some(idle - quiet);
         }
         if let Some(record) = state.log.flush() {
-            self.publish(record);
+            self.output(&state, record);
         }
         None
     }

@@ -27,6 +27,11 @@
 //!   and stay readable by sequence number ([`Manager::read_log`]). The log
 //!   survives restarts and the port retry, and goes when the instance is
 //!   stopped. Re-attached instances have no output, so no log.
+//! - **Dependency auto-fix:** with [`InstancePlan::autofix`] set, an entry
+//!   reporting a missing Python module is handled per [`crate::autofix`]:
+//!   the package is installed into the venv and the instance restarted on
+//!   its ports ([`Notice::DependencyInstalling`] …), or the user is asked
+//!   ([`Manager::confirm_fix`]). Meanwhile a crashed instance is not done.
 //!
 //! Dropping the last [`Manager`] clone kills supervised instances and leaves
 //! attached ones running; [`Manager::shutdown`] stops all of them gracefully.
@@ -42,21 +47,26 @@ use thiserror::Error;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
+use crate::autofix::{Candidate, GiveUp, Trust};
 use crate::events::{BusOptions, EventBus, LogEvent, Subscription};
 use crate::logs::store::{Page, Record};
 use crate::logs::{LOGS_DIR, LogSettings};
 use crate::pidfile::{self, Attached, AttachedStop, PidFileError, PidRecord, Recovered, RunDir};
 use crate::ports::{AllocError, AllocOptions, PortOwner, PortRegistry};
 use crate::project::{ProjectConfig, ProjectError};
+use crate::requirements::Requirement;
 use crate::supervisor::{
     self, DEFAULT_STOP_TIMEOUT, Event, ExitInfo, LaunchSpec, Status, SuperviseOptions, Supervised,
     SupervisorError,
 };
 
+mod fix;
 mod log;
 #[cfg(test)]
 mod tests;
 
+use fix::FixState;
+pub use fix::{AutoFix, FixAction, FixInfo};
 pub use log::IDLE_FLUSH;
 use log::{LogSlot, LogTarget};
 
@@ -107,6 +117,20 @@ pub enum ManagerError {
     /// PID files could not be read or removed.
     #[error(transparent)]
     PidFile(#[from] PidFileError),
+    /// No missing dependency awaits confirmation.
+    #[error("{0} has no missing dependency waiting for confirmation")]
+    NoPendingFix(PortOwner),
+    /// The pending dependency cannot be installed any more.
+    #[error("{owner}: {reason}")]
+    FixRefused {
+        /// The instance.
+        owner: PortOwner,
+        /// Why.
+        reason: GiveUp,
+    },
+    /// The instance is installing a missing dependency.
+    #[error("{0} is installing a missing dependency")]
+    Fixing(PortOwner),
 }
 
 /// Everything needed to start one instance.
@@ -124,6 +148,8 @@ pub struct InstancePlan {
     pub logs_dir: Option<PathBuf>,
     /// Log buffer and file limits.
     pub log_settings: LogSettings,
+    /// Missing-dependency handling; `None` = off.
+    pub autofix: Option<AutoFix>,
 }
 
 impl InstancePlan {
@@ -165,6 +191,7 @@ impl InstancePlan {
             spec,
             logs_dir: Some(project_dir.join(LOGS_DIR)),
             log_settings: project.logs,
+            autofix: None,
         })
     }
 
@@ -236,6 +263,42 @@ pub enum Notice {
         /// What failed.
         error: String,
     },
+    /// The log reports a missing Python module.
+    DependencyMissing {
+        /// Top-level import name.
+        module: String,
+        /// Package that provides it, when one can be named.
+        package: Option<String>,
+        /// Why the package is trusted; `None` = untrusted (or no package).
+        trust: Option<Trust>,
+        /// What happens next.
+        action: FixAction,
+    },
+    /// The package is being installed into the instance's venv.
+    DependencyInstalling {
+        /// Missing module.
+        module: String,
+        /// Package.
+        package: String,
+        /// What the installer gets.
+        requirements: Vec<Requirement>,
+        /// Install number since the instance was started (from 1).
+        attempt: u32,
+        /// Installs allowed per start.
+        max: u32,
+    },
+    /// The package was installed; the instance restarts.
+    DependencyInstalled {
+        /// Package.
+        package: String,
+    },
+    /// The install failed; the instance is left as it is.
+    DependencyFailed {
+        /// Package.
+        package: String,
+        /// Installer error (with its last output lines).
+        error: String,
+    },
 }
 
 /// One event of one instance.
@@ -279,6 +342,19 @@ pub struct InstanceInfo {
     pub port_retried: bool,
     /// Current status.
     pub status: Status,
+    /// Dependency auto-fix, when enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autofix: Option<FixInfo>,
+}
+
+impl InstanceInfo {
+    /// No process runs and none will without being asked: the status is
+    /// terminal and no missing dependency is being installed. A fix awaiting
+    /// confirmation does not count.
+    #[must_use]
+    pub fn is_done(&self) -> bool {
+        self.status.is_terminal() && !self.autofix.as_ref().is_some_and(|f| f.active)
+    }
 }
 
 /// How [`Manager::stop`] ended an instance.
@@ -374,6 +450,8 @@ struct Entry {
     port_retried: bool,
     /// `None` for attached instances.
     log: Option<Arc<LogSlot>>,
+    /// `None` when auto-fix is off or the instance is attached.
+    fix: Option<Arc<FixState>>,
     slot: Slot,
 }
 
@@ -396,15 +474,23 @@ impl Entry {
             supervised: !matches!(self.slot, Slot::Attached(_)),
             port_retried: self.port_retried,
             status: self.status.borrow().clone(),
+            autofix: self.fix.as_ref().map(|f| f.info()),
         }
     }
 
-    /// No process is running and none is being stopped.
+    /// No process is running, none is being stopped and no missing
+    /// dependency is being installed.
     fn is_done(&self) -> bool {
         match &self.slot {
-            Slot::Supervised(_) | Slot::Failed => self.status.borrow().is_terminal(),
+            Slot::Supervised(_) | Slot::Failed => {
+                self.status.borrow().is_terminal() && !self.is_fixing()
+            }
             Slot::Attached(_) => false,
         }
+    }
+
+    fn is_fixing(&self) -> bool {
+        self.fix.as_ref().is_some_and(|f| f.active())
     }
 }
 
@@ -541,6 +627,7 @@ impl Manager {
                         db: record.db.clone(),
                         port_retried: false,
                         log: None,
+                        fix: None,
                         slot: Slot::Attached(Some(Box::new(instance))),
                     },
                 );
@@ -579,6 +666,7 @@ impl Manager {
         let old = {
             let mut entries = self.inner.lock();
             match entries.get(&owner) {
+                Some(e) if e.is_fixing() => return Err(ManagerError::Fixing(owner)),
                 Some(e) if !e.is_done() => return Err(ManagerError::AlreadyRunning(owner)),
                 Some(_) => entries.remove(&owner),
                 None => None,
@@ -595,7 +683,8 @@ impl Manager {
         if entries.contains_key(&owner) {
             return Err(ManagerError::AlreadyRunning(owner));
         }
-        self.inner.launch(&mut entries, plan, status, log, false)
+        self.inner
+            .launch(&mut entries, plan, status, log, None, false)
     }
 
     /// Stops an instance gracefully and forgets it. Its ports are released.
@@ -614,6 +703,9 @@ impl Manager {
             let entry = entries
                 .get_mut(owner)
                 .ok_or_else(|| ManagerError::NotRunning(owner.clone()))?;
+            if let Some(fix) = &entry.fix {
+                fix.cancel();
+            }
             let job = match &mut entry.slot {
                 Slot::Supervised(h) => Job::Supervised(h.clone()),
                 Slot::Attached(a) => {
@@ -674,6 +766,12 @@ impl Manager {
             let entry = entries
                 .get(owner)
                 .ok_or_else(|| ManagerError::NotRunning(owner.clone()))?;
+            if entry.is_fixing() {
+                return Err(ManagerError::Fixing(owner.clone()));
+            }
+            if let Some(fix) = &entry.fix {
+                fix.reset();
+            }
             match &entry.slot {
                 Slot::Supervised(h) => (Some(h.clone()), None),
                 Slot::Attached(_) => return Err(ManagerError::NoPlan(owner.clone())),
@@ -704,6 +802,58 @@ impl Manager {
             Err(e) => return Err(e),
         }
         self.start(plan).await
+    }
+
+    /// Installs the missing dependency awaiting confirmation (see
+    /// [`FixAction::Confirm`]) and restarts the instance, like the automatic
+    /// path. Returns when the restart was issued; the outcome is reported as
+    /// notices. Confirming is what makes an untrusted package installable.
+    ///
+    /// # Errors
+    /// [`ManagerError::NotRunning`], [`ManagerError::NoPendingFix`], or
+    /// [`ManagerError::FixRefused`] when the attempt limit was reached.
+    pub async fn confirm_fix(&self, owner: &PortOwner) -> Result<Candidate, ManagerError> {
+        let fix = self.fix_of(owner)?;
+        let (candidate, attempt) = match fix.take_pending() {
+            None => return Err(ManagerError::NoPendingFix(owner.clone())),
+            Some(Err(reason)) => {
+                return Err(ManagerError::FixRefused {
+                    owner: owner.clone(),
+                    reason,
+                });
+            }
+            Some(Ok(c)) => c,
+        };
+        fix::apply(
+            &Arc::downgrade(&self.inner),
+            owner,
+            &fix,
+            &candidate,
+            attempt,
+        )
+        .await;
+        Ok(candidate)
+    }
+
+    /// Drops the missing dependency awaiting confirmation.
+    ///
+    /// # Errors
+    /// [`ManagerError::NotRunning`] or [`ManagerError::NoPendingFix`].
+    pub fn decline_fix(&self, owner: &PortOwner) -> Result<Candidate, ManagerError> {
+        self.fix_of(owner)?
+            .decline()
+            .ok_or_else(|| ManagerError::NoPendingFix(owner.clone()))
+    }
+
+    fn fix_of(&self, owner: &PortOwner) -> Result<Arc<FixState>, ManagerError> {
+        let entries = self.inner.lock();
+        let entry = entries
+            .get(owner)
+            .ok_or_else(|| ManagerError::NotRunning(owner.clone()))?;
+        entry
+            .fix
+            .clone()
+            .ok_or_else(|| ManagerError::NoPendingFix(owner.clone()))
     }
 
     /// One instance.
@@ -829,6 +979,7 @@ impl Inner {
         plan: InstancePlan,
         status: Option<Arc<watch::Sender<Status>>>,
         log: Option<Arc<LogSlot>>,
+        fix: Option<Arc<FixState>>,
         port_retried: bool,
     ) -> Result<InstanceInfo, ManagerError> {
         let owner = plan.owner.clone();
@@ -864,6 +1015,11 @@ impl Inner {
                 log
             }
         };
+        let fix = fix.or_else(|| plan.autofix.clone().map(FixState::new));
+        log.set_watcher(
+            fix.as_ref()
+                .map(|f| f.watch(Arc::downgrade(self), owner.clone())),
+        );
         let retry = self.opts.port_retry && !port_retried && plan.ports_automatic();
         let on_event = forward(
             Arc::downgrade(self),
@@ -887,6 +1043,7 @@ impl Inner {
             status,
             port_retried,
             log: Some(log),
+            fix,
             slot: Slot::Supervised(Arc::new(handle)),
         };
         let info = entry.info(&owner);
@@ -948,7 +1105,7 @@ fn forward(
             Event::Output { line, .. } => log.line(line),
             Event::Spawned { pid, .. } => {
                 spawns += 1;
-                log.marker(&format!("----- odhive: started pid {pid} -----"))
+                log.started(*pid)
             }
             Event::Status { status: s } => {
                 if s.is_terminal() {
@@ -1012,7 +1169,12 @@ async fn retry_ports(inner: Arc<Inner>, owner: PortOwner, generation: u64, exit:
         entry.http_port.unwrap_or_default(),
         entry.gevent_port.unwrap_or_default(),
     );
-    let (plan, status, log) = (entry.plan.clone(), entry.status.clone(), entry.log.clone());
+    let (plan, status, log, fix) = (
+        entry.plan.clone(),
+        entry.status.clone(),
+        entry.log.clone(),
+        entry.fix.clone(),
+    );
     release(entry.slot).await;
     let Some(plan) = plan else {
         return;
@@ -1035,6 +1197,7 @@ async fn retry_ports(inner: Arc<Inner>, owner: PortOwner, generation: u64, exit:
         plan.clone(),
         Some(status.clone()),
         log.clone(),
+        fix.clone(),
         true,
     ) {
         inner.set_status(
@@ -1055,6 +1218,7 @@ async fn retry_ports(inner: Arc<Inner>, owner: PortOwner, generation: u64, exit:
                 gevent_port: None,
                 port_retried: true,
                 log,
+                fix,
                 slot: Slot::Failed,
             },
         );
