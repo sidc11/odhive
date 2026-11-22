@@ -544,3 +544,85 @@ fn ctrl_c_during_startup_leaves_no_orphans() {
     let st = status_line(&env, "shop#main");
     assert!(st.contains("stopped") && !st.contains("stale"), "{st}");
 }
+
+/// OdHive's data folder inside this test's HOME.
+fn data_dir(env: &Env) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        env.home.join("Library/Application Support/odhive")
+    } else {
+        env.home.join(".local/share/odhive")
+    }
+}
+
+/// Sends a plain HTTP/1.1 GET to the UI port; returns the raw response.
+fn http_get(port: u16, path: &str) -> String {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("connect");
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n"
+    )
+    .expect("write");
+    let mut out = String::new();
+    s.read_to_string(&mut out).expect("read");
+    out
+}
+
+#[test]
+fn serve_creates_a_private_token_and_prints_a_one_time_sign_in_link() {
+    let env = Env::new();
+    let mut run = env.start(&["--port", "18950"]);
+    let line = run.wait_for("Open OdHive");
+    let url = line.split_whitespace().last().expect("url").to_owned();
+    let rest = url.strip_prefix("http://localhost:").expect("url");
+    let (port, path) = rest.split_once('/').expect("path");
+    let port: u16 = port.parse().expect("port");
+    let code = path.strip_prefix("login?t=").expect("login path");
+    assert_eq!(code.len(), 64, "{url}");
+
+    let token = data_dir(&env).join("token");
+    let mode = fs::metadata(&token).expect("token").permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    let hex = fs::read_to_string(&token).expect("read");
+    let hex = hex.trim_end();
+    assert!(!line.contains(hex), "the token itself is never printed");
+
+    let resp = http_get(port, &format!("/{path}"));
+    assert!(resp.starts_with("HTTP/1.1 303"), "{resp}");
+    assert!(resp.contains("\r\nlocation: /\r\n"), "{resp}");
+    assert!(
+        resp.contains(&format!("set-cookie: odhive_session={hex}; ")),
+        "{resp}"
+    );
+    let again = http_get(port, &format!("/{path}"));
+    assert!(again.starts_with("HTTP/1.1 401"), "reused: {again}");
+    let api = http_get(port, "/api/v1/health");
+    assert!(api.starts_with("HTTP/1.1 401"), "no cookie: {api}");
+
+    kill_process(run.pid(), Signal::INT).expect("SIGINT");
+    let (ok, all) = run.finish();
+    assert!(ok, "{all}");
+    assert!(!all.contains(hex), "{all}");
+
+    // The next start keeps the token.
+    let mut run = env.start(&["--port", "18950"]);
+    run.wait_for("Open OdHive");
+    assert_eq!(fs::read_to_string(&token).expect("read").trim_end(), hex);
+    kill_process(run.pid(), Signal::INT).expect("SIGINT");
+    assert!(run.finish().0);
+}
+
+#[test]
+fn serve_refuses_a_token_file_others_can_read() {
+    let env = Env::new();
+    let token = data_dir(&env).join("token");
+    fs::create_dir_all(token.parent().expect("parent")).expect("mkdir");
+    fs::write(&token, format!("{}\n", "ab".repeat(32))).expect("write");
+    fs::set_permissions(&token, fs::Permissions::from_mode(0o644)).expect("chmod");
+    let err = env.fails(&["--port", "18951"]);
+    assert!(err.contains("too wide"), "{err}");
+    assert!(port_free(18_951));
+    // Left as it was for the user to fix.
+    let mode = fs::metadata(&token).expect("token").permissions().mode() & 0o777;
+    assert_eq!(mode, 0o644);
+}

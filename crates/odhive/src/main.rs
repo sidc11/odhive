@@ -55,6 +55,10 @@ async fn serve(port: u16) -> anyhow::Result<()> {
         tracing::info!(path = %dir.display(), "created folder");
     }
     tracing::info!(root = %boot.workspace.root().display(), "workspace ready");
+    // Refuses a token file others could read: they could drive OdHive.
+    let token = odhive_core::token::load_or_create(&paths.token_file())
+        .context("could not read the OdHive API token")?;
+    let auth = odhive_server::Auth::new(token);
 
     let listeners = bind_loopback(port, DEFAULT_PORT_ATTEMPTS)
         .await
@@ -89,10 +93,23 @@ async fn serve(port: u16) -> anyhow::Result<()> {
             }
         }
     }
-    let service = Service::new(paths, boot.workspace, manager.clone());
+    let service = Service::new(paths, auth.clone(), boot.workspace, manager.clone());
+    // Registered now, so a Ctrl+C right after the link is printed is caught.
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .context("could not watch for Ctrl+C")?;
+    let login = auth
+        .issue_code()
+        .context("could not create a sign-in code")?;
+    // The URL holds a secret: printed for the user only, never logged.
+    eprintln!(
+        "Open OdHive (link valid for {} s, once): {}{}",
+        login.expires_in,
+        listeners.url(),
+        login.path
+    );
 
-    let served = odhive_server::serve(listeners, service.clone(), async {
-        let _ = tokio::signal::ctrl_c().await;
+    let served = odhive_server::serve(listeners, service.clone(), async move {
+        interrupt.recv().await;
         tracing::info!("shutting down");
     })
     .await;

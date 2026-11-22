@@ -131,6 +131,12 @@ impl AppPaths {
         self.data_dir.join(crate::pidfile::RUN_DIR_NAME)
     }
 
+    /// The API token file, see [`crate::token`].
+    #[must_use]
+    pub fn token_file(&self) -> PathBuf {
+        self.data_dir.join(crate::token::TOKEN_FILE_NAME)
+    }
+
     /// Default workspace root: `~/OdHive`.
     #[must_use]
     pub fn default_workspace_root(&self) -> PathBuf {

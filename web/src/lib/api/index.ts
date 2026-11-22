@@ -43,3 +43,6 @@ export type JobEvent = Schemas['JobEvent']
 export type JobStep = Schemas['JobStep']
 export type CloneSource = Schemas['CloneSource']
 export type SetupRequest = Schemas['SetupRequest']
+
+/** One-time code that signs a browser in at `path` (`/login?t=…`). */
+export type LoginCode = Schemas['LoginCode']

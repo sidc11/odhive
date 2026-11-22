@@ -26,16 +26,21 @@ type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 const WAIT: Duration = Duration::from_secs(30);
 
-/// Opens `/api/v1/ws` on `port`, with `origin` and `host` headers when
-/// given.
+/// Opens `/api/v1/ws` on `port`, with `cookie`, `origin` and `host`
+/// headers when given.
 async fn try_connect(
     port: u16,
+    cookie: Option<&str>,
     origin: Option<&str>,
     host: Option<&str>,
 ) -> Result<Ws, tungstenite::Error> {
     let mut req = format!("ws://127.0.0.1:{port}/api/v1/ws")
         .into_client_request()
         .expect("request");
+    if let Some(c) = cookie {
+        req.headers_mut()
+            .insert(header::COOKIE, c.parse().expect("cookie"));
+    }
     if let Some(o) = origin {
         req.headers_mut()
             .insert(header::ORIGIN, o.parse().expect("origin"));
@@ -49,10 +54,11 @@ async fn try_connect(
         .map(|(ws, _)| ws)
 }
 
-/// A connection as the web UI opens it; its hello is checked and consumed.
-async fn connect(port: u16) -> Ws {
+/// A connection as the signed-in web UI opens it; its hello is checked and
+/// consumed.
+async fn connect(api: &common::Api, port: u16) -> Ws {
     let origin = format!("http://localhost:{port}");
-    let mut ws = try_connect(port, Some(&origin), None)
+    let mut ws = try_connect(port, Some(&api.cookie), Some(&origin), None)
         .await
         .expect("connect");
     let hello = recv(&mut ws).await;
@@ -174,10 +180,10 @@ fn subscribe(name: &str) -> Value {
 #[tokio::test]
 async fn bad_messages_get_errors_and_the_connection_stays() {
     let env = Env::new();
-    let (_api, port) = env
+    let (api, port) = env
         .serve_with(ManagerOptions::default(), ServiceOptions::default())
         .await;
-    let mut ws = connect(port).await;
+    let mut ws = connect(&api, port).await;
 
     ws.send(Message::text("not json")).await.expect("send");
     let m = recv(&mut ws).await;
@@ -222,7 +228,7 @@ async fn oversized_client_messages_end_the_connection() {
         max_message_size: 1024,
         ..WsLimits::default()
     };
-    let (_api, port) = env
+    let (api, port) = env
         .serve_with(
             ManagerOptions::default(),
             ServiceOptions {
@@ -231,7 +237,7 @@ async fn oversized_client_messages_end_the_connection() {
             },
         )
         .await;
-    let mut ws = connect(port).await;
+    let mut ws = connect(&api, port).await;
     let big = json!({ "op": "subscribe_logs", "project": "x".repeat(2000), "instance": "main" });
     send(&mut ws, big).await;
     let m = recv(&mut ws).await;
@@ -241,7 +247,7 @@ async fn oversized_client_messages_end_the_connection() {
 #[tokio::test]
 async fn foreign_origins_and_hosts_are_refused() {
     let env = Env::new();
-    let (_api, port) = env
+    let (api, port) = env
         .serve_with(ManagerOptions::default(), ServiceOptions::default())
         .await;
     let refused = |r: Result<Ws, tungstenite::Error>| match r {
@@ -256,10 +262,18 @@ async fn foreign_origins_and_hosts_are_refused() {
         "http://localhost:1".to_owned(),
         "null".to_owned(),
     ] {
-        let status = refused(try_connect(port, Some(&origin), None).await);
+        let status = refused(try_connect(port, Some(&api.cookie), Some(&origin), None).await);
         assert_eq!(status, StatusCode::FORBIDDEN, "{origin}");
     }
-    let status = refused(try_connect(port, None, Some(&format!("evil.com:{port}"))).await);
+    let status = refused(
+        try_connect(
+            port,
+            Some(&api.cookie),
+            None,
+            Some(&format!("evil.com:{port}")),
+        )
+        .await,
+    );
     assert_eq!(status, StatusCode::FORBIDDEN, "foreign Host");
 
     // The UI's own origins and non-browser clients (no Origin) get in.
@@ -268,7 +282,7 @@ async fn foreign_origins_and_hosts_are_refused() {
         Some(format!("http://127.0.0.1:{port}")),
         None,
     ] {
-        let mut ws = try_connect(port, origin.as_deref(), None)
+        let mut ws = try_connect(port, Some(&api.cookie), origin.as_deref(), None)
             .await
             .expect("connect");
         assert_eq!(recv(&mut ws).await["type"], "hello");
@@ -315,7 +329,7 @@ async fn logs_arrive_in_order_in_batches_even_when_the_bus_lags() {
         WsLimits::default(),
     )
     .await;
-    let mut ws = connect(port).await;
+    let mut ws = connect(&api, port).await;
 
     // Subscribed before it runs: everything from its first entry.
     send(&mut ws, subscribe("shop")).await;
@@ -378,7 +392,7 @@ async fn subscribing_with_from_or_tail_and_unsubscribing() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let live = api.service.manager().log_next_seq(&owner).expect("log");
-    let mut ws = connect(port).await;
+    let mut ws = connect(&api, port).await;
 
     send(
         &mut ws,
@@ -463,7 +477,7 @@ async fn a_new_log_after_a_stop_is_announced_with_a_reset() {
         WsLimits::default(),
     )
     .await;
-    let mut ws = connect(port).await;
+    let mut ws = connect(&api, port).await;
     send(&mut ws, subscribe("shop")).await;
     assert_eq!(recv(&mut ws).await["type"], "subscribed");
 
@@ -505,7 +519,7 @@ async fn instance_events_follow_a_snapshot() {
         WsLimits::default(),
     )
     .await;
-    let mut ws = connect(port).await;
+    let mut ws = connect(&api, port).await;
     send(&mut ws, json!({ "op": "subscribe_events" })).await;
     assert_eq!(recv(&mut ws).await["type"], "snapshot");
 
@@ -548,7 +562,7 @@ async fn too_many_queued_events_become_a_snapshot() {
         ..WsLimits::default()
     };
     let (api, port) = setup(&env, "shop", 19_240, &[], ManagerOptions::default(), limits).await;
-    let mut ws = connect(port).await;
+    let mut ws = connect(&api, port).await;
     send(&mut ws, json!({ "op": "subscribe_events" })).await;
     assert_eq!(recv(&mut ws).await["instances"], json!([]));
 
@@ -568,7 +582,7 @@ async fn shutdown_closes_connections() {
     let (api, port) = env
         .serve_with(ManagerOptions::default(), ServiceOptions::default())
         .await;
-    let mut ws = connect(port).await;
+    let mut ws = connect(&api, port).await;
     api.service.begin_shutdown();
     let m = recv(&mut ws).await;
     assert_eq!(
@@ -577,7 +591,7 @@ async fn shutdown_closes_connections() {
         "{m}"
     );
     // New connections are closed at once.
-    let mut ws = connect(port).await;
+    let mut ws = connect(&api, port).await;
     assert_eq!(recv(&mut ws).await["code"], 1001);
 }
 
@@ -598,7 +612,7 @@ async fn a_client_that_stops_reading_is_dropped() {
         limits,
     )
     .await;
-    let mut ws = connect(port).await;
+    let mut ws = connect(&api, port).await;
     send(&mut ws, subscribe("shop")).await;
     start(&api, "shop").await;
 
@@ -640,7 +654,7 @@ async fn job_progress_is_streamed_to_job_subscribers() {
         .await;
     let source = api.add_source(&env.source_dir()).await;
     api.create_project("shop", &source).await;
-    let mut ws = connect(port).await;
+    let mut ws = connect(&api, port).await;
 
     send(&mut ws, json!({ "op": "subscribe_jobs" })).await;
     let snap = recv(&mut ws).await;

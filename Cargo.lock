@@ -844,6 +844,7 @@ name = "odhive-core"
 version = "0.0.1"
 dependencies = [
  "directories",
+ "getrandom 0.4.3",
  "notify",
  "proptest",
  "rustix",

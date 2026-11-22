@@ -3,6 +3,7 @@
 
 pub mod api;
 mod assets;
+pub mod auth;
 pub mod jobs;
 pub mod security;
 pub mod service;
@@ -13,6 +14,7 @@ use odhive_core::ports::LoopbackListeners;
 use tracing::info;
 
 pub use api::ws::WsLimits;
+pub use auth::Auth;
 pub use service::{Service, ServiceOptions};
 
 /// Runtime configuration for the HTTP app.
@@ -25,7 +27,11 @@ pub struct AppConfig {
 /// Builds the router (API and web UI) with every security middleware applied.
 pub fn app(config: AppConfig, service: Service) -> Router {
     let host_guard = security::HostGuard::new(config.port);
+    let login = axum::Router::new()
+        .route(auth::LOGIN_PATH, axum::routing::get(auth::login))
+        .with_state(service.auth().clone());
     api::router(service)
+        .merge(login)
         .fallback(assets::serve)
         .layer(middleware::from_fn_with_state(
             host_guard,
