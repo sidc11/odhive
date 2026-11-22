@@ -92,6 +92,7 @@ async fn non_get_methods_are_rejected() {
         .method("POST")
         .uri("/")
         .header(header::HOST, "localhost:7069")
+        .header(header::ORIGIN, "http://localhost:7069")
         .body(Body::empty())
         .expect("request");
     let env = Env::new();

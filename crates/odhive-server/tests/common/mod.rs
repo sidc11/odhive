@@ -29,6 +29,8 @@ use tower::ServiceExt;
 /// The port the app believes it serves on.
 pub const PORT: u16 = 7069;
 pub const HOST: &str = "localhost:7069";
+/// The `Origin` of the web UI served at [`HOST`].
+pub const ORIGIN: &str = "http://localhost:7069";
 
 /// Time a job may take in tests.
 pub const JOB_WAIT: Duration = Duration::from_secs(120);
@@ -162,6 +164,7 @@ impl Env {
             ..manager
         });
         let cookie = format!("{}={}", odhive_server::auth::SESSION_COOKIE, token.to_hex());
+        let bearer = format!("Bearer {}", token.to_hex());
         let service = Service::with_options(
             self.paths.clone(),
             Auth::with_code_ttl(token, ttl),
@@ -170,10 +173,11 @@ impl Env {
             opts,
         );
         Api {
-            router: app(AppConfig { port }, service.clone()),
+            router: app(AppConfig::new(port), service.clone()),
             service,
             host: format!("localhost:{port}"),
             cookie,
+            bearer,
         }
     }
 
@@ -226,6 +230,8 @@ pub struct Api {
     pub host: String,
     /// The `Cookie` header of a signed-in browser.
     pub cookie: String,
+    /// The `Authorization` header of a non-browser client (the CLI).
+    pub bearer: String,
 }
 
 impl Api {
@@ -234,8 +240,8 @@ impl Api {
         self.router.clone().oneshot(req).await.expect("response")
     }
 
-    /// Sends an API request from the signed-in web UI (right Host, session
-    /// cookie, mutation header, JSON body) and returns the status and JSON
+    /// Sends an API request from the signed-in web UI (right Host and
+    /// Origin, session cookie, mutation header, JSON body) and returns the status and JSON
     /// body (`Null` when empty).
     pub async fn call(
         &self,
@@ -247,6 +253,7 @@ impl Api {
             .method(method)
             .uri(path)
             .header(header::HOST, &self.host)
+            .header(header::ORIGIN, format!("http://{}", self.host))
             .header(header::COOKIE, &self.cookie)
             .header("x-odhive", "1");
         let body = match body {

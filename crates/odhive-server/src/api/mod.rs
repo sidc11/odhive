@@ -4,7 +4,8 @@
 //! Every request must be signed in (session cookie or bearer token, see
 //! [`crate::auth`]). Every mutation (any method but `GET`/`HEAD`) must also
 //! carry `X-OdHive: 1`: browsers cannot add that header to a cross-site
-//! request without a CORS preflight, which OdHive never answers.
+//! request without a CORS preflight, which OdHive never answers. The `Origin`
+//! check, body and time limits are applied app-wide ([`crate::security`]).
 
 pub mod error;
 mod instances;
@@ -36,7 +37,7 @@ pub const MUTATION_HEADER: &str = "x-odhive";
 #[openapi(
     info(
         title = "OdHive API",
-        description = "Local API of OdHive, used by its web UI and CLI. Every request needs the session cookie `odhive_session` (set by `/login`) or `Authorization: Bearer <token>`, else 401. Every request other than GET/HEAD must also carry the header `X-OdHive: 1`.",
+        description = "Local API of OdHive, used by its web UI and CLI. Every request needs the session cookie `odhive_session` (set by `/login`) or `Authorization: Bearer <token>`, else 401. Every request other than GET/HEAD must also carry the header `X-OdHive: 1` and, from a browser, OdHive's own `Origin` (403 `forbidden_origin`; a request without `Origin` needs the bearer token). Bodies over 1 MiB get 413 `body_too_large`; a request not answered within 60 s gets 503 `timeout`. No CORS headers are ever sent.",
         license(name = "Apache-2.0", identifier = "Apache-2.0")
     ),
     tags(

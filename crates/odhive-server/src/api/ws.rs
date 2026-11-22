@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use axum::extract::State;
 use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket, WebSocketUpgrade, close_code};
+use axum::http::StatusCode;
 use axum::response::Response;
 use odhive_core::events::{Delivery, LogEvent, Subscription};
 use odhive_core::logs::store::Record;
@@ -59,6 +60,8 @@ pub struct WsLimits {
     pub max_message_size: usize,
     /// A frame the client does not take within this time drops it.
     pub send_timeout: Duration,
+    /// Open WebSockets; one more is refused with `503 too_many_connections`.
+    pub max_connections: usize,
 }
 
 impl Default for WsLimits {
@@ -71,6 +74,7 @@ impl Default for WsLimits {
             max_subscriptions: 32,
             max_message_size: 16 * 1024,
             send_timeout: Duration::from_secs(10),
+            max_connections: 64,
         }
     }
 }
@@ -203,7 +207,8 @@ pub enum ServerMessage {
     responses(
         (status = SWITCHING_PROTOCOLS, description = "WebSocket opened; messages are ServerMessage (from the server) and ClientMessage (from the client)"),
         (status = BAD_REQUEST, description = "Not a WebSocket upgrade request"),
-        (status = FORBIDDEN, description = "Foreign Origin", body = ErrorBody),
+        (status = FORBIDDEN, description = "Foreign Origin, or no Origin without a bearer token", body = ErrorBody),
+        (status = SERVICE_UNAVAILABLE, description = "Too many WebSockets open", body = ErrorBody),
     ))]
 pub(super) async fn upgrade(
     State(svc): State<Service>,
@@ -211,10 +216,21 @@ pub(super) async fn upgrade(
 ) -> Result<Response, ApiError> {
     let ws = ws.map_err(|e| ApiError::bad_request("not_websocket", e.body_text()))?;
     let limits = svc.ws_limits();
+    let slot = svc.ws_slot().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too_many_connections",
+            format!(
+                "at most {} WebSocket connections may be open",
+                limits.max_connections
+            ),
+        )
+    })?;
     Ok(ws
         .max_message_size(limits.max_message_size)
         .max_frame_size(limits.max_message_size)
         .on_upgrade(move |socket| async move {
+            let _slot = slot;
             Connection::new(svc, socket).run().await;
         }))
 }

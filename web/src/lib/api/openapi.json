@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OdHive API",
-    "description": "Local API of OdHive, used by its web UI and CLI. Every request needs the session cookie `odhive_session` (set by `/login`) or `Authorization: Bearer <token>`, else 401. Every request other than GET/HEAD must also carry the header `X-OdHive: 1`.",
+    "description": "Local API of OdHive, used by its web UI and CLI. Every request needs the session cookie `odhive_session` (set by `/login`) or `Authorization: Bearer <token>`, else 401. Every request other than GET/HEAD must also carry the header `X-OdHive: 1` and, from a browser, OdHive's own `Origin` (403 `forbidden_origin`; a request without `Origin` needs the bearer token). Bodies over 1 MiB get 413 `body_too_large`; a request not answered within 60 s gets 503 `timeout`. No CORS headers are ever sent.",
     "contact": {
       "name": "Siddharth Chaudhari"
     },
@@ -1173,7 +1173,17 @@
             "description": "Not a WebSocket upgrade request"
           },
           "403": {
-            "description": "Foreign Origin",
+            "description": "Foreign Origin, or no Origin without a bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Too many WebSockets open",
             "content": {
               "application/json": {
                 "schema": {

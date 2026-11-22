@@ -2513,8 +2513,17 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Foreign Origin */
+            /** @description Foreign Origin, or no Origin without a bearer token */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Too many WebSockets open */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

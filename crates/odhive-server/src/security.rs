@@ -1,9 +1,13 @@
 //! Security middleware: Host allowlist (DNS-rebinding protection), Origin
-//! check of WebSocket upgrades (cross-site WebSocket hijacking) and response
-//! headers.
+//! check of mutations and WebSocket upgrades (CSRF, cross-site WebSocket
+//! hijacking), request body and time limits, and response headers.
+//!
+//! OdHive never sends CORS headers: no other origin may read its responses.
 
 use axum::extract::{Request, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use std::time::Duration;
+
+use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
@@ -87,29 +91,114 @@ pub async fn require_allowed_host(
     }
 }
 
-/// Rejects WebSocket upgrades whose `Origin` is not OdHive's own web UI
-/// with `403`. Browsers always send `Origin` on a WebSocket handshake and
-/// never apply the same-origin policy to it, so this is what keeps other
-/// sites out. Without `Origin` (not a browser) the request passes.
-pub async fn require_same_origin_upgrade(
+/// Rejects cross-site requests with `403 forbidden_origin` (CSRF and
+/// cross-site WebSocket hijacking).
+///
+/// Checked: every request except `GET`/`HEAD`, and every WebSocket upgrade
+/// (a `GET` browsers send cross-site without asking). Such a request must
+/// carry the `Origin` of OdHive's own web UI. Browsers always send `Origin`
+/// on these requests, so a request without one is not from a page; it is
+/// let through only with an `Authorization` header (the CLI's bearer
+/// token), which a page cannot add cross-site without a CORS preflight that
+/// OdHive never answers.
+pub async fn require_same_origin(
     State(guard): State<HostGuard>,
     req: Request,
     next: Next,
 ) -> Response {
-    let upgrade = req
-        .headers()
-        .get(header::UPGRADE)
-        .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"));
-    if !upgrade {
-        return next.run(req).await;
-    }
-    match req.headers().get(header::ORIGIN) {
-        None => next.run(req).await,
-        Some(o) if o.to_str().is_ok_and(|o| guard.is_allowed_origin(o)) => next.run(req).await,
-        Some(_) => crate::api::error::ApiError::new(
+    if is_same_origin(&guard, &req) {
+        next.run(req).await
+    } else {
+        crate::api::error::ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden_origin",
-            "WebSocket connections are only accepted from OdHive's own pages",
+            "this request is only accepted from OdHive's own pages",
+        )
+        .into_response()
+    }
+}
+
+fn is_same_origin(guard: &HostGuard, req: &Request) -> bool {
+    let headers = req.headers();
+    let upgrade = headers
+        .get(header::UPGRADE)
+        .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"));
+    let safe = matches!(*req.method(), Method::GET | Method::HEAD);
+    if safe && !upgrade {
+        return true;
+    }
+    let mut origins = headers.get_all(header::ORIGIN).iter();
+    match (origins.next(), origins.next()) {
+        (None, _) => headers.contains_key(header::AUTHORIZATION),
+        (Some(o), None) => o.to_str().is_ok_and(|o| guard.is_allowed_origin(o)),
+        // More than one Origin is never sent by a browser.
+        (Some(_), Some(_)) => false,
+    }
+}
+
+/// Request limits applied by [`limit_requests`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestLimits {
+    /// Largest accepted request body in bytes; larger → `413 body_too_large`.
+    pub max_body: usize,
+    /// Longest time a request may take to answer → else `503 timeout`.
+    /// A WebSocket only counts until its upgrade response.
+    pub timeout: Duration,
+}
+
+impl RequestLimits {
+    /// Default body limit: 1 MiB (OdHive's API bodies are small JSON).
+    pub const MAX_BODY: usize = 1024 * 1024;
+    /// Default request timeout: above the longest handler (an instance
+    /// restart stops gracefully for up to 15 s before it starts again).
+    pub const TIMEOUT: Duration = Duration::from_secs(60);
+}
+
+impl Default for RequestLimits {
+    fn default() -> Self {
+        Self {
+            max_body: Self::MAX_BODY,
+            timeout: Self::TIMEOUT,
+        }
+    }
+}
+
+/// Rejects a request whose declared `Content-Length` is over the body limit
+/// with `413 body_too_large`, and answers `503 timeout` when the handler takes
+/// longer than the limit. A body without a length (chunked) is cut at the
+/// same limit when a handler reads it (see the `DefaultBodyLimit` on the API).
+pub async fn limit_requests(
+    State(limits): State<RequestLimits>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let declared = req
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .map(|v| v.to_str().ok().and_then(|v| v.parse::<u64>().ok()));
+    let too_large = match declared {
+        None => false,
+        Some(None) => {
+            return crate::api::error::ApiError::bad_request(
+                "bad_request",
+                "invalid Content-Length",
+            )
+            .into_response();
+        }
+        Some(Some(n)) => usize::try_from(n).map_or(true, |n| n > limits.max_body),
+    };
+    if too_large {
+        return crate::api::error::ApiError::body_too_large(limits.max_body).into_response();
+    }
+    match tokio::time::timeout(limits.timeout, next.run(req)).await {
+        Ok(resp) => resp,
+        Err(_) => crate::api::error::ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "timeout",
+            format!(
+                "the request took longer than {} s",
+                limits.timeout.as_secs()
+            ),
         )
         .into_response(),
     }
@@ -144,6 +233,41 @@ fn apply_security_headers(headers: &mut axum::http::HeaderMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn slow_handlers_time_out_with_503() {
+        use axum::body::Body;
+        use tower::ServiceExt as _;
+        let limits = RequestLimits {
+            timeout: Duration::from_millis(50),
+            ..RequestLimits::default()
+        };
+        let app = axum::Router::new()
+            .route(
+                "/slow",
+                axum::routing::get(|| async {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    "late"
+                }),
+            )
+            .route("/fast", axum::routing::get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(limits, limit_requests));
+        let call = |path: &'static str| {
+            let app = app.clone();
+            async move {
+                app.oneshot(Request::get(path).body(Body::empty()).expect("request"))
+                    .await
+                    .expect("response")
+            }
+        };
+        let resp = call("/slow").await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(resp.into_body(), 1024)
+            .await
+            .expect("body");
+        assert!(String::from_utf8_lossy(&body).contains("\"timeout\""));
+        assert_eq!(call("/fast").await.status(), StatusCode::OK);
+    }
 
     #[test]
     fn allows_loopback_names_on_serving_port() {
