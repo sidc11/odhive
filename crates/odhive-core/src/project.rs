@@ -188,16 +188,19 @@ pub enum ProjectError {
     },
 }
 
-/// What happens when project files change.
+/// What happens when files of the project's custom modules change (see
+/// [`crate::reload`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReloadMode {
-    /// `.py` → restart, data files → restart with `-u <module>`, `static/` → nothing.
+    /// `.py` → restart, data files and manifests → restart with
+    /// `-u <module>`, `static/` → browser refresh only.
     #[default]
     Auto,
-    /// Any change → plain restart.
+    /// Code and data changes → plain restart (no module update); `static/`
+    /// → browser refresh only.
     Restart,
-    /// Never reload automatically.
+    /// Files are not watched.
     Off,
 }
 

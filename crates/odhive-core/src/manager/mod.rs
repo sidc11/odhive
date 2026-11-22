@@ -32,6 +32,11 @@
 //!   the package is installed into the venv and the instance restarted on
 //!   its ports ([`Notice::DependencyInstalling`] …), or the user is asked
 //!   ([`Manager::confirm_fix`]). Meanwhile a crashed instance is not done.
+//! - **Smart Reload:** with [`InstancePlan::reload`] set, the instance's
+//!   custom addons folders are watched per [`crate::reload`]: a change
+//!   restarts it, restarts it with `-u <modules>`, or asks for a browser
+//!   refresh ([`Notice::Reload`]). A crashed instance that is watched is not
+//!   done: saving the fix starts it again.
 //!
 //! Dropping the last [`Manager`] clone kills supervised instances and leaves
 //! attached ones running; [`Manager::shutdown`] stops all of them gracefully.
@@ -54,6 +59,7 @@ use crate::logs::{LOGS_DIR, LogSettings};
 use crate::pidfile::{self, Attached, AttachedStop, PidFileError, PidRecord, Recovered, RunDir};
 use crate::ports::{AllocError, AllocOptions, PortOwner, PortRegistry};
 use crate::project::{ProjectConfig, ProjectError};
+use crate::reload::Action;
 use crate::requirements::Requirement;
 use crate::supervisor::{
     self, DEFAULT_STOP_TIMEOUT, Event, ExitInfo, LaunchSpec, Status, SuperviseOptions, Supervised,
@@ -63,6 +69,7 @@ use crate::syslib::Hint;
 
 mod fix;
 mod log;
+mod reload;
 #[cfg(test)]
 mod tests;
 
@@ -70,6 +77,8 @@ use fix::FixState;
 pub use fix::{AutoFix, FixAction, FixInfo};
 pub use log::IDLE_FLUSH;
 use log::{LogSlot, LogTarget};
+use reload::ReloadState;
+pub use reload::{Reload, ReloadInfo};
 
 /// How often a re-attached instance is checked for having exited.
 pub const DEFAULT_ATTACHED_POLL: Duration = Duration::from_secs(1);
@@ -151,6 +160,8 @@ pub struct InstancePlan {
     pub log_settings: LogSettings,
     /// Missing-dependency handling; `None` = off.
     pub autofix: Option<AutoFix>,
+    /// Smart Reload; `None` = off.
+    pub reload: Option<Reload>,
 }
 
 impl InstancePlan {
@@ -193,6 +204,7 @@ impl InstancePlan {
             logs_dir: Some(project_dir.join(LOGS_DIR)),
             log_settings: project.logs,
             autofix: None,
+            reload: None,
         })
     }
 
@@ -310,6 +322,41 @@ pub enum Notice {
         /// What to install, as text.
         hint: Hint,
     },
+    /// Smart Reload watches the instance's addons folders.
+    ReloadWatching {
+        /// Watched folders.
+        roots: Vec<PathBuf>,
+        /// Modules found in them.
+        modules: usize,
+        /// Module folders that link out of their addons folder; changes in
+        /// them are not seen.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        unwatched: Vec<PathBuf>,
+    },
+    /// The addons folders could not be watched; Smart Reload is off for this
+    /// start.
+    ReloadFailed {
+        /// Why.
+        error: String,
+    },
+    /// Files changed: the instance restarts ([`Action::Restart`], with `-u`
+    /// for [`Action::Update`]) or the browser should reload the page
+    /// ([`Action::RefreshBrowser`]).
+    Reload {
+        /// What happens.
+        action: Action,
+        /// Changed files (at most [`crate::reload::MAX_LISTED_FILES`]).
+        files: Vec<PathBuf>,
+        /// Number of changed files.
+        file_count: usize,
+    },
+    /// A new module appeared in an addons folder. It is not installed
+    /// automatically; it needs a restart with `-i <module>` or the Apps menu
+    /// (after "Update Apps List").
+    ModuleAdded {
+        /// Module name.
+        module: String,
+    },
 }
 
 /// One event of one instance.
@@ -356,15 +403,25 @@ pub struct InstanceInfo {
     /// Dependency auto-fix, when enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub autofix: Option<FixInfo>,
+    /// Smart Reload, when enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reload: Option<ReloadInfo>,
 }
 
 impl InstanceInfo {
     /// No process runs and none will without being asked: the status is
-    /// terminal and no missing dependency is being installed. A fix awaiting
-    /// confirmation does not count.
+    /// terminal, no missing dependency is being installed, and it did not
+    /// crash while Smart Reload watches (a saved fix restarts it). A fix
+    /// awaiting confirmation does not count.
     #[must_use]
     pub fn is_done(&self) -> bool {
-        self.status.is_terminal() && !self.autofix.as_ref().is_some_and(|f| f.active)
+        let failed = matches!(
+            self.status,
+            Status::Crashed { .. } | Status::FailedToStart { .. }
+        );
+        self.status.is_terminal()
+            && !self.autofix.as_ref().is_some_and(|f| f.active)
+            && !(failed && self.reload.as_ref().is_some_and(|r| r.watching))
     }
 }
 
@@ -463,6 +520,8 @@ struct Entry {
     log: Option<Arc<LogSlot>>,
     /// `None` when auto-fix is off or the instance is attached.
     fix: Option<Arc<FixState>>,
+    /// `None` when Smart Reload is off or the instance is attached.
+    reload: Option<Arc<ReloadState>>,
     slot: Slot,
 }
 
@@ -486,6 +545,7 @@ impl Entry {
             port_retried: self.port_retried,
             status: self.status.borrow().clone(),
             autofix: self.fix.as_ref().map(|f| f.info()),
+            reload: self.reload.as_ref().map(|r| r.info()),
         }
     }
 
@@ -639,6 +699,7 @@ impl Manager {
                         port_retried: false,
                         log: None,
                         fix: None,
+                        reload: None,
                         slot: Slot::Attached(Some(Box::new(instance))),
                     },
                 );
@@ -695,7 +756,7 @@ impl Manager {
             return Err(ManagerError::AlreadyRunning(owner));
         }
         self.inner
-            .launch(&mut entries, plan, status, log, None, false)
+            .launch(&mut entries, plan, status, log, None, None, false)
     }
 
     /// Stops an instance gracefully and forgets it. Its ports are released.
@@ -983,7 +1044,9 @@ impl Inner {
     /// Allocates, spawns and inserts. `status` and `log` carry the status
     /// stream and log of an earlier run, so waiters and readers follow the
     /// instance across runs; the log is kept only if it goes to the same
-    /// place with the same limits.
+    /// place with the same limits. `fix` and `reload` carry those of the
+    /// run the port retry replaces.
+    #[allow(clippy::too_many_arguments)]
     fn launch(
         self: &Arc<Self>,
         entries: &mut BTreeMap<PortOwner, Entry>,
@@ -991,6 +1054,7 @@ impl Inner {
         status: Option<Arc<watch::Sender<Status>>>,
         log: Option<Arc<LogSlot>>,
         fix: Option<Arc<FixState>>,
+        reload: Option<Arc<ReloadState>>,
         port_retried: bool,
     ) -> Result<InstanceInfo, ManagerError> {
         let owner = plan.owner.clone();
@@ -1050,6 +1114,11 @@ impl Inner {
             run_dir: self.opts.run_dir.clone(),
         };
         let handle = supervisor::start(plan.spec.clone(), ports, opts, on_event)?;
+        let reload = reload.or_else(|| {
+            plan.reload
+                .clone()
+                .and_then(|r| ReloadState::start(r, Arc::downgrade(self), owner.clone()))
+        });
         let entry = Entry {
             generation,
             http_port: Some(handle.http_port()),
@@ -1060,6 +1129,7 @@ impl Inner {
             port_retried,
             log: Some(log),
             fix,
+            reload,
             slot: Slot::Supervised(Arc::new(handle)),
         };
         let info = entry.info(&owner);
@@ -1185,11 +1255,12 @@ async fn retry_ports(inner: Arc<Inner>, owner: PortOwner, generation: u64, exit:
         entry.http_port.unwrap_or_default(),
         entry.gevent_port.unwrap_or_default(),
     );
-    let (plan, status, log, fix) = (
+    let (plan, status, log, fix, reload) = (
         entry.plan.clone(),
         entry.status.clone(),
         entry.log.clone(),
         entry.fix.clone(),
+        entry.reload.clone(),
     );
     release(entry.slot).await;
     let Some(plan) = plan else {
@@ -1214,6 +1285,7 @@ async fn retry_ports(inner: Arc<Inner>, owner: PortOwner, generation: u64, exit:
         Some(status.clone()),
         log.clone(),
         fix.clone(),
+        reload.clone(),
         true,
     ) {
         inner.set_status(
@@ -1235,6 +1307,7 @@ async fn retry_ports(inner: Arc<Inner>, owner: PortOwner, generation: u64, exit:
                 port_retried: true,
                 log,
                 fix,
+                reload,
                 slot: Slot::Failed,
             },
         );

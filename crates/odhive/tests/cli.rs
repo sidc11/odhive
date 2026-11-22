@@ -410,6 +410,38 @@ fn a_crash_ends_the_run_with_failure() {
 }
 
 #[test]
+fn smart_reload_restarts_on_changes_and_waits_after_a_crash() {
+    let env = Env::new();
+    let dir = env.project(
+        "shop",
+        &[("main", 18_800, 18_801, &["--simulate", "crash"])],
+    );
+    let module = dir.join("addons/m1");
+    fs::create_dir_all(module.join("views")).expect("mkdir");
+    fs::write(module.join("__manifest__.py"), "{}").expect("manifest");
+    let mut run = env.start(&["start", "shop"]);
+    run.wait_for("shop#main: smart reload watching");
+    run.wait_for("shop#main: crashed (exit code 1)");
+    // The crash does not end the run: a fix is waited for.
+    run.wait_for("shop#main: waiting for a file change to restart it");
+    fs::write(module.join("views/x.xml"), "<odoo/>").expect("write");
+    let line = run.wait_for("changed; restarting");
+    assert!(
+        line.contains("views/x.xml changed; restarting with -u m1"),
+        "{line}"
+    );
+    run.wait_for("shop#main: starting (pid");
+    run.wait_for("Loading module m1 ");
+    kill_process(run.pid(), Signal::INT).expect("SIGINT");
+    let (_, all) = run.finish();
+    assert!(all.contains("stopping…"), "{all}");
+    eventually("port 18800 free", || port_free(18_800));
+    let log = fs::read_to_string(dir.join("logs/main.log")).expect("log");
+    assert!(log.contains("changed; restarting with -u m1"), "{log}");
+    assert!(log.contains("Loading module m1 "), "{log}");
+}
+
+#[test]
 fn missing_modules_are_reported_and_never_installed_unasked() {
     let env = Env::new();
     // The test venv is a link to python3, not a venv: the installer refuses

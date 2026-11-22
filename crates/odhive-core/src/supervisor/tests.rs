@@ -44,6 +44,17 @@ fn argv_puts_managed_options_first_and_extra_args_last() {
 }
 
 #[test]
+fn one_off_args_come_after_extra_args() {
+    let mut s = spec();
+    s.extra_args = vec!["--dev=xml".into()];
+    let once = ["-u", "m1,m2"].map(OsString::from);
+    let args = s.odoo_args_with(8069, 8072, &once);
+    let tail: Vec<&OsString> = args.iter().rev().take(3).collect();
+    assert_eq!(tail, [&once[1], &once[0], &OsString::from("--dev=xml")]);
+    assert_eq!(s.odoo_args(8069, 8072).len() + 2, args.len());
+}
+
+#[test]
 fn minimal_argv_has_ports_and_workers_only() {
     let args: Vec<OsString> = spec().odoo_args(8069, 8072);
     assert_eq!(

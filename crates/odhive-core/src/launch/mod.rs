@@ -22,12 +22,13 @@ use crate::conf::{self, ConfContext, ConfError, DATA_DIR};
 use crate::config::{AppPaths, GlobalConfig, ProjectEntry};
 use crate::fsutil::DIR_MODE;
 use crate::logs::LOGS_DIR;
-use crate::manager::{AutoFix, InstancePlan, ManagerError};
+use crate::manager::{AutoFix, InstancePlan, ManagerError, Reload};
 use crate::names::{self, NameError};
 use crate::pidfile::{PidFileError, PidRecord, RecordState, RunDir};
 use crate::ports::PortOwner;
 use crate::project::{AutofixMode, Instance, ProjectConfig, ProjectError};
 use crate::python::find_executable;
+use crate::reload::watch::WatchOptions;
 use crate::requirements::{self, InstallOptions};
 use crate::schema::{self, SchemaError, SchemaOrigin};
 use crate::venv::{VENV_DIR, VenvTool, venv_python};
@@ -250,7 +251,8 @@ pub struct Prepared {
 /// Writes the project's `odoo.conf` and builds the plans of `instances`.
 ///
 /// `addons_path` lists Community `addons`, Enterprise, then the project's own
-/// folders that contain at least one module. `http_interface` defaults to
+/// folders that contain at least one module; those folders are also what
+/// Smart Reload watches (Odoo's own sources are not). `http_interface` defaults to
 /// [`DEFAULT_HTTP_INTERFACE`], so a new instance is reachable from this
 /// machine only.
 ///
@@ -301,6 +303,13 @@ pub async fn prepare(
         .collect();
     let skip: HashSet<&PathBuf> = skipped_addons.iter().collect();
     ctx.addons_paths.retain(|p| !skip.contains(p));
+    // Smart Reload watches the custom folders Odoo loads modules from.
+    let watched: Vec<PathBuf> = project
+        .config
+        .resolved_addons_paths(dir)
+        .into_iter()
+        .filter(|p| !skip.contains(p))
+        .collect();
 
     let mut config = project.config.clone();
     config
@@ -350,6 +359,11 @@ pub async fn prepare(
                 mode: i.autofix_mode,
                 install: install.clone(),
                 trusted: trusted.clone(),
+            });
+            plan.reload = Some(Reload {
+                mode: i.reload_mode,
+                roots: watched.clone(),
+                watch: WatchOptions::default(),
             });
             Ok(plan)
         })

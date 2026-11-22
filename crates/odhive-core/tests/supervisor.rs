@@ -355,6 +355,33 @@ async fn restart_runs_a_new_process_on_the_same_ports() {
     sup.shutdown().await.expect("shutdown");
 }
 
+#[tokio::test]
+async fn restart_with_passes_arguments_to_that_process_only() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let reg = PortRegistry::new();
+    let events = Events::default();
+    let sup = start(
+        fake_spec(dir.path(), &[]),
+        alloc(&reg, "main", 31_000),
+        &events,
+    );
+    wait_running(&sup, &events).await;
+    let loaded = |events: &Events| events.output().matches("Loading module m1 ").count();
+    assert_eq!(loaded(&events), 0);
+
+    sup.restart_with(vec!["-u".into(), "m1".into()])
+        .await
+        .expect("restart with -u");
+    wait_running(&sup, &events).await;
+    assert_eq!(loaded(&events), 1, "{}", events.output());
+
+    // The next plain restart does not repeat them.
+    sup.restart().await.expect("restart");
+    wait_running(&sup, &events).await;
+    assert_eq!(loaded(&events), 1, "{}", events.output());
+    sup.shutdown().await.expect("shutdown");
+}
+
 /// A process that ignores SIGINT is killed after the stop timeout, and so is
 /// the child it started.
 #[tokio::test]

@@ -165,6 +165,13 @@ impl LaunchSpec {
     /// Arguments after `odoo-bin` for the given ports.
     #[must_use]
     pub fn odoo_args(&self, http: u16, gevent: u16) -> Vec<OsString> {
+        self.odoo_args_with(http, gevent, &[])
+    }
+
+    /// [`LaunchSpec::odoo_args`] followed by `once`: arguments for one
+    /// process only (e.g. `-u <module>` after a data file changed).
+    #[must_use]
+    pub fn odoo_args_with(&self, http: u16, gevent: u16, once: &[OsString]) -> Vec<OsString> {
         let mut args: Vec<OsString> = Vec::new();
         if let Some(conf) = &self.conf {
             args.push("-c".into());
@@ -181,6 +188,7 @@ impl LaunchSpec {
         args.push("--workers".into());
         args.push(self.workers.to_string().into());
         args.extend(self.extra_args.iter().map(OsString::from));
+        args.extend(once.iter().cloned());
         args
     }
 
@@ -192,10 +200,10 @@ impl LaunchSpec {
         argv
     }
 
-    fn spawn(&self, http: u16, gevent: u16) -> Result<Child, SupervisorError> {
+    fn spawn(&self, http: u16, gevent: u16, once: &[OsString]) -> Result<Child, SupervisorError> {
         let mut cmd = Command::new(&self.python);
         cmd.arg(&self.odoo_bin)
-            .args(self.odoo_args(http, gevent))
+            .args(self.odoo_args_with(http, gevent, once))
             .current_dir(&self.cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -362,7 +370,8 @@ type OnEvent = Box<dyn FnMut(Event) + Send>;
 
 enum Cmd {
     Stop(oneshot::Sender<Status>),
-    Restart(oneshot::Sender<Result<u32, String>>),
+    /// With arguments for the new process only.
+    Restart(oneshot::Sender<Result<u32, String>>, Vec<OsString>),
 }
 
 /// Handle to a supervised instance. Dropping it kills the process group and
@@ -394,7 +403,7 @@ pub fn start(
 ) -> Result<Supervised, SupervisorError> {
     spec.validate()?;
     let (http, gevent) = (ports.http(), ports.gevent());
-    let child = spec.spawn(http, gevent)?;
+    let child = spec.spawn(http, gevent, &[])?;
     let pid = child.id().unwrap_or_default();
     let me = opts.run_dir.as_ref().and_then(|_| ProcessId::current());
     let pid_file = match track(&opts, &spec, &ports, me, pid) {
@@ -503,8 +512,21 @@ impl Supervised {
     /// [`SupervisorError::Restart`] if the new process cannot be started (the
     /// status is then `failed_to_start`), or [`SupervisorError::Gone`].
     pub async fn restart(&self) -> Result<u32, SupervisorError> {
+        self.restart_with(Vec::new()).await
+    }
+
+    /// Like [`Supervised::restart`], with `once` appended to the new
+    /// process's arguments (see [`LaunchSpec::odoo_args_with`]). Later
+    /// restarts do not repeat them. Callers build `once` themselves; it is
+    /// passed as separate argv entries, never through a shell.
+    ///
+    /// # Errors
+    /// See [`Supervised::restart`].
+    pub async fn restart_with(&self, once: Vec<OsString>) -> Result<u32, SupervisorError> {
         let (tx, rx) = oneshot::channel();
-        self.cmds.send(Cmd::Restart(tx)).map_err(|_| self.gone())?;
+        self.cmds
+            .send(Cmd::Restart(tx, once))
+            .map_err(|_| self.gone())?;
         rx.await
             .map_err(|_| self.gone())?
             .map_err(SupervisorError::Restart)
@@ -542,7 +564,7 @@ impl Drop for Supervised {
 /// What a command asked for while a process ran.
 enum Requested {
     Stop(Option<oneshot::Sender<Status>>),
-    Restart(oneshot::Sender<Result<u32, String>>),
+    Restart(oneshot::Sender<Result<u32, String>>, Vec<OsString>),
 }
 
 struct Task {
@@ -600,8 +622,8 @@ impl Task {
                     Some(Requested::Stop(Some(reply))) => {
                         let _ = reply.send(status);
                     }
-                    Some(Requested::Restart(reply)) => {
-                        child = self.respawn(reply);
+                    Some(Requested::Restart(reply, once)) => {
+                        child = self.respawn(reply, &once);
                         continue;
                     }
                     Some(Requested::Stop(None)) | None => {}
@@ -616,14 +638,18 @@ impl Task {
                 Some(Cmd::Stop(reply)) => {
                     let _ = reply.send(self.status.borrow().clone());
                 }
-                Some(Cmd::Restart(reply)) => child = self.respawn(reply),
+                Some(Cmd::Restart(reply, once)) => child = self.respawn(reply, &once),
             }
         }
     }
 
-    fn respawn(&mut self, reply: oneshot::Sender<Result<u32, String>>) -> Option<Child> {
+    fn respawn(
+        &mut self,
+        reply: oneshot::Sender<Result<u32, String>>,
+        once: &[OsString],
+    ) -> Option<Child> {
         let (http, gevent) = (self.ports.http(), self.ports.gevent());
-        match self.spec.spawn(http, gevent) {
+        match self.spec.spawn(http, gevent, once) {
             Ok(child) => {
                 let pid = child.id().unwrap_or_default();
                 match track(&self.opts, &self.spec, &self.ports, self.me, pid) {
@@ -698,7 +724,7 @@ impl Task {
                 cmd = self.cmds.recv(), if requested.is_none() && self.cmds_open => {
                     requested = Some(match cmd {
                         Some(Cmd::Stop(reply)) => Requested::Stop(Some(reply)),
-                        Some(Cmd::Restart(reply)) => Requested::Restart(reply),
+                        Some(Cmd::Restart(reply, once)) => Requested::Restart(reply, once),
                         None => {
                             self.cmds_open = false;
                             Requested::Stop(None)
