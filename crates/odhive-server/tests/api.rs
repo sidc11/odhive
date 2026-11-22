@@ -86,6 +86,7 @@ async fn mutations_need_the_odhive_header() {
             .method(method.clone())
             .uri(path)
             .header(header::HOST, HOST)
+            .header(header::ORIGIN, common::ORIGIN)
             .header(header::COOKIE, &api.cookie)
             .header(header::CONTENT_TYPE, "application/json");
         if let Some(v) = value {
@@ -188,6 +189,7 @@ async fn bodies_are_validated() {
 
     let req = Request::post("/api/v1/sources")
         .header(header::HOST, HOST)
+        .header(header::ORIGIN, common::ORIGIN)
         .header(header::COOKIE, &api.cookie)
         .header("x-odhive", "1")
         .header(header::CONTENT_TYPE, "text/plain")
@@ -205,6 +207,7 @@ async fn bodies_are_validated() {
 
     let req = Request::post("/api/v1/sources")
         .header(header::HOST, HOST)
+        .header(header::ORIGIN, common::ORIGIN)
         .header(header::COOKIE, &api.cookie)
         .header("x-odhive", "1")
         .header(header::CONTENT_TYPE, "application/json")

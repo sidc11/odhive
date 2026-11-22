@@ -18,12 +18,14 @@ use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest};
 mod common;
 use common::{Api, Env, HOST, split};
 
-/// A request with the right Host and mutation header, plus `extra` headers.
+/// A request with the right Host, Origin and mutation header, plus `extra`
+/// headers.
 fn request(method: Method, path: &str, extra: &[(header::HeaderName, &str)]) -> Request<Body> {
     let mut req = Request::builder()
         .method(method)
         .uri(path)
         .header(header::HOST, HOST)
+        .header(header::ORIGIN, common::ORIGIN)
         .header("x-odhive", "1");
     for (name, value) in extra {
         req = req.header(name, *value);
@@ -259,6 +261,10 @@ async fn websocket_without_the_cookie_is_refused() {
         .expect("request");
     req.headers_mut()
         .insert(header::COOKIE, api.cookie.parse().expect("cookie"));
+    req.headers_mut().insert(
+        header::ORIGIN,
+        format!("http://localhost:{port}").parse().expect("origin"),
+    );
     let (mut ws, _) = tokio_tungstenite::connect_async(req)
         .await
         .expect("connect");

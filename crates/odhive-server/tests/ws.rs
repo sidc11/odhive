@@ -26,20 +26,26 @@ type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 const WAIT: Duration = Duration::from_secs(30);
 
-/// Opens `/api/v1/ws` on `port`, with `cookie`, `origin` and `host`
-/// headers when given.
+/// Opens `/api/v1/ws` on `port`, with `credential` (a `Cookie` header, or
+/// an `Authorization` header when it starts with `Bearer `), `origin` and
+/// `host` headers when given.
 async fn try_connect(
     port: u16,
-    cookie: Option<&str>,
+    credential: Option<&str>,
     origin: Option<&str>,
     host: Option<&str>,
 ) -> Result<Ws, tungstenite::Error> {
     let mut req = format!("ws://127.0.0.1:{port}/api/v1/ws")
         .into_client_request()
         .expect("request");
-    if let Some(c) = cookie {
+    if let Some(c) = credential {
+        let name = if c.starts_with("Bearer ") {
+            header::AUTHORIZATION
+        } else {
+            header::COOKIE
+        };
         req.headers_mut()
-            .insert(header::COOKIE, c.parse().expect("cookie"));
+            .insert(name, c.parse().expect("credential"));
     }
     if let Some(o) = origin {
         req.headers_mut()
@@ -276,13 +282,17 @@ async fn foreign_origins_and_hosts_are_refused() {
     );
     assert_eq!(status, StatusCode::FORBIDDEN, "foreign Host");
 
-    // The UI's own origins and non-browser clients (no Origin) get in.
-    for origin in [
-        Some(format!("http://localhost:{port}")),
-        Some(format!("http://127.0.0.1:{port}")),
-        None,
+    // A browser always sends Origin: a cookie without one is refused.
+    let status = refused(try_connect(port, Some(&api.cookie), None, None).await);
+    assert_eq!(status, StatusCode::FORBIDDEN, "cookie without Origin");
+
+    // The UI's own origins and non-browser clients (bearer, no Origin) get in.
+    for (credential, origin) in [
+        (&api.cookie, Some(format!("http://localhost:{port}"))),
+        (&api.cookie, Some(format!("http://127.0.0.1:{port}"))),
+        (&api.bearer, None),
     ] {
-        let mut ws = try_connect(port, Some(&api.cookie), origin.as_deref(), None)
+        let mut ws = try_connect(port, Some(credential), origin.as_deref(), None)
             .await
             .expect("connect");
         assert_eq!(recv(&mut ws).await["type"], "hello");

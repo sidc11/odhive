@@ -14,7 +14,7 @@ use odhive_core::python::DiscoverOptions;
 use odhive_core::sources::CloneOptions;
 use odhive_core::supervisor::DEFAULT_STOP_TIMEOUT;
 use odhive_core::workspace::Workspace;
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, watch};
 
 use crate::api::error::{ApiError, ApiResult};
 use crate::api::ws::WsLimits;
@@ -39,6 +39,8 @@ struct Inner {
     /// Serializes read-modify-write cycles of the global config.
     config_lock: Mutex<()>,
     ws_limits: WsLimits,
+    /// One permit per open WebSocket ([`WsLimits::max_connections`]).
+    ws_slots: Arc<Semaphore>,
     /// Turns `true` when the server begins to shut down.
     shutdown: watch::Sender<bool>,
 }
@@ -117,6 +119,7 @@ impl Service {
                 clone: opts.clone,
                 discover: opts.discover,
                 config_lock: Mutex::new(()),
+                ws_slots: Arc::new(Semaphore::new(opts.ws.max_connections)),
                 ws_limits: opts.ws,
                 shutdown: watch::Sender::new(false),
             }),
@@ -191,6 +194,12 @@ impl Service {
 
     pub(crate) fn ws_limits(&self) -> WsLimits {
         self.inner.ws_limits
+    }
+
+    /// A slot for one more WebSocket, held while it is open; `None` when
+    /// [`WsLimits::max_connections`] are open.
+    pub(crate) fn ws_slot(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.inner.ws_slots).try_acquire_owned().ok()
     }
 
     /// The instance manager.

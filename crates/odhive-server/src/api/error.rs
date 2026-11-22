@@ -71,6 +71,15 @@ impl ApiError {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", message)
     }
 
+    /// `413 Payload Too Large` for a body over `limit` bytes.
+    pub fn body_too_large(limit: usize) -> Self {
+        Self::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "body_too_large",
+            format!("request bodies are limited to {limit} bytes"),
+        )
+    }
+
     /// The JSON body, without the status.
     #[must_use]
     pub fn body(&self) -> ErrorBody {
@@ -92,6 +101,10 @@ impl IntoResponse for ApiError {
 
 impl From<JsonRejection> for ApiError {
     fn from(e: JsonRejection) -> Self {
+        // A chunked body cut at the `DefaultBodyLimit`.
+        if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            return Self::new(e.status(), "body_too_large", e.body_text());
+        }
         Self::new(e.status(), "bad_body", e.body_text())
     }
 }
