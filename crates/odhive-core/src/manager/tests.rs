@@ -119,6 +119,31 @@ fn events_serialize_flat_with_the_instance() {
     assert_eq!(json["http_port"], 8069);
     assert_eq!(json["exit"]["code"], 1);
 
+    let missing = ManagerEvent {
+        owner: owner.clone(),
+        event: InstanceEvent::Manager(Notice::DependencyMissing {
+            module: "ldap".into(),
+            package: Some("python-ldap".into()),
+            trust: Some(crate::autofix::Trust::Table),
+            action: FixAction::GiveUp {
+                reason: crate::autofix::GiveUp::Limit { max: 3 },
+            },
+        }),
+    };
+    let json = serde_json::to_value(&missing).expect("json");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "project": "shop",
+            "instance": "main",
+            "event": "dependency_missing",
+            "module": "ldap",
+            "package": "python-ldap",
+            "trust": {"source": "table"},
+            "action": {"kind": "give_up", "reason": {"reason": "limit", "max": 3}},
+        })
+    );
+
     let status = ManagerEvent {
         owner,
         event: InstanceEvent::Supervisor(Event::Status {
@@ -140,11 +165,13 @@ fn info_and_recovery_serialize() {
         supervised: false,
         port_retried: false,
         status: Status::Running { pid: 7 },
+        autofix: None,
     };
     let json = serde_json::to_value(&info).expect("json");
     assert_eq!(json["project"], "shop");
     assert_eq!(json["supervised"], false);
     assert_eq!(json["status"]["state"], "running");
+    assert!(json.get("autofix").is_none());
 
     let rec = Recovery::Stale {
         owner: PortOwner::new("shop", "main"),

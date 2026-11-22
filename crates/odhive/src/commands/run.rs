@@ -6,22 +6,30 @@
 //! Ctrl+C. `stop` works
 //! from any terminal through the PID files: it interrupts the recorded
 //! process, and the supervising `start` sees it exit.
+//!
+//! A missing Python module is handled by the manager's auto-fix; `start`
+//! prints what it does and, in `ask` mode or for an untrusted package, asks
+//! on the terminal (without a terminal nothing is installed).
 
 use std::collections::{BTreeMap, HashSet};
+use std::io::{BufRead, IsTerminal, Write};
 use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use odhive_core::autofix::Trust;
 use odhive_core::events::{Delivery, LogEvent};
 use odhive_core::launch::{self, Target};
 use odhive_core::manager::{
-    InstanceEvent, Manager, ManagerEvent, ManagerOptions, Notice, Recovery,
+    FixAction, InstanceEvent, Manager, ManagerEvent, ManagerOptions, Notice, Recovery,
 };
 use odhive_core::pidfile::{self, RecordState};
 use odhive_core::ports::PortOwner;
+use odhive_core::requirements::Origin;
 use odhive_core::schema::SchemaOrigin;
 use odhive_core::supervisor::{DEFAULT_STOP_TIMEOUT, Event, ExitInfo, Status};
 use tokio::signal::unix::{Signal, SignalKind, signal};
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 use super::{Ctx, say};
@@ -95,6 +103,11 @@ pub async fn start(ctx: &Ctx, target: &Target, quiet: bool) -> anyhow::Result<Ex
     if let SchemaOrigin::Bundled { reason } = &prepared.schema_origin {
         tracing::info!(%reason, "using the bundled Odoo option list");
     }
+    if let Some(e) = &prepared.trusted_error {
+        say(format!(
+            "warning: requirements could not be read ({e}); only OdHive's built-in package table is trusted for missing modules"
+        ));
+    }
     for plan in &prepared.plans {
         if let Some(db) = &plan.spec.db
             && let Some(by) = foreign_dbs.get(db)
@@ -126,8 +139,11 @@ pub async fn start(ctx: &Ctx, target: &Target, quiet: bool) -> anyhow::Result<Ex
 
     let mut stopper = None;
     let mut forced = false;
+    let mut prompt = Prompt::new();
+    let mut fixes = JoinSet::new();
     loop {
-        if rx.is_empty() && log_rx.is_empty() && all_done(&manager, &ours) {
+        let waiting = stopper.is_none() && (prompt.open > 0 || !fixes.is_empty());
+        if rx.is_empty() && log_rx.is_empty() && !waiting && all_done(&manager, &ours) {
             break;
         }
         tokio::select! {
@@ -142,7 +158,19 @@ pub async fn start(ctx: &Ctx, target: &Target, quiet: bool) -> anyhow::Result<Ex
                 stopper = Some(tokio::spawn(async move { stop_all(&m, &o).await }));
             }
             ev = rx.recv() => match ev {
-                Some(Delivery::Event(ev)) => out.event(&manager, &ev),
+                Some(Delivery::Event(ev)) => {
+                    out.event(&manager, &ev);
+                    if stopper.is_none()
+                        && let InstanceEvent::Manager(Notice::DependencyMissing {
+                            module,
+                            package: Some(package),
+                            action: FixAction::Confirm,
+                            ..
+                        }) = &ev.event
+                    {
+                        prompt.ask(&ev.owner, module, package);
+                    }
+                }
                 Some(Delivery::Lagged { missed }) => {
                     say(format!("warning: {missed} instance events were not shown"));
                 }
@@ -155,6 +183,23 @@ pub async fn start(ctx: &Ctx, target: &Target, quiet: bool) -> anyhow::Result<Ex
                 }
                 None => break,
             },
+            Some((owner, yes)) = prompt.answers.recv() => {
+                prompt.open -= 1;
+                if stopper.is_some() {
+                    continue;
+                }
+                if yes {
+                    let m = manager.clone();
+                    fixes.spawn(async move { (owner.clone(), m.confirm_fix(&owner).await) });
+                } else if let Ok(c) = manager.decline_fix(&owner) {
+                    say(format!("{owner}: not installing {}", c.package));
+                }
+            }
+            Some(done) = fixes.join_next(), if !fixes.is_empty() => {
+                if let Ok((owner, Err(e))) = done {
+                    say(format!("{owner}: {e}"));
+                }
+            }
             () = tokio::time::sleep(CHECK_EVERY) => {}
         }
     }
@@ -175,7 +220,7 @@ pub async fn start(ctx: &Ctx, target: &Target, quiet: bool) -> anyhow::Result<Ex
     // Ended instances stay listed (ports held) until stopped.
     stop_all(&manager, &ours).await;
     drop(foreign_ports);
-    Ok(if out.failed {
+    Ok(if out.failed() {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
@@ -274,14 +319,73 @@ async fn stop_all(manager: &Manager, owners: &[PortOwner]) {
 fn all_done(manager: &Manager, owners: &[PortOwner]) -> bool {
     owners
         .iter()
-        .all(|o| manager.get(o).is_none_or(|i| i.status.is_terminal()))
+        .all(|o| manager.get(o).is_none_or(|i| i.is_done()))
+}
+
+/// Asks the terminal whether to install packages, one question at a time.
+/// The reading thread is detached: an unanswered question never keeps OdHive
+/// from exiting.
+struct Prompt {
+    questions: Option<std::sync::mpsc::Sender<(PortOwner, String)>>,
+    answers: mpsc::UnboundedReceiver<(PortOwner, bool)>,
+    tx: mpsc::UnboundedSender<(PortOwner, bool)>,
+    /// Questions not answered yet.
+    open: usize,
+}
+
+impl Prompt {
+    fn new() -> Self {
+        let (tx, answers) = mpsc::unbounded_channel();
+        Self {
+            questions: None,
+            answers,
+            tx,
+            open: 0,
+        }
+    }
+
+    fn ask(&mut self, owner: &PortOwner, module: &str, package: &str) {
+        if !std::io::stdin().is_terminal() {
+            say(format!(
+                "{owner}: not installing {package} without confirmation; run `odhive start` in a terminal to be asked, or install it into the project's .venv yourself"
+            ));
+            return;
+        }
+        let questions = self.questions.get_or_insert_with(|| {
+            let (q_tx, q_rx) = std::sync::mpsc::channel::<(PortOwner, String)>();
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let stdin = std::io::stdin();
+                for (owner, question) in q_rx {
+                    {
+                        let mut out = std::io::stdout().lock();
+                        let _ = write!(out, "{question} [y/N] ");
+                        let _ = out.flush();
+                    }
+                    let mut line = String::new();
+                    let yes = stdin.lock().read_line(&mut line).is_ok()
+                        && matches!(line.trim(), "y" | "Y" | "yes");
+                    if tx.send((owner, yes)).is_err() {
+                        return;
+                    }
+                }
+            });
+            q_tx
+        });
+        let question =
+            format!("{owner}: install {package} (for module {module:?}) into the project's venv?");
+        if questions.send((owner.clone(), question)).is_ok() {
+            self.open += 1;
+        }
+    }
 }
 
 /// Prints instance events and log entries.
 struct Output {
     quiet: bool,
     prefix: bool,
-    failed: bool,
+    /// Instances whose last outcome is a crash or a failed start.
+    failed: HashSet<PortOwner>,
 }
 
 impl Output {
@@ -289,8 +393,12 @@ impl Output {
         Self {
             quiet,
             prefix,
-            failed: false,
+            failed: HashSet::new(),
         }
+    }
+
+    fn failed(&self) -> bool {
+        !self.failed.is_empty()
     }
 
     fn log(&self, ev: &LogEvent) {
@@ -328,6 +436,8 @@ impl Output {
             | InstanceEvent::Manager(Notice::Attached { .. }) => {}
             InstanceEvent::Supervisor(Event::Status { status }) => match status {
                 Status::Running { .. } => {
+                    // Recovered, e.g. after a missing dependency was installed.
+                    self.failed.remove(owner);
                     let port = manager.get(owner).and_then(|i| i.http_port);
                     say(match port {
                         Some(p) => format!("{owner}: running at http://localhost:{p}"),
@@ -336,7 +446,7 @@ impl Output {
                 }
                 Status::Stopped { .. } => say(format!("{owner}: stopped")),
                 Status::Crashed { exit } => {
-                    self.failed = true;
+                    self.failed.insert(owner.clone());
                     say(format!("{owner}: crashed ({})", describe(exit)));
                     if exit.port_in_use {
                         say(
@@ -345,7 +455,7 @@ impl Output {
                     }
                 }
                 Status::FailedToStart { error } => {
-                    self.failed = true;
+                    self.failed.insert(owner.clone());
                     say(format!("{owner}: failed to start: {error}"));
                 }
                 Status::Starting { .. } | Status::Stopping { .. } => {}
@@ -360,7 +470,65 @@ impl Output {
                     "warning: {owner}: log file failed ({error}); its log is kept in memory only"
                 ));
             }
+            InstanceEvent::Manager(Notice::DependencyMissing {
+                module,
+                package,
+                trust,
+                action,
+            }) => {
+                let pkg = package.as_deref().unwrap_or("?");
+                say(match action {
+                    FixAction::Install => format!(
+                        "{owner}: missing Python module {module:?}; installing {pkg} ({})",
+                        trust.as_ref().map_or_else(String::new, trust_text)
+                    ),
+                    FixAction::Confirm => match trust {
+                        Some(t) => format!(
+                            "{owner}: missing Python module {module:?}; {pkg} ({}) waits for confirmation (autofix_mode = \"ask\")",
+                            trust_text(t)
+                        ),
+                        None => format!(
+                            "{owner}: missing Python module {module:?}; {pkg} is not in the project's requirements or OdHive's package table, so it is not installed without confirmation"
+                        ),
+                    },
+                    FixAction::Report => format!(
+                        "{owner}: missing Python module {module:?} (package {pkg}); autofix_mode is \"off\", install it into the project's .venv"
+                    ),
+                    FixAction::GiveUp { reason } => {
+                        format!("{owner}: missing Python module {module:?}: {reason}")
+                    }
+                });
+            }
+            InstanceEvent::Manager(Notice::DependencyInstalling {
+                package,
+                attempt,
+                max,
+                ..
+            }) => say(format!(
+                "{owner}: installing {package} (attempt {attempt}/{max})…"
+            )),
+            InstanceEvent::Manager(Notice::DependencyInstalled { package }) => {
+                say(format!("{owner}: installed {package}; restarting"));
+            }
+            InstanceEvent::Manager(Notice::DependencyFailed { package, error }) => {
+                say(format!("{owner}: installing {package} failed: {error}"));
+            }
         }
+    }
+}
+
+fn trust_text(trust: &Trust) -> String {
+    match trust {
+        Trust::Table => "from OdHive's package table".into(),
+        Trust::Listed {
+            origin: Origin::File { path, line },
+        } => format!("listed in {}:{line}", path.display()),
+        Trust::Listed {
+            origin: Origin::Manifest { module, .. },
+        } => format!("required by module {module}"),
+        Trust::Listed {
+            origin: Origin::Missing { .. },
+        } => "requested".into(),
     }
 }
 

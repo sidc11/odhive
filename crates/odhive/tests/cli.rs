@@ -410,6 +410,59 @@ fn a_crash_ends_the_run_with_failure() {
 }
 
 #[test]
+fn missing_modules_are_reported_and_never_installed_unasked() {
+    let env = Env::new();
+    // The test venv is a link to python3, not a venv: the installer refuses
+    // it, so nothing is downloaded even for a trusted package.
+    env.project(
+        "shop",
+        &[
+            (
+                "main",
+                18_700,
+                18_701,
+                &["--simulate-missing", "zz_cli_missing_mod"],
+            ),
+            ("test", 18_702, 18_703, &["--simulate-missing", "ebaysdk"]),
+        ],
+    );
+    let mut run = env.start(&["start", "shop"]);
+    let (ok, all) = run.finish();
+    assert!(!ok, "{all}");
+    // Untrusted, and stdin is not a terminal: not installed.
+    assert!(
+        all.contains("shop#main: missing Python module \"zz_cli_missing_mod\"; zz_cli_missing_mod is not in the project's requirements"),
+        "{all}"
+    );
+    assert!(
+        all.contains("shop#main: not installing zz_cli_missing_mod without confirmation"),
+        "{all}"
+    );
+    // Trusted by the built-in table: installed, which fails here.
+    assert!(
+        all.contains("shop#test: missing Python module \"ebaysdk\"; installing ebaysdk (from OdHive's package table)"),
+        "{all}"
+    );
+    assert!(
+        all.contains("shop#test: installing ebaysdk (attempt 1/3)"),
+        "{all}"
+    );
+    assert!(
+        all.contains("shop#test: installing ebaysdk failed"),
+        "{all}"
+    );
+    assert!(
+        all.contains("not a virtual environment interpreter"),
+        "{all}"
+    );
+    let log = fs::read_to_string(env.project_dir("shop").join("logs/test.log")).expect("log");
+    assert!(
+        log.contains("odhive: installing ebaysdk for missing module \"ebaysdk\""),
+        "{log}"
+    );
+}
+
+#[test]
 fn instances_of_a_killed_odhive_are_shown_detached_and_can_be_stopped() {
     let env = Env::new();
     env.project("shop", &[("main", 18_400, 18_401, &[])]);

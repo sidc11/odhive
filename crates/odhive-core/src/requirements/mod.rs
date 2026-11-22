@@ -127,6 +127,11 @@ pub enum Origin {
         /// Module (directory) name.
         module: String,
     },
+    /// A Python module an instance reported missing ([`crate::autofix`]).
+    Missing {
+        /// The import name.
+        module: String,
+    },
 }
 
 /// A requirement and its first origin.

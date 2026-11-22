@@ -1,6 +1,7 @@
 //! OdHive core: all domain logic lives here. Server, CLI and UI only consume it.
 #![forbid(unsafe_code)]
 
+pub mod autofix;
 pub mod conf;
 pub mod config;
 pub mod events;

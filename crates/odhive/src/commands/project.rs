@@ -155,6 +155,7 @@ fn origin(o: &Origin) -> String {
     match o {
         Origin::File { path, line } => format!("{}:{line}", path.display()),
         Origin::Manifest { module, .. } => format!("module {module}"),
+        Origin::Missing { module } => format!("missing module {module}"),
     }
 }
 
