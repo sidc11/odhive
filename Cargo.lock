@@ -831,6 +831,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
+ "futures-util",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -841,6 +842,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
 ]

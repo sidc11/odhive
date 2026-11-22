@@ -36,7 +36,7 @@ pub struct NewSource {
 }
 
 /// Where an option list came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SchemaSource {
     /// Read from OdHive's cache of this source tree.
@@ -48,7 +48,7 @@ pub enum SchemaSource {
 }
 
 /// The `odoo.conf` options of an Odoo source.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, ToSchema)]
 pub struct SchemaInfo {
     /// Where the list came from.
     pub source: SchemaSource,

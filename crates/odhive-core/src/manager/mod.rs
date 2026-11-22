@@ -75,7 +75,7 @@ mod tests;
 
 use fix::FixState;
 pub use fix::{AutoFix, FixAction, FixInfo};
-pub use log::IDLE_FLUSH;
+pub use log::{IDLE_FLUSH, LogHandle};
 use log::{LogSlot, LogTarget};
 use reload::ReloadState;
 pub use reload::{Reload, ReloadInfo};
@@ -247,7 +247,7 @@ impl Default for ManagerOptions {
 }
 
 /// Something the manager itself reports, next to the supervisor's events.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Notice {
     /// The first process lost the race for its port; the instance is started
@@ -363,7 +363,7 @@ pub enum Notice {
 }
 
 /// One event of one instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum InstanceEvent {
     /// From the instance's supervisor (attached instances report their
@@ -375,7 +375,7 @@ pub enum InstanceEvent {
 }
 
 /// An event, with the instance it belongs to.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct ManagerEvent {
     /// The instance.
     #[serde(flatten)]
@@ -386,7 +386,7 @@ pub struct ManagerEvent {
 }
 
 /// What is known about one instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct InstanceInfo {
     /// The instance.
     #[serde(flatten)]
@@ -429,7 +429,7 @@ impl InstanceInfo {
 }
 
 /// How [`Manager::stop`] ended an instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StopOutcome {
     /// A supervised instance; its final status.
@@ -445,7 +445,7 @@ pub enum StopOutcome {
 }
 
 /// What [`Manager::recover`] found in one PID file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum Recovery {
     /// Still running; attached again.
@@ -649,6 +649,13 @@ impl Manager {
     pub fn log_position(&self, owner: &PortOwner) -> Option<(u64, u64)> {
         let log = self.log_of(owner)?;
         Some((log.id(), log.next_seq()))
+    }
+
+    /// The instance's current log; `None` for an unknown or re-attached
+    /// instance.
+    #[must_use]
+    pub fn log(&self, owner: &PortOwner) -> Option<LogHandle> {
+        self.log_of(owner).map(LogHandle)
     }
 
     /// The last `n` buffered entries of the instance.

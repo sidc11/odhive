@@ -45,7 +45,7 @@ pub struct CreateProject {
 
 /// An instance that runs outside this OdHive service, e.g. one started by
 /// `odhive start` in a terminal. It can be stopped, not restarted, here.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, ToSchema)]
 pub struct ExternalRun {
     /// Process id.
     pub pid: u32,
@@ -57,7 +57,7 @@ pub struct ExternalRun {
 }
 
 /// One instance of a project: its settings and, while it runs, its state.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, ToSchema)]
 pub struct InstanceView {
     /// Instance id.
     pub id: String,
@@ -81,7 +81,7 @@ pub struct InstanceView {
 }
 
 /// A registered project.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, ToSchema)]
 pub struct Project {
     /// Name.
     pub name: String,

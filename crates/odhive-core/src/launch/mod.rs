@@ -388,7 +388,7 @@ pub fn has_modules(dir: &Path) -> bool {
 }
 
 /// Where one instance stands, from the PID files. Read-only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct InstanceState {
     /// The instance.
     #[serde(flatten)]

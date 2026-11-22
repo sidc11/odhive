@@ -86,7 +86,7 @@ async fn run_setup(
     Ok(())
 }
 
-fn print_setup_event(event: SetupEvent) {
+pub(super) fn print_setup_event(event: SetupEvent) {
     match event {
         SetupEvent::Python {
             path,

@@ -1,11 +1,11 @@
 //! `odhive start`, `restart` and `stop`.
 //!
-//! Until the background service exists (Milestone 5), `start` runs in the
-//! foreground: it supervises the instances, prints their log entries (the
-//! manager writes them to `<project>/logs/<instance>.log`), and stops them on
-//! Ctrl+C. `stop` works
-//! from any terminal through the PID files: it interrupts the recorded
-//! process, and the supervising `start` sees it exit.
+//! While the background service runs, these commands go through its API
+//! (see `remote`). Without it, `start` runs in the foreground: it
+//! supervises the instances, prints their log entries (the manager writes
+//! them to `<project>/logs/<instance>.log`), and stops them on Ctrl+C.
+//! `stop` works from any terminal through the PID files: it interrupts the
+//! recorded process, and the supervising `start` sees it exit.
 //!
 //! A missing Python module is handled by the manager's auto-fix; `start`
 //! prints what it does and, in `ask` mode or for an untrusted package, asks
@@ -24,8 +24,9 @@ use anyhow::{Context, bail};
 use odhive_core::autofix::Trust;
 use odhive_core::events::{Delivery, LogEvent};
 use odhive_core::launch::{self, Target};
+use odhive_core::logs::store::Record;
 use odhive_core::manager::{
-    FixAction, InstanceEvent, Manager, ManagerEvent, ManagerOptions, Notice, Recovery,
+    FixAction, InstanceEvent, InstanceInfo, Manager, ManagerEvent, ManagerOptions, Notice, Recovery,
 };
 use odhive_core::pidfile::{self, RecordState};
 use odhive_core::ports::PortOwner;
@@ -164,7 +165,7 @@ pub async fn start(ctx: &Ctx, target: &Target, quiet: bool) -> anyhow::Result<Ex
             }
             ev = rx.recv() => match ev {
                 Some(Delivery::Event(ev)) => {
-                    out.event(&manager, &ev);
+                    out.event(manager.get(&ev.owner).as_ref(), &ev);
                     if stopper.is_none()
                         && let InstanceEvent::Manager(Notice::DependencyMissing {
                             module,
@@ -217,7 +218,7 @@ pub async fn start(ctx: &Ctx, target: &Target, quiet: bool) -> anyhow::Result<Ex
         out.log(&ev);
     }
     for ev in rx.drain() {
-        out.event(&manager, &ev);
+        out.event(manager.get(&ev.owner).as_ref(), &ev);
     }
     if let Some(s) = stopper {
         let _ = s.await;
@@ -288,14 +289,14 @@ async fn stop_running(ctx: &Ctx, target: &Target) -> anyhow::Result<usize> {
 }
 
 /// SIGINT (Ctrl+C), SIGTERM and SIGHUP (terminal closed) all mean "stop".
-struct Signals {
+pub(super) struct Signals {
     int: Signal,
     term: Signal,
     hup: Signal,
 }
 
 impl Signals {
-    fn new() -> anyhow::Result<Self> {
+    pub(super) fn new() -> anyhow::Result<Self> {
         Ok(Self {
             int: signal(SignalKind::interrupt())?,
             term: signal(SignalKind::terminate())?,
@@ -303,7 +304,7 @@ impl Signals {
         })
     }
 
-    async fn next(&mut self) {
+    pub(super) async fn next(&mut self) {
         tokio::select! {
             _ = self.int.recv() => {}
             _ = self.term.recv() => {}
@@ -330,16 +331,16 @@ fn all_done(manager: &Manager, owners: &[PortOwner]) -> bool {
 /// Asks the terminal whether to install packages, one question at a time.
 /// The reading thread is detached: an unanswered question never keeps OdHive
 /// from exiting.
-struct Prompt {
+pub(super) struct Prompt {
     questions: Option<std::sync::mpsc::Sender<(PortOwner, String)>>,
-    answers: mpsc::UnboundedReceiver<(PortOwner, bool)>,
+    pub(super) answers: mpsc::UnboundedReceiver<(PortOwner, bool)>,
     tx: mpsc::UnboundedSender<(PortOwner, bool)>,
     /// Questions not answered yet.
-    open: usize,
+    pub(super) open: usize,
 }
 
 impl Prompt {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let (tx, answers) = mpsc::unbounded_channel();
         Self {
             questions: None,
@@ -349,7 +350,7 @@ impl Prompt {
         }
     }
 
-    fn ask(&mut self, owner: &PortOwner, module: &str, package: &str) {
+    pub(super) fn ask(&mut self, owner: &PortOwner, module: &str, package: &str) {
         if !std::io::stdin().is_terminal() {
             say(format!(
                 "{owner}: not installing {package} without confirmation; run `odhive start` in a terminal to be asked, or install it into the project's .venv yourself"
@@ -386,7 +387,7 @@ impl Prompt {
 }
 
 /// Prints instance events and log entries.
-struct Output {
+pub(super) struct Output {
     quiet: bool,
     prefix: bool,
     /// Instances whose last outcome is a crash or a failed start.
@@ -394,7 +395,7 @@ struct Output {
 }
 
 impl Output {
-    fn new(quiet: bool, prefix: bool) -> Self {
+    pub(super) fn new(quiet: bool, prefix: bool) -> Self {
         Self {
             quiet,
             prefix,
@@ -402,25 +403,31 @@ impl Output {
         }
     }
 
-    fn failed(&self) -> bool {
+    pub(super) fn failed(&self) -> bool {
         !self.failed.is_empty()
     }
 
     fn log(&self, ev: &LogEvent) {
+        self.record(&ev.owner, &ev.record);
+    }
+
+    /// Prints one log entry of `owner`.
+    pub(super) fn record(&self, owner: &PortOwner, record: &Record) {
         if self.quiet {
             return;
         }
-        let text = ev.record.entry.to_string();
+        let text = record.entry.to_string();
         if self.prefix {
             for line in text.lines() {
-                say(format!("[{}] {line}", ev.owner.instance));
+                say(format!("[{}] {line}", owner.instance));
             }
         } else {
             say(text);
         }
     }
 
-    fn event(&mut self, manager: &Manager, ev: &ManagerEvent) {
+    /// Prints `ev`; `info` is what is known about its instance now.
+    pub(super) fn event(&mut self, info: Option<&InstanceInfo>, ev: &ManagerEvent) {
         let owner = &ev.owner;
         match &ev.event {
             InstanceEvent::Supervisor(Event::Spawned {
@@ -443,7 +450,7 @@ impl Output {
                 Status::Running { .. } => {
                     // Recovered, e.g. after a missing dependency was installed.
                     self.failed.remove(owner);
-                    let port = manager.get(owner).and_then(|i| i.http_port);
+                    let port = info.and_then(|i| i.http_port);
                     say(match port {
                         Some(p) => format!("{owner}: running at http://localhost:{p}"),
                         None => format!("{owner}: running"),
@@ -458,7 +465,10 @@ impl Output {
                             "hint: its port is in use by another program; free it or change http_port in odhive.toml",
                         );
                     }
-                    if reloading(manager, owner) {
+                    if info
+                        .and_then(|i| i.reload.as_ref())
+                        .is_some_and(|r| r.watching)
+                    {
                         say(format!(
                             "{owner}: waiting for a file change to restart it (Ctrl+C to quit)"
                         ));
@@ -575,13 +585,6 @@ impl Output {
             }
         }
     }
-}
-
-fn reloading(manager: &Manager, owner: &PortOwner) -> bool {
-    manager
-        .get(owner)
-        .and_then(|i| i.reload)
-        .is_some_and(|r| r.watching)
 }
 
 fn trust_text(trust: &Trust) -> String {

@@ -241,7 +241,7 @@ impl Default for SuperviseOptions {
 }
 
 /// How a process ended.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct ExitInfo {
     /// Exit code, if it exited normally.
     pub code: Option<i32>,
@@ -271,7 +271,7 @@ impl ExitInfo {
 }
 
 /// State of a supervised instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Status {
     /// Spawned; the HTTP port is not accepting connections yet.
@@ -327,7 +327,7 @@ impl Status {
 }
 
 /// Output stream a line came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Stream {
     /// Standard output.
@@ -337,7 +337,7 @@ pub enum Stream {
 }
 
 /// Something that happened to a supervised instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     /// A process was spawned (first start or restart).

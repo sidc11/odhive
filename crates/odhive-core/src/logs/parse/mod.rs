@@ -52,7 +52,19 @@ const MAX_EXCEPTION_BYTES: usize = 1024;
 const TRACEBACK_START: &str = "Traceback (most recent call last):";
 
 /// Severity of a record, in increasing order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
     /// `DEBUG`.
@@ -193,8 +205,25 @@ impl Serialize for Timestamp {
     }
 }
 
+/// Read from the RFC 3339 form [`Timestamp`] is serialized as.
+impl<'de> serde::Deserialize<'de> for Timestamp {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        let b = text.as_bytes();
+        let rfc = b.len() == 24 && b[10] == b'T' && b[19] == b'.' && b[23] == b'Z';
+        rfc.then(|| {
+            text.get(..10)
+                .zip(text.get(11..19))
+                .zip(text.get(20..23))
+                .and_then(|((date, time), ms)| Self::parse(&format!("{date} {time},{ms}")))
+        })
+        .flatten()
+        .ok_or_else(|| serde::de::Error::custom(format!("invalid timestamp {text:?}")))
+    }
+}
+
 /// The fields in front of a record's message.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Header {
     /// When the record was logged (UTC).
     pub timestamp: Timestamp,
@@ -209,7 +238,7 @@ pub struct Header {
 }
 
 /// A source location named in an entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct Location {
     /// File path as logged (not validated).
     pub path: String,
@@ -239,7 +268,7 @@ struct HeaderFields {
 }
 
 /// One log record, possibly spanning several lines.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct Entry {
     /// The record header; `None` for text that is not in Odoo's format.
     #[serde(flatten)]

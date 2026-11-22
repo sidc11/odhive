@@ -1,8 +1,10 @@
-//! Subcommand implementations. All logic lives in `odhive-core`; this layer
+//! Subcommand implementations. All logic lives in `odhive-core` (or, while it
+//! runs, in the OdHive service, reached over its API); this layer
 //! parses, prints and maps results to exit codes.
 
 pub mod logs;
 pub mod project;
+mod remote;
 pub mod run;
 pub mod source;
 pub mod status;
@@ -25,8 +27,7 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    pub fn open() -> anyhow::Result<Self> {
-        let paths = AppPaths::discover()?;
+    pub fn open(paths: AppPaths) -> anyhow::Result<Self> {
         let boot = bootstrap(&paths).context("could not prepare the OdHive workspace")?;
         Ok(Self {
             paths,
@@ -47,8 +48,16 @@ impl Ctx {
     }
 }
 
+/// Runs `command`: through the API of the OdHive service when it runs (it
+/// then owns the workspace and the instances), else in this process.
 pub async fn dispatch(command: Command) -> anyhow::Result<ExitCode> {
-    let mut ctx = Ctx::open()?;
+    let paths = AppPaths::discover()?;
+    if let Some(client) = crate::service::connect(&paths).await?
+        && let Some(code) = remote::dispatch(&client, &command).await?
+    {
+        return Ok(code);
+    }
+    let mut ctx = Ctx::open(paths)?;
     match command {
         Command::Project(ProjectCommand::Add(args)) => project::add(&mut ctx, args).await,
         Command::Project(ProjectCommand::Setup(args)) => project::setup(&mut ctx, args).await,

@@ -39,7 +39,7 @@ pub struct AutoFix {
 }
 
 /// What the auto-fix does about a missing module.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum FixAction {
     /// The package is installed now, then the instance restarts.
@@ -57,7 +57,7 @@ pub enum FixAction {
 }
 
 /// Auto-fix state shown with an instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct FixInfo {
     /// Mode.
     pub mode: AutofixMode,

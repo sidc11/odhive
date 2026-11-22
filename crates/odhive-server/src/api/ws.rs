@@ -28,7 +28,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use odhive_core::events::{Delivery, LogEvent, Subscription};
 use odhive_core::logs::store::Record;
-use odhive_core::manager::{InstanceInfo, ManagerEvent};
+use odhive_core::manager::{InstanceInfo, LogHandle, ManagerEvent};
 use odhive_core::ports::PortOwner;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -119,7 +119,7 @@ pub enum ClientMessage {
 }
 
 /// A message from the server.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     /// First message of every connection.
@@ -238,8 +238,13 @@ pub(super) async fn upgrade(
 /// Where a log subscription stands.
 #[derive(Debug)]
 struct Cursor {
-    /// The log `next` belongs to; `None` until one was seen.
-    log: Option<u64>,
+    /// The log `next` belongs to; `None` until one was seen. Held, not just
+    /// named: when the instance is stopped and its log leaves the manager,
+    /// the entries not sent yet are still read from it.
+    log: Option<LogHandle>,
+    /// A log was read to its end after it left the manager: the next one
+    /// is announced with a reset.
+    ended: bool,
     /// Sequence number of the next entry to send.
     next: u64,
     /// There may be entries at `next` to send.
@@ -520,8 +525,8 @@ impl Connection {
                 format!("at most {max} log subscriptions per connection"),
             );
         }
-        let position = self.svc.manager().log_position(&owner);
-        let live = position.map(|(_, next)| next);
+        let log = self.svc.manager().log(&owner);
+        let live = log.as_ref().map(LogHandle::next_seq);
         let next = match (from, tail, live) {
             (Some(from), _, _) => from.max(1),
             (None, Some(n), Some(live)) => live.saturating_sub(n as u64).max(1),
@@ -529,8 +534,10 @@ impl Connection {
             // Not running here: everything its next log holds.
             (None, _, None) => 1,
         };
+        let running = log.is_some();
         let cursor = Cursor {
-            log: position.map(|(id, _)| id),
+            log,
+            ended: false,
             next,
             dirty: true,
         };
@@ -540,7 +547,7 @@ impl Connection {
             project: owner.project,
             instance: owner.instance,
             next,
-            running: position.is_some(),
+            running,
         }
     }
 
@@ -568,6 +575,15 @@ impl Connection {
             }
             Ok(_) => {}
         }
+        // A log that left the manager is read to its end, then let go.
+        let manager = self.svc.manager();
+        for (owner, c) in &mut self.cursors {
+            if let Some(held) = &c.log
+                && manager.log(owner).is_none_or(|l| l.id() != held.id())
+            {
+                c.dirty = true;
+            }
+        }
         let dirty: Vec<PortOwner> = self
             .cursors
             .iter()
@@ -594,25 +610,50 @@ impl Connection {
             let Some(cursor) = self.cursors.get_mut(owner) else {
                 return Ok(false);
             };
-            let Some((log, page)) =
-                manager.read_log_with_id(owner, cursor.next, self.limits.batch_entries)
-            else {
-                // Not running here (yet); its entries come once it runs.
-                cursor.dirty = false;
-                return Ok(false);
+            let current = manager.log(owner);
+            let page = match (&cursor.log, current) {
+                // Still the log being read.
+                (Some(held), Some(now)) if held.id() == now.id() => {
+                    held.read_from(cursor.next, self.limits.batch_entries)
+                }
+                // The log being read was replaced or removed: what is
+                // left of it first.
+                (Some(held), now) => {
+                    let page = held.read_from(cursor.next, self.limits.batch_entries);
+                    if page.records.is_empty() && page.skipped == 0 {
+                        cursor.log = None;
+                        cursor.ended = true;
+                        cursor.next = 1;
+                        if now.is_none() {
+                            cursor.dirty = false;
+                            return Ok(false);
+                        }
+                        continue;
+                    }
+                    page
+                }
+                (None, None) => {
+                    // Not running here (yet); its entries come once it runs.
+                    cursor.dirty = false;
+                    return Ok(false);
+                }
+                // A log appears.
+                (None, Some(now)) => {
+                    if std::mem::take(&mut cursor.ended) {
+                        // A new log: its sequence numbers start over.
+                        let reset = ServerMessage::Reset {
+                            project: owner.project.clone(),
+                            instance: owner.instance.clone(),
+                        };
+                        cursor.log = Some(now);
+                        self.send(&reset).await?;
+                        continue;
+                    }
+                    let page = now.read_from(cursor.next, self.limits.batch_entries);
+                    cursor.log = Some(now);
+                    page
+                }
             };
-            if cursor.log.is_some_and(|seen| seen != log) {
-                // A new log: its sequence numbers start over.
-                cursor.log = Some(log);
-                cursor.next = 1;
-                let reset = ServerMessage::Reset {
-                    project: owner.project.clone(),
-                    instance: owner.instance.clone(),
-                };
-                self.send(&reset).await?;
-                continue;
-            }
-            cursor.log = Some(log);
             if page.records.is_empty() && page.skipped == 0 {
                 cursor.dirty = false;
                 return Ok(false);

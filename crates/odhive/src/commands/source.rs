@@ -38,28 +38,33 @@ pub async fn clone(ctx: &mut Ctx, version: OdooVersion) -> anyhow::Result<ExitCo
         &ctx.ws.clone(),
         version,
         &CloneOptions::default(),
-        |e| match e {
-            CloneEvent::Started {
-                url,
-                branch,
-                target,
-            } => {
-                say(format!(
-                    "cloning {url} ({branch}) into {}",
-                    target.display()
-                ));
-            }
-            CloneEvent::Progress { phase: p, .. } if p != phase => {
-                say(format!("  {p}…"));
-                phase = p;
-            }
-            CloneEvent::Progress { .. } | CloneEvent::Finished { .. } => {}
-        },
+        |e| print_clone_event(&mut phase, e),
     )
     .await?;
     ctx.save()?;
     say(format!("source {} at {}", entry.id, entry.path.display()));
     Ok(ExitCode::SUCCESS)
+}
+
+/// Prints clone progress; `phase` is the git phase shown last.
+pub(super) fn print_clone_event(phase: &mut String, event: CloneEvent) {
+    match event {
+        CloneEvent::Started {
+            url,
+            branch,
+            target,
+        } => {
+            say(format!(
+                "cloning {url} ({branch}) into {}",
+                target.display()
+            ));
+        }
+        CloneEvent::Progress { phase: p, .. } if p != *phase => {
+            say(format!("  {p}…"));
+            *phase = p;
+        }
+        CloneEvent::Progress { .. } | CloneEvent::Finished { .. } => {}
+    }
 }
 
 pub fn list(ctx: &Ctx) -> anyhow::Result<ExitCode> {
@@ -109,7 +114,7 @@ pub fn remove(ctx: &mut Ctx, id: &str) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn edition(e: Edition) -> &'static str {
+pub(super) fn edition(e: Edition) -> &'static str {
     match e {
         Edition::Community => "community",
         Edition::Enterprise => "enterprise",

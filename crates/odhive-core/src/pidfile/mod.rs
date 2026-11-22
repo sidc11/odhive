@@ -518,7 +518,7 @@ fn kill_leftovers(leader: ProcessId) -> bool {
 }
 
 /// How an attached instance was stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct AttachedStop {
     /// It was already gone.
     pub already_gone: bool,
@@ -610,7 +610,7 @@ pub async fn stop_recorded(
 }
 
 /// Where a record's process stands, without changing anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum RecordState {
     /// The recorded process runs. `supervisor` is the OdHive process that

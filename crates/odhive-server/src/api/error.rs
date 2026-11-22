@@ -16,7 +16,7 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 /// Body of every error response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, ToSchema)]
 pub struct ErrorBody {
     /// Stable machine-readable code, e.g. `unknown_project`.
     #[schema(example = "unknown_project")]

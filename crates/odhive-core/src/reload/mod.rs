@@ -52,7 +52,9 @@ pub const MAX_MODULE_NAME: usize = 128;
 pub const MANIFEST: &str = "__manifest__.py";
 
 /// What kind of module file changed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum FileKind {
     /// Python code: the process must be restarted.
@@ -75,7 +77,7 @@ pub struct Change {
 }
 
 /// What to do about a batch of changes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Action {
     /// Restart the process.

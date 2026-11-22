@@ -17,6 +17,14 @@ pub const MAX_SPEC_LEN: usize = 512;
 #[serde(transparent)]
 pub struct Requirement(String);
 
+/// Validated like any other requirement text.
+impl<'de> serde::Deserialize<'de> for Requirement {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        parse_requirement(&text).map_err(serde::de::Error::custom)
+    }
+}
+
 impl Requirement {
     /// The normalised requirement text.
     #[must_use]

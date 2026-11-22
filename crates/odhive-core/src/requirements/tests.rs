@@ -922,3 +922,19 @@ async fn real_odoo_install() {
         .expect("python");
     assert!(st.success(), "core imports fail in the new venv");
 }
+
+#[test]
+fn requirements_are_validated_when_read_back() {
+    let r = parse_requirement("Babel >= 2.6.0").expect("req");
+    let json = serde_json::to_value(&r).expect("json");
+    assert_eq!(
+        serde_json::from_value::<super::Requirement>(json).expect("back"),
+        r
+    );
+    for bad in ["-e .", "git+https://x/y", "pkg @ file:///tmp/x", ""] {
+        assert!(
+            serde_json::from_value::<super::Requirement>(bad.into()).is_err(),
+            "{bad}"
+        );
+    }
+}

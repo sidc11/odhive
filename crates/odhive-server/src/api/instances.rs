@@ -27,7 +27,7 @@ pub const DEFAULT_LOG_LIMIT: usize = 500;
 pub const MAX_LOG_LIMIT: usize = 5000;
 
 /// How a stop request ended.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, ToSchema)]
 pub struct StopResult {
     /// A process was running.
     pub was_running: bool,
@@ -50,7 +50,7 @@ pub struct LogQuery {
 }
 
 /// Log entries of one instance.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, ToSchema)]
 pub struct LogPage {
     /// Entries in log order.
     pub records: Vec<Arc<Record>>,

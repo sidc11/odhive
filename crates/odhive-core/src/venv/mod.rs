@@ -95,7 +95,7 @@ pub enum VenvError {
 }
 
 /// Which tool creates the venv.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "path")]
 pub enum VenvTool {
     /// `uv venv`, with this uv executable.
@@ -123,7 +123,7 @@ impl std::fmt::Display for VenvTool {
 }
 
 /// Progress of [`create`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "event")]
 pub enum VenvEvent {
     /// An existing venv is being removed (`replace`).
@@ -189,7 +189,7 @@ impl CreateOptions {
 }
 
 /// A created venv.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Venv {
     /// Venv directory.
     pub dir: PathBuf,

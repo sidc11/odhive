@@ -36,7 +36,7 @@ pub struct Reload {
 }
 
 /// Smart Reload state shown with an instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct ReloadInfo {
     /// Mode.
     pub mode: ReloadMode,
