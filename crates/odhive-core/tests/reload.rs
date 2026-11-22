@@ -143,6 +143,14 @@ async fn start_watched(m: &Manager, rx: &mut Subscription<ManagerEvent>, plan: I
         watching && running(ev)
     })
     .await;
+    // FSEvents (macOS) may still deliver the writes that set the project up,
+    // from just before watching began. Let them pass, and the restart they
+    // cause settle, so each test sees only its own changes.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let late = rx.drain();
+    if spawns(&late) > 0 && !running(&late) {
+        events_until(rx, running).await;
+    }
 }
 
 /// Log text of the instance so far.
@@ -343,10 +351,11 @@ async fn a_new_module_is_reported_and_stop_ends_watching() {
     .await;
     assert_eq!(spawns(&events), 0);
     tokio::time::sleep(Duration::from_millis(500)).await;
+    let late = rx.drain();
     assert_eq!(
-        spawns(&rx.drain()),
+        spawns(&late),
         0,
-        "a new module alone restarts nothing"
+        "a new module alone restarts nothing: {events:#?} {late:#?}"
     );
 
     m.stop(&owner()).await.expect("stop");
