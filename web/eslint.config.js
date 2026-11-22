@@ -5,7 +5,8 @@ import ts from 'typescript-eslint'
 import svelteConfig from './svelte.config.js'
 
 export default ts.config(
-  { ignores: ['dist/', 'node_modules/'] },
+  // src/lib/api/schema.d.ts is generated from the OpenAPI document (pnpm api:gen).
+  { ignores: ['dist/', 'node_modules/', 'src/lib/api/schema.d.ts'] },
   js.configs.recommended,
   ...ts.configs.strict,
   ...svelte.configs.recommended,

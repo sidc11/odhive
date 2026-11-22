@@ -4,20 +4,19 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use odhive_server::security::CONTENT_SECURITY_POLICY;
-use odhive_server::{AppConfig, app};
-use tower::ServiceExt;
 
-const PORT: u16 = 7069;
+mod common;
+use common::Env;
 
 async fn get(host: Option<&str>, path: &str) -> axum::response::Response {
     let mut req = Request::builder().uri(path);
     if let Some(h) = host {
         req = req.header(header::HOST, h);
     }
-    app(AppConfig { port: PORT })
-        .oneshot(req.body(Body::empty()).expect("request"))
+    let env = Env::new();
+    env.app()
+        .send(req.body(Body::empty()).expect("request"))
         .await
-        .expect("response")
 }
 
 fn assert_security_headers(resp: &axum::response::Response) {
@@ -95,10 +94,8 @@ async fn non_get_methods_are_rejected() {
         .header(header::HOST, "localhost:7069")
         .body(Body::empty())
         .expect("request");
-    let resp = app(AppConfig { port: PORT })
-        .oneshot(req)
-        .await
-        .expect("response");
+    let env = Env::new();
+    let resp = env.app().send(req).await;
     assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
 
@@ -129,7 +126,9 @@ async fn real_listener_falls_back_and_serves() {
     assert!(second.port > busy);
     let port = second.port;
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-    let server = tokio::spawn(odhive_server::serve(second, async {
+    let env = Env::new();
+    let service = env.app().service;
+    let server = tokio::spawn(odhive_server::serve(second, service, async {
         let _ = rx.await;
     }));
 

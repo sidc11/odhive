@@ -36,6 +36,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      # openapi.json itself is checked against the server by a Rust test.
+      - name: API types match the OpenAPI document
+        run: |
+          pnpm api:types
+          git diff --exit-code -- src/lib/api
       - run: pnpm lint
       - run: pnpm check
       - run: pnpm test

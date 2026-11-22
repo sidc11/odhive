@@ -102,7 +102,7 @@ pub enum SchemaError {
 }
 
 /// Value type of an option.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum OptionKind {
     /// `true` / `false`.
@@ -125,7 +125,7 @@ pub enum OptionKind {
 }
 
 /// One option, merged across all flags that share a config key.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OdooOption {
     /// Config-file key (`dest`), e.g. `http_port`.
     pub key: String,
@@ -151,7 +151,7 @@ pub struct OdooOption {
 }
 
 /// All options of one Odoo series.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct OptionSchema {
     /// Series reported by Odoo, e.g. `19.0`.
     pub series: String,

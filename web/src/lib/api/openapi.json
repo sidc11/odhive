@@ -1,0 +1,2143 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OdHive API",
+    "description": "Local API of OdHive, used by its web UI and CLI. Every request other than GET/HEAD must carry the header `X-OdHive: 1`.",
+    "contact": {
+      "name": "Siddharth Chaudhari"
+    },
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "0.0.1"
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Whether the service is up, and its version.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "Instances this service runs (and ended ones not yet stopped), across\nprojects.",
+        "operationId": "list_instances",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InstanceInfo"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Registered projects. A project whose files cannot be read is listed with\n`error` set.",
+        "operationId": "list_projects",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Project"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Creates a project folder in the workspace with one `main` instance. Its\nPython environment is not set up yet (`has_venv` is false).",
+        "operationId": "create_project",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name or folder is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "One project.",
+        "operationId": "get_project",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Unregisters a project; its folder is kept. Refused while an instance\nruns.",
+        "operationId": "remove_project",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An instance runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/instances/{id}/fix/confirm": {
+      "post": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "Installs the missing Python package awaiting confirmation, then restarts\nthe instance. Returns when the restart is issued.",
+        "operationId": "confirm_fix",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What was installed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Candidate"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Nothing awaits confirmation, or the attempt limit is reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/instances/{id}/fix/decline": {
+      "post": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "Drops the missing Python package awaiting confirmation.",
+        "operationId": "decline_fix",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What was declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Candidate"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Nothing awaits confirmation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/instances/{id}/logs": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "Log entries an instance run by this service holds in memory.",
+        "operationId": "instance_logs",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First sequence number wanted (`next` of the previous page); omitted =\nthe newest `limit` entries.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Entries per page, 1–5000 (default 500).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This service does not run the instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/instances/{id}/restart": {
+      "post": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "Restarts an instance with the project's current settings (starts it if\nit is stopped). Instances run outside this service must be stopped\nfirst.",
+        "operationId": "restart_instance",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceInfo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/instances/{id}/start": {
+      "post": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "Starts an instance with the project's current settings. Returns once the\nprocess is spawned (`starting`); status changes follow as events.",
+        "operationId": "start_instance",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceInfo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already running, running elsewhere, no venv, database or ports taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/instances/{id}/stop": {
+      "post": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "Stops an instance gracefully (SIGINT, then SIGKILL after 15 s). Works for\ninstances run outside this service too.",
+        "operationId": "stop_instance",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StopResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A stop is under way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/schema": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "The `odoo.conf` options of the project's Odoo, read with the project's\nPython (cached per source tree); the bundled list while it has no venv.",
+        "operationId": "project_schema",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaInfo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sources": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Registered source trees.",
+        "operationId": "list_sources",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SourceEntry"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Registers an existing source tree. Registering a registered path again\nreturns its entry.",
+        "operationId": "add_source",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceEntry"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not an Odoo 19/20 tree",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sources/{id}": {
+      "delete": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Unregisters a source tree; its files are kept. Refused while a project\nuses it.",
+        "operationId": "remove_source",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source id, e.g. `odoo-19.0`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The removed entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceEntry"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A project uses the source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sources/{id}/schema": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "The `odoo.conf` options of a Community source: from OdHive's cache, else\nthe list bundled with OdHive. Nothing is run; a project's option list\n(`/projects/{name}/schema`) is read with its own Python.",
+        "operationId": "source_schema",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Community source id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaInfo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a Community source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AutofixMode": {
+        "type": "string",
+        "description": "What happens on `ModuleNotFoundError`.",
+        "enum": [
+          "auto",
+          "ask",
+          "off"
+        ]
+      },
+      "Candidate": {
+        "type": "object",
+        "description": "What would be installed for a missing module.",
+        "required": [
+          "module",
+          "package",
+          "requirements"
+        ],
+        "properties": {
+          "module": {
+            "type": "string",
+            "description": "The missing top-level module."
+          },
+          "package": {
+            "type": "string",
+            "description": "Distribution name."
+          },
+          "requirements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Requirement"
+            },
+            "description": "What is passed to the installer: the listed lines when trusted by the\nproject, else just the name."
+          },
+          "trust": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Trust",
+                "description": "`None` = not trusted; installing needs confirmation."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "CreateProject": {
+        "type": "object",
+        "description": "A project to create.",
+        "required": [
+          "name",
+          "community"
+        ],
+        "properties": {
+          "addons_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Existing addons folders (absolute paths), used after the project's\nown `addons/`."
+          },
+          "community": {
+            "type": "string",
+            "description": "Registered Community source id.",
+            "example": "odoo-19.0"
+          },
+          "enterprise": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Registered Enterprise source id of the same series."
+          },
+          "name": {
+            "type": "string",
+            "description": "Project name (`^[a-z0-9][a-z0-9_-]{0,63}$`).",
+            "example": "shop"
+          },
+          "python": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Python interpreter (absolute path) for the project's venv; omitted =\ndetected at setup."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Edition": {
+        "type": "string",
+        "description": "Odoo edition of a registered source tree.",
+        "enum": [
+          "community",
+          "enterprise"
+        ]
+      },
+      "Entry": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/HeaderFields",
+            "description": "The record header; `None` for text that is not in Odoo's format."
+          },
+          {
+            "type": "object",
+            "required": [
+              "message",
+              "locations",
+              "exceptions",
+              "truncated"
+            ],
+            "properties": {
+              "exceptions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Exception lines ending each traceback, e.g.\n`ModuleNotFoundError: No module named 'ldap'`, in log order."
+              },
+              "locations": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Location"
+                },
+                "description": "`File \"...\", line N` frames and XML parse locations, in log order."
+              },
+              "message": {
+                "type": "string",
+                "description": "The message: its first line and every continuation line, joined by\n`\\n`, without trailing whitespace."
+              },
+              "truncated": {
+                "type": "boolean",
+                "description": "Whether lines were dropped because the entry hit its size cap."
+              }
+            }
+          }
+        ],
+        "description": "One log record, possibly spanning several lines."
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "Body of every error response.",
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Stable machine-readable code, e.g. `unknown_project`.",
+            "example": "unknown_project"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable explanation."
+          }
+        }
+      },
+      "ExitInfo": {
+        "type": "object",
+        "description": "How a process ended.",
+        "required": [
+          "port_in_use",
+          "tail"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Exit code, if it exited normally."
+          },
+          "port_in_use": {
+            "type": "boolean",
+            "description": "The output said a port was already in use."
+          },
+          "signal": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Signal that killed it, if any."
+          },
+          "tail": {
+            "type": "string",
+            "description": "Last output lines, joined with `\\n`."
+          }
+        }
+      },
+      "ExternalRun": {
+        "type": "object",
+        "description": "An instance that runs outside this OdHive service, e.g. one started by\n`odhive start` in a terminal. It can be stopped, not restarted, here.",
+        "required": [
+          "pid",
+          "http_port"
+        ],
+        "properties": {
+          "http_port": {
+            "type": "integer",
+            "format": "int32",
+            "description": "HTTP port.",
+            "minimum": 0
+          },
+          "pid": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Process id.",
+            "minimum": 0
+          },
+          "supervisor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The OdHive process supervising it; `None` = nobody captures its\noutput.",
+            "minimum": 0
+          }
+        }
+      },
+      "FixInfo": {
+        "type": "object",
+        "description": "Auto-fix state shown with an instance.",
+        "required": [
+          "mode",
+          "active",
+          "attempts"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "A missing module is being handled (queued, installing, restarting)."
+          },
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Installs since the instance was started.",
+            "minimum": 0
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AutofixMode",
+            "description": "Mode."
+          },
+          "pending": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Candidate",
+                "description": "Awaiting confirmation."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "HeaderFields": {
+        "type": "object",
+        "description": "How [`Entry::header`] appears in an entry's JSON (flattened): every\nfield is present for an Odoo record and absent for unformatted text. For\nthe OpenAPI document only.",
+        "properties": {
+          "db": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Database; `null` for Odoo's `?`."
+          },
+          "level": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Level",
+                "description": "Severity."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "logger": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Python logger name."
+          },
+          "pid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Process id.",
+            "minimum": 0
+          },
+          "timestamp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the record was logged (UTC, RFC 3339)."
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "description": "Service status.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "OdHive version.",
+            "example": "0.1.0"
+          }
+        }
+      },
+      "InstanceInfo": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PortOwner",
+            "description": "The instance."
+          },
+          {
+            "type": "object",
+            "required": [
+              "supervised",
+              "port_retried",
+              "status"
+            ],
+            "properties": {
+              "autofix": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/FixInfo",
+                    "description": "Dependency auto-fix, when enabled."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "db": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Database."
+              },
+              "gevent_port": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "Gevent port, while ports are held.",
+                "minimum": 0
+              },
+              "http_port": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "HTTP port, while ports are held.",
+                "minimum": 0
+              },
+              "port_retried": {
+                "type": "boolean",
+                "description": "The ports were allocated again after a port race."
+              },
+              "reload": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ReloadInfo",
+                    "description": "Smart Reload, when enabled."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "$ref": "#/components/schemas/Status",
+                "description": "Current status."
+              },
+              "supervised": {
+                "type": "boolean",
+                "description": "Started by this OdHive (output is captured). `false` = re-attached."
+              }
+            }
+          }
+        ],
+        "description": "What is known about one instance."
+      },
+      "InstanceView": {
+        "type": "object",
+        "description": "One instance of a project: its settings and, while it runs, its state.",
+        "required": [
+          "id",
+          "db",
+          "workers",
+          "reload_mode",
+          "autofix_mode"
+        ],
+        "properties": {
+          "autofix_mode": {
+            "$ref": "#/components/schemas/AutofixMode",
+            "description": "Dependency auto-fix mode."
+          },
+          "db": {
+            "type": "string",
+            "description": "Database."
+          },
+          "external": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExternalRun",
+                "description": "Set when it runs outside this service."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gevent_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Pinned gevent port; `None` = allocated at start.",
+            "minimum": 0
+          },
+          "http_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Pinned HTTP port; `None` = allocated at start.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "Instance id."
+          },
+          "live": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InstanceInfo",
+                "description": "State while this service runs it (also after it ended, until it is\nstopped or started again)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reload_mode": {
+            "$ref": "#/components/schemas/ReloadMode",
+            "description": "Smart Reload mode."
+          },
+          "workers": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Odoo `--workers`.",
+            "minimum": 0
+          }
+        }
+      },
+      "Level": {
+        "type": "string",
+        "description": "Severity of a record, in increasing order.",
+        "enum": [
+          "debug",
+          "info",
+          "runbot",
+          "warning",
+          "error",
+          "critical"
+        ]
+      },
+      "Location": {
+        "type": "object",
+        "description": "A source location named in an entry.",
+        "required": [
+          "path",
+          "line"
+        ],
+        "properties": {
+          "function": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Function the frame is in, when the log names it."
+          },
+          "line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Line number, from 1.",
+            "minimum": 0
+          },
+          "path": {
+            "type": "string",
+            "description": "File path as logged (not validated)."
+          }
+        }
+      },
+      "LogPage": {
+        "type": "object",
+        "description": "Log entries of one instance.",
+        "required": [
+          "records",
+          "skipped",
+          "next"
+        ],
+        "properties": {
+          "next": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`from` for the next page.",
+            "minimum": 0
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Record"
+            },
+            "description": "Entries in log order."
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Entries asked for that were already dropped from memory (the log\nfile still has them).",
+            "minimum": 0
+          }
+        }
+      },
+      "NewSource": {
+        "type": "object",
+        "description": "A source tree to register.",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "enterprise_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Registers an Enterprise tree for this Odoo series (Enterprise trees\ncarry no version), e.g. `19.0`."
+          },
+          "path": {
+            "type": "string",
+            "description": "Absolute path of an Odoo 19/20 Community tree, or of an Enterprise\naddons tree when `enterprise_version` is given."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OdooOption": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OptionKind",
+            "description": "Value type."
+          },
+          {
+            "type": "object",
+            "required": [
+              "key",
+              "flags",
+              "file_loadable",
+              "file_exportable",
+              "secret"
+            ],
+            "properties": {
+              "default": {
+                "description": "Default value, if Odoo declares one."
+              },
+              "file_exportable": {
+                "type": "boolean",
+                "description": "Is written to `odoo.conf` by `--save`."
+              },
+              "file_loadable": {
+                "type": "boolean",
+                "description": "Can be read from `odoo.conf`."
+              },
+              "flags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Command-line flags, e.g. `[\"-p\", \"--http-port\"]`. Empty for file-only options."
+              },
+              "group": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "`--help` section, e.g. `HTTP Service Configuration`; `None` for file-only options."
+              },
+              "help": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Help text, if shown by `--help`."
+              },
+              "key": {
+                "type": "string",
+                "description": "Config-file key (`dest`), e.g. `http_port`."
+              },
+              "metavar": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Metavar shown by `--help`, e.g. `PORT`."
+              },
+              "secret": {
+                "type": "boolean",
+                "description": "Value must be masked everywhere."
+              }
+            }
+          }
+        ],
+        "description": "One option, merged across all flags that share a config key."
+      },
+      "OptionKind": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "`true` / `false`.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "bool"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Integer.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "int"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Floating point number.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "float"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Free text.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "string"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "File system path.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "path"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Comma-separated list.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "list"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "One of a fixed set of values.",
+            "required": [
+              "choices",
+              "type"
+            ],
+            "properties": {
+              "choices": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Allowed values, in Odoo's order."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "choice"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Value type of an option."
+      },
+      "OptionSchema": {
+        "type": "object",
+        "description": "All options of one Odoo series.",
+        "required": [
+          "series",
+          "options"
+        ],
+        "properties": {
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OdooOption"
+            },
+            "description": "Options in Odoo's order (file-only first, then by `--help` group)."
+          },
+          "series": {
+            "type": "string",
+            "description": "Series reported by Odoo, e.g. `19.0`."
+          }
+        }
+      },
+      "Origin": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A line of a requirements file.",
+            "required": [
+              "path",
+              "line",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "file"
+                ]
+              },
+              "line": {
+                "type": "integer",
+                "description": "1-based line number.",
+                "minimum": 0
+              },
+              "path": {
+                "type": "string",
+                "description": "The file."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A module manifest's `external_dependencies['python']`.",
+            "required": [
+              "path",
+              "module",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "manifest"
+                ]
+              },
+              "module": {
+                "type": "string",
+                "description": "Module (directory) name."
+              },
+              "path": {
+                "type": "string",
+                "description": "The manifest file."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A Python module an instance reported missing ([`crate::autofix`]).",
+            "required": [
+              "module",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "missing"
+                ]
+              },
+              "module": {
+                "type": "string",
+                "description": "The import name."
+              }
+            }
+          }
+        ],
+        "description": "Where a requirement came from."
+      },
+      "PortOwner": {
+        "type": "object",
+        "description": "The OdHive instance a port belongs to.",
+        "required": [
+          "project",
+          "instance"
+        ],
+        "properties": {
+          "instance": {
+            "type": "string",
+            "description": "Instance id within the project."
+          },
+          "project": {
+            "type": "string",
+            "description": "Project name."
+          }
+        }
+      },
+      "Project": {
+        "type": "object",
+        "description": "A registered project.",
+        "required": [
+          "name",
+          "path",
+          "addons_paths",
+          "has_venv",
+          "instances"
+        ],
+        "properties": {
+          "addons_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Custom addons folders, as configured."
+          },
+          "community": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Community source id."
+          },
+          "enterprise": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Enterprise source id."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the project could not be read; the fields below are empty then."
+          },
+          "has_venv": {
+            "type": "boolean",
+            "description": "The project's Python environment exists."
+          },
+          "instances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstanceView"
+            },
+            "description": "Instances, in project order."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "odoo_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Odoo series of its Community source, when that is registered."
+          },
+          "path": {
+            "type": "string",
+            "description": "Project folder."
+          }
+        }
+      },
+      "Record": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Entry",
+            "description": "The entry."
+          },
+          {
+            "type": "object",
+            "required": [
+              "seq"
+            ],
+            "properties": {
+              "seq": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Position in the instance's log, from 1, never reused.",
+                "minimum": 0
+              }
+            }
+          }
+        ],
+        "description": "An entry with its sequence number."
+      },
+      "ReloadInfo": {
+        "type": "object",
+        "description": "Smart Reload state shown with an instance.",
+        "required": [
+          "mode",
+          "watching"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/ReloadMode",
+            "description": "Mode."
+          },
+          "pending_update": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Modules to update that no running process has loaded yet."
+          },
+          "watching": {
+            "type": "boolean",
+            "description": "The addons folders are being watched."
+          }
+        }
+      },
+      "ReloadMode": {
+        "type": "string",
+        "description": "What happens when files of the project's custom modules change (see\n[`crate::reload`]).",
+        "enum": [
+          "auto",
+          "restart",
+          "off"
+        ]
+      },
+      "Requirement": {
+        "type": "string",
+        "description": "A validated requirement, normalised to `name[extras]specifiers ; marker`."
+      },
+      "SchemaInfo": {
+        "type": "object",
+        "description": "The `odoo.conf` options of an Odoo source.",
+        "required": [
+          "source",
+          "schema"
+        ],
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the bundled list is used."
+          },
+          "schema": {
+            "$ref": "#/components/schemas/OptionSchema",
+            "description": "The options."
+          },
+          "source": {
+            "$ref": "#/components/schemas/SchemaSource",
+            "description": "Where the list came from."
+          }
+        }
+      },
+      "SchemaSource": {
+        "type": "string",
+        "description": "Where an option list came from.",
+        "enum": [
+          "cached",
+          "introspected",
+          "bundled"
+        ]
+      },
+      "SourceEntry": {
+        "type": "object",
+        "description": "One Odoo source tree known to OdHive, shared between projects.",
+        "required": [
+          "id",
+          "edition",
+          "odoo_version",
+          "path"
+        ],
+        "properties": {
+          "edition": {
+            "$ref": "#/components/schemas/Edition",
+            "description": "Community or Enterprise."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable identifier referenced from projects, e.g. `odoo-19.0`."
+          },
+          "odoo_version": {
+            "type": "string",
+            "description": "Odoo series detected from the tree, e.g. `19.0`.",
+            "example": "19.0"
+          },
+          "path": {
+            "type": "string",
+            "description": "Absolute path of the source tree."
+          }
+        }
+      },
+      "Status": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Spawned; the HTTP port is not accepting connections yet.",
+            "required": [
+              "pid",
+              "state"
+            ],
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Process id (also the process group id).",
+                "minimum": 0
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "starting"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The HTTP port accepts connections.",
+            "required": [
+              "pid",
+              "state"
+            ],
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Process id.",
+                "minimum": 0
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "running"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A stop or restart was requested; waiting for the process to exit.",
+            "required": [
+              "pid",
+              "state"
+            ],
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Process id.",
+                "minimum": 0
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "stopping"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Exited on request, or by itself with code 0.",
+            "required": [
+              "exit",
+              "state"
+            ],
+            "properties": {
+              "exit": {
+                "$ref": "#/components/schemas/ExitInfo",
+                "description": "How it ended."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "stopped"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Exited by itself with a non-zero code or a signal.",
+            "required": [
+              "exit",
+              "state"
+            ],
+            "properties": {
+              "exit": {
+                "$ref": "#/components/schemas/ExitInfo",
+                "description": "How it ended."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "crashed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A restart could not spawn the process.",
+            "required": [
+              "error",
+              "state"
+            ],
+            "properties": {
+              "error": {
+                "type": "string",
+                "description": "Why."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "failed_to_start"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "State of a supervised instance."
+      },
+      "StopResult": {
+        "type": "object",
+        "description": "How a stop request ended.",
+        "required": [
+          "was_running",
+          "killed"
+        ],
+        "properties": {
+          "killed": {
+            "type": "boolean",
+            "description": "It did not stop in time and was killed."
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Status",
+                "description": "Final status, for an instance this service supervised."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "was_running": {
+            "type": "boolean",
+            "description": "A process was running."
+          }
+        }
+      },
+      "Trust": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A requirements file or manifest of the project lists it.",
+            "required": [
+              "origin",
+              "source"
+            ],
+            "properties": {
+              "origin": {
+                "$ref": "#/components/schemas/Origin",
+                "description": "Where."
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "listed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The built-in import → package table names it.",
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "table"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Why a package is trusted."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "sources",
+      "description": "Registered Odoo source trees"
+    },
+    {
+      "name": "projects",
+      "description": "Projects and their instances"
+    },
+    {
+      "name": "instances",
+      "description": "Running Odoo instances"
+    },
+    {
+      "name": "service",
+      "description": "The OdHive service itself"
+    }
+  ]
+}

@@ -44,6 +44,15 @@ pnpm test
 pnpm build
 ```
 
+API types: the web UI's TypeScript types (`web/src/lib/api/schema.d.ts`) are
+generated from the server's OpenAPI document (`web/src/lib/api/openapi.json`).
+After changing an API route or a type it returns, regenerate both and commit
+them; a test and a CI step fail when they are out of date:
+
+```sh
+pnpm --dir web api:gen
+```
+
 Fuzzing (optional locally, runs in CI; needs nightly and `cargo install cargo-fuzz`):
 
 ```sh

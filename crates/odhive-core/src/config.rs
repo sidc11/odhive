@@ -139,7 +139,7 @@ impl AppPaths {
 }
 
 /// Odoo edition of a registered source tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Edition {
     /// `odoo/odoo` — the server and Community addons.
@@ -149,15 +149,17 @@ pub enum Edition {
 }
 
 /// One Odoo source tree known to OdHive, shared between projects.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SourceEntry {
     /// Stable identifier referenced from projects, e.g. `odoo-19.0`.
     pub id: String,
     /// Community or Enterprise.
     pub edition: Edition,
     /// Odoo series detected from the tree, e.g. `19.0`.
+    #[schema(value_type = String, example = "19.0")]
     pub odoo_version: OdooVersion,
     /// Absolute path of the source tree.
+    #[schema(value_type = String)]
     pub path: PathBuf,
 }
 

@@ -190,7 +190,7 @@ pub enum ProjectError {
 
 /// What happens when files of the project's custom modules change (see
 /// [`crate::reload`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ReloadMode {
     /// `.py` → restart, data files and manifests → restart with
@@ -205,7 +205,7 @@ pub enum ReloadMode {
 }
 
 /// What happens on `ModuleNotFoundError`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AutofixMode {
     /// Install packages from trusted sources automatically; ask for unknown ones.

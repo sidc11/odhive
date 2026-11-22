@@ -9,9 +9,12 @@ use std::process::ExitCode;
 use anyhow::Context;
 use clap::Parser;
 use odhive_core::config::AppPaths;
+use odhive_core::manager::{Manager, ManagerOptions, Recovery};
+use odhive_core::pidfile::RunDir;
 use odhive_core::platform::{effective_uid, ensure_not_root};
 use odhive_core::ports::{DEFAULT_PORT_ATTEMPTS, bind_loopback};
 use odhive_core::workspace::bootstrap;
+use odhive_server::Service;
 use tracing_subscriber::EnvFilter;
 
 use crate::cli::Cli;
@@ -63,12 +66,40 @@ async fn serve(port: u16) -> anyhow::Result<()> {
         );
     }
 
-    odhive_server::serve(listeners, async {
+    let manager = Manager::new(ManagerOptions {
+        run_dir: Some(RunDir::new(paths.run_dir())),
+        ..ManagerOptions::default()
+    });
+    for r in manager.recover().context("could not read the PID files")? {
+        match r {
+            Recovery::Attached { owner, pid, .. } => {
+                tracing::info!(instance = %owner, pid, "re-attached running instance");
+            }
+            Recovery::SupervisedElsewhere { owner, pid, by } => {
+                tracing::info!(instance = %owner, pid, by, "instance runs in another OdHive");
+            }
+            Recovery::Stale { owner, pid, .. } => {
+                tracing::info!(instance = %owner, pid, "removed stale PID file");
+            }
+            Recovery::Invalid { path, reason } => {
+                tracing::warn!(path = %path.display(), %reason, "removed unusable PID file");
+            }
+        }
+    }
+    let service = Service::new(paths, boot.workspace, manager.clone());
+
+    let served = odhive_server::serve(listeners, service, async {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("shutting down");
     })
-    .await
-    .context("server error")?;
+    .await;
+    // Until the background service exists (5.5), instances end with the UI.
+    for (owner, result) in manager.shutdown().await {
+        if let Err(e) = result {
+            tracing::warn!(instance = %owner, "could not stop: {e}");
+        }
+    }
+    served.context("server error")?;
     Ok(())
 }
 

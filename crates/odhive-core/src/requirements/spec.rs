@@ -11,7 +11,9 @@
 pub const MAX_SPEC_LEN: usize = 512;
 
 /// A validated requirement, normalised to `name[extras]specifiers ; marker`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, utoipa::ToSchema,
+)]
 #[serde(transparent)]
 pub struct Requirement(String);
 
