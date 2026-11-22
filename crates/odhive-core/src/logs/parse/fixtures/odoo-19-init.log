@@ -1,0 +1,191 @@
+2026-11-22 06:27:28,681 6334 INFO ? odoo: Odoo version 19.0 
+2026-11-22 06:27:28,681 6334 INFO ? odoo: addons paths: _NamespacePath(['/home/dev/OdHive/sources/odoo-19.0/odoo/addons', '/home/dev/.local/share/Odoo/addons/19.0', '/home/dev/OdHive/sources/odoo-19.0/addons', '/home/dev/work/addons']) 
+2026-11-22 06:27:28,682 6334 INFO ? odoo: database: odoo@127.0.0.1:25432 
+2026-11-22 06:27:29,708 6334 INFO ohs19 odoo.modules.loading: Initializing database ohs19 
+2026-11-22 06:27:30,054 6334 WARNING ohs19 odoo.modules.module: Missing `author` key in manifest for 'brk_import', defaulting to '' 
+2026-11-22 06:27:30,055 6334 WARNING ohs19 odoo.modules.module: Missing `author` key in manifest for 'brk_import', defaulting to '' 
+2026-11-22 06:27:30,056 6334 WARNING ohs19 odoo.modules.module: Missing `author` key in manifest for 'brk_view', defaulting to '' 
+2026-11-22 06:27:30,056 6334 WARNING ohs19 odoo.modules.module: Missing `author` key in manifest for 'brk_view', defaulting to '' 
+2026-11-22 06:27:30,797 6334 INFO ohs19 odoo.modules.loading: loading 1 modules... 
+2026-11-22 06:27:30,797 6334 INFO ohs19 odoo.modules.loading: Loading module base (1/1) 
+2026-11-22 06:27:30,820 6334 INFO ohs19 odoo.registry: module base: creating or updating database tables 
+2026-11-22 06:27:30,975 6334 INFO ohs19 odoo.models: Prepare computation of ir.module.module.menus_by_module 
+2026-11-22 06:27:30,976 6334 INFO ohs19 odoo.models: Prepare computation of ir.module.module.reports_by_module 
+2026-11-22 06:27:30,976 6334 INFO ohs19 odoo.models: Prepare computation of ir.module.module.views_by_module 
+2026-11-22 06:27:31,026 6334 INFO ohs19 odoo.models: Prepare computation of res.partner.user_id 
+2026-11-22 06:27:31,026 6334 INFO ohs19 odoo.models: Prepare computation of res.partner.commercial_partner_id 
+2026-11-22 06:27:31,026 6334 INFO ohs19 odoo.models: Prepare computation of res.partner.complete_name 
+2026-11-22 06:27:31,026 6334 INFO ohs19 odoo.models: Prepare computation of res.partner.lang 
+2026-11-22 06:27:31,026 6334 INFO ohs19 odoo.models: Prepare computation of res.partner.company_registry 
+2026-11-22 06:27:31,026 6334 INFO ohs19 odoo.models: Prepare computation of res.partner.commercial_company_name 
+2026-11-22 06:27:31,026 6334 INFO ohs19 odoo.models: Prepare computation of res.partner.properties 
+2026-11-22 06:27:31,026 6334 INFO ohs19 odoo.models: Prepare computation of res.partner.partner_share 
+2026-11-22 06:27:31,042 6334 INFO ohs19 odoo.models: Prepare computation of res.currency.decimal_places 
+2026-11-22 06:27:31,053 6334 INFO ohs19 odoo.models: Prepare computation of res.company.uses_default_logo 
+2026-11-22 06:27:31,053 6334 INFO ohs19 odoo.models: Prepare computation of res.company.logo_web 
+2026-11-22 06:27:31,054 6334 INFO ohs19 odoo.models: Computing parent_path for table res_company... 
+2026-11-22 06:27:31,069 6334 INFO ohs19 odoo.models: Prepare computation of res.users.signature 
+2026-11-22 06:27:31,069 6334 INFO ohs19 odoo.models: Prepare computation of res.users.share 
+2026-11-22 06:27:32,057 6334 INFO ohs19 odoo.modules.loading: loading base/data/res_bank.xml 
+2026-11-22 06:27:32,064 6334 INFO ohs19 odoo.modules.loading: loading base/data/res.lang.csv 
+2026-11-22 06:27:32,095 6334 INFO ohs19 odoo.modules.loading: loading base/data/res_lang_data.xml 
+2026-11-22 06:27:32,125 6334 INFO ohs19 odoo.modules.loading: loading base/data/res_partner_data.xml 
+2026-11-22 06:27:32,168 6334 INFO ohs19 odoo.modules.loading: loading base/data/res_currency_data.xml 
+2026-11-22 06:27:32,601 6334 INFO ohs19 odoo.modules.loading: loading base/data/res_company_data.xml 
+2026-11-22 06:27:32,607 6334 INFO ohs19 odoo.modules.loading: loading base/data/res_users_data.xml 
+2026-11-22 06:27:33,282 6334 INFO ohs19 odoo.modules.loading: loading base/data/report_paperformat_data.xml 
+2026-11-22 06:27:33,288 6334 INFO ohs19 odoo.modules.loading: loading base/data/res_country_data.xml 
+2026-11-22 06:27:33,810 6334 INFO ohs19 odoo.modules.loading: loading base/data/ir_demo_data.xml 
+2026-11-22 06:27:33,820 6334 INFO ohs19 odoo.modules.loading: loading base/security/base_groups.xml 
+2026-11-22 06:27:33,959 6334 INFO ohs19 odoo.modules.loading: loading base/security/base_security.xml 
+2026-11-22 06:27:34,074 6334 INFO ohs19 odoo.modules.loading: loading base/wizard/wizard_ir_model_menu_create_views.xml 
+2026-11-22 06:27:34,082 6334 INFO ohs19 odoo.modules.loading: loading base/views/base_menus.xml 
+2026-11-22 06:27:34,135 6334 INFO ohs19 odoo.modules.loading: loading base/views/decimal_precision_views.xml 
+2026-11-22 06:27:34,149 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_config_views.xml 
+2026-11-22 06:27:34,154 6334 INFO ohs19 odoo.modules.loading: loading base/data/res.country.state.csv 
+2026-11-22 06:27:34,387 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_actions_views.xml 
+2026-11-22 06:27:34,502 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_asset_views.xml 
+2026-11-22 06:27:34,517 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_config_parameter_views.xml 
+2026-11-22 06:27:34,533 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_cron_views.xml 
+2026-11-22 06:27:34,560 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_cron_trigger_views.xml 
+2026-11-22 06:27:34,575 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_filters_views.xml 
+2026-11-22 06:27:34,596 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_mail_server_views.xml 
+2026-11-22 06:27:34,613 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_model_views.xml 
+2026-11-22 06:27:34,726 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_attachment_views.xml 
+2026-11-22 06:27:34,748 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_rule_views.xml 
+2026-11-22 06:27:34,766 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_sequence_views.xml 
+2026-11-22 06:27:34,785 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_ui_menu_views.xml 
+2026-11-22 06:27:34,803 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_ui_view_views.xml 
+2026-11-22 06:27:34,845 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_default_views.xml 
+2026-11-22 06:27:34,861 6334 INFO ohs19 odoo.modules.loading: loading base/data/ir_config_parameter_data.xml 
+2026-11-22 06:27:34,863 6334 INFO ohs19 odoo.modules.loading: loading base/data/ir_cron_data.xml 
+2026-11-22 06:27:34,875 6334 INFO ohs19 odoo.modules.loading: loading base/report/ir_model_report.xml 
+2026-11-22 06:27:34,878 6334 INFO ohs19 odoo.modules.loading: loading base/report/ir_model_templates.xml 
+2026-11-22 06:27:34,889 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_logging_views.xml 
+2026-11-22 06:27:34,907 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_qweb_widget_templates.xml 
+2026-11-22 06:27:34,920 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_module_views.xml 
+2026-11-22 06:27:34,969 6334 INFO ohs19 odoo.modules.loading: loading base/data/ir_module_category_data.xml 
+2026-11-22 06:27:35,001 6334 INFO ohs19 odoo.modules.loading: loading base/data/ir_module_module.xml 
+2026-11-22 06:27:35,064 6334 INFO ohs19 odoo.modules.loading: loading base/report/ir_module_reports.xml 
+2026-11-22 06:27:35,066 6334 INFO ohs19 odoo.modules.loading: loading base/report/ir_module_report_templates.xml 
+2026-11-22 06:27:35,072 6334 INFO ohs19 odoo.modules.loading: loading base/wizard/base_module_update_views.xml 
+2026-11-22 06:27:35,083 6334 INFO ohs19 odoo.modules.loading: loading base/wizard/base_language_install_views.xml 
+2026-11-22 06:27:35,097 6334 INFO ohs19 odoo.modules.loading: loading base/wizard/base_import_language_views.xml 
+2026-11-22 06:27:35,106 6334 INFO ohs19 odoo.modules.loading: loading base/wizard/base_module_upgrade_views.xml 
+2026-11-22 06:27:35,120 6334 INFO ohs19 odoo.modules.loading: loading base/wizard/base_module_uninstall_views.xml 
+2026-11-22 06:27:35,130 6334 INFO ohs19 odoo.modules.loading: loading base/wizard/base_export_language_views.xml 
+2026-11-22 06:27:35,143 6334 INFO ohs19 odoo.modules.loading: loading base/wizard/base_partner_merge_views.xml 
+2026-11-22 06:27:35,155 6334 INFO ohs19 odoo.modules.loading: loading base/data/ir_demo_failure_data.xml 
+2026-11-22 06:27:35,168 6334 INFO ohs19 odoo.modules.loading: loading base/views/ir_profile_views.xml 
+2026-11-22 06:27:35,190 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_company_views.xml 
+2026-11-22 06:27:35,216 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_lang_views.xml 
+2026-11-22 06:27:35,233 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_partner_views.xml 
+2026-11-22 06:27:35,307 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_bank_views.xml 
+2026-11-22 06:27:35,337 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_country_views.xml 
+2026-11-22 06:27:35,374 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_currency_views.xml 
+2026-11-22 06:27:35,407 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_groups_views.xml 
+2026-11-22 06:27:35,444 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_users_views.xml 
+2026-11-22 06:27:35,523 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_users_apikeys_views.xml 
+2026-11-22 06:27:35,528 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_device_views.xml 
+2026-11-22 06:27:35,549 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_users_identitycheck_views.xml 
+2026-11-22 06:27:35,555 6334 INFO ohs19 odoo.modules.loading: loading base/views/res_config_settings_views.xml 
+2026-11-22 06:27:35,562 6334 INFO ohs19 odoo.modules.loading: loading base/views/report_paperformat_views.xml 
+2026-11-22 06:27:35,583 6334 INFO ohs19 odoo.modules.loading: loading base/security/ir.model.access.csv 
+2026-11-22 06:27:35,693 6334 INFO ohs19 odoo.modules.loading: Module base loaded in 4.90s, 8457 queries (+8457 other) 
+2026-11-22 06:27:35,693 6334 INFO ohs19 odoo.modules.loading: 1 modules loaded in 4.90s, 8457 queries (+8457 extra) 
+2026-11-22 06:27:35,695 6334 INFO ohs19 odoo.modules.loading: updating modules list 
+2026-11-22 06:27:35,696 6334 INFO ohs19 odoo.addons.base.models.ir_module: ALLOW access to module.update_list on [] to user __system__ #1 via n/a 
+2026-11-22 06:27:35,868 6334 WARNING ohs19 odoo.modules.module: Missing `author` key in manifest for 'brk_import', defaulting to '' 
+2026-11-22 06:27:35,868 6334 WARNING ohs19 odoo.modules.module: Missing `author` key in manifest for 'brk_view', defaulting to '' 
+2026-11-22 06:27:36,471 6334 INFO ohs19 odoo.modules.loading: loading 14 modules... 
+2026-11-22 06:27:36,471 6334 INFO ohs19 odoo.modules.loading: Loading module rpc (2/14) 
+2026-11-22 06:27:36,484 6334 INFO ohs19 odoo.modules.loading: Module rpc loaded in 0.01s, 9 queries (+9 other) 
+2026-11-22 06:27:36,484 6334 INFO ohs19 odoo.modules.loading: Loading module web (3/14) 
+2026-11-22 06:27:36,509 6334 INFO ohs19 odoo.registry: module web: creating or updating database tables 
+2026-11-22 06:27:36,807 6334 INFO ohs19 odoo.modules.loading: loading web/security/ir.model.access.csv 
+2026-11-22 06:27:36,814 6334 INFO ohs19 odoo.modules.loading: loading web/security/web_security.xml 
+2026-11-22 06:27:36,824 6334 INFO ohs19 odoo.modules.loading: loading web/views/webclient_templates.xml 
+2026-11-22 06:27:36,870 6334 INFO ohs19 odoo.modules.loading: loading web/views/report_templates.xml 
+2026-11-22 06:27:36,946 6334 INFO ohs19 odoo.modules.loading: loading web/views/base_document_layout_views.xml 
+2026-11-22 06:27:36,959 6334 INFO ohs19 odoo.modules.loading: loading web/views/partner_view.xml 
+2026-11-22 06:27:36,964 6334 INFO ohs19 odoo.modules.loading: loading web/views/speedscope_template.xml 
+2026-11-22 06:27:36,968 6334 INFO ohs19 odoo.modules.loading: loading web/views/memory_template.xml 
+2026-11-22 06:27:36,974 6334 INFO ohs19 odoo.modules.loading: loading web/views/speedscope_config_wizard.xml 
+2026-11-22 06:27:36,980 6334 INFO ohs19 odoo.modules.loading: loading web/views/neutralize_views.xml 
+2026-11-22 06:27:36,986 6334 INFO ohs19 odoo.modules.loading: loading web/views/ir_ui_view_views.xml 
+2026-11-22 06:27:36,994 6334 INFO ohs19 odoo.modules.loading: loading web/data/ir_attachment.xml 
+2026-11-22 06:27:36,998 6334 INFO ohs19 odoo.modules.loading: loading web/data/report_layout.xml 
+2026-11-22 06:27:37,045 6334 INFO ohs19 odoo.modules.loading: Module web loaded in 0.56s, 1232 queries (+1232 other) 
+2026-11-22 06:27:37,046 6334 INFO ohs19 odoo.modules.loading: Loading module api_doc (4/14) 
+2026-11-22 06:27:37,057 6334 INFO ohs19 odoo.registry: module api_doc: creating or updating database tables 
+2026-11-22 06:27:37,068 6334 INFO ohs19 odoo.modules.loading: loading api_doc/security/res_groups.xml 
+2026-11-22 06:27:37,089 6334 INFO ohs19 odoo.modules.loading: loading api_doc/views/docclient.xml 
+2026-11-22 06:27:37,103 6334 INFO ohs19 odoo.modules.loading: Module api_doc loaded in 0.06s, 64 queries (+64 other) 
+2026-11-22 06:27:37,103 6334 INFO ohs19 odoo.modules.loading: Loading module auth_totp (5/14) 
+2026-11-22 06:27:37,144 6334 INFO ohs19 odoo.registry: module auth_totp: creating or updating database tables 
+2026-11-22 06:27:37,192 6334 INFO ohs19 odoo.modules.loading: loading auth_totp/security/security.xml 
+2026-11-22 06:27:37,212 6334 INFO ohs19 odoo.modules.loading: loading auth_totp/security/ir.model.access.csv 
+2026-11-22 06:27:37,218 6334 INFO ohs19 odoo.modules.loading: loading auth_totp/data/ir_action_data.xml 
+2026-11-22 06:27:37,224 6334 INFO ohs19 odoo.modules.loading: loading auth_totp/views/res_users_views.xml 
+2026-11-22 06:27:37,254 6334 INFO ohs19 odoo.modules.loading: loading auth_totp/views/templates.xml 
+2026-11-22 06:27:37,258 6334 INFO ohs19 odoo.modules.loading: loading auth_totp/wizard/auth_totp_wizard_views.xml 
+2026-11-22 06:27:37,273 6334 INFO ohs19 odoo.modules.loading: Module auth_totp loaded in 0.17s, 218 queries (+218 other) 
+2026-11-22 06:27:37,273 6334 INFO ohs19 odoo.modules.loading: Loading module base_import (6/14) 
+2026-11-22 06:27:37,312 6334 INFO ohs19 odoo.registry: module base_import: creating or updating database tables 
+2026-11-22 06:27:37,603 6334 INFO ohs19 odoo.modules.loading: loading base_import/security/base_import_security.xml 
+2026-11-22 06:27:37,609 6334 INFO ohs19 odoo.modules.loading: loading base_import/security/ir.model.access.csv 
+2026-11-22 06:27:37,621 6334 INFO ohs19 odoo.modules.loading: Module base_import loaded in 0.35s, 964 queries (+964 other) 
+2026-11-22 06:27:37,621 6334 INFO ohs19 odoo.modules.loading: Loading module base_import_module (7/14) 
+2026-11-22 06:27:37,634 6334 INFO ohs19 odoo.registry: module base_import_module: creating or updating database tables 
+2026-11-22 06:27:37,677 6334 INFO ohs19 odoo.modules.loading: loading base_import_module/security/ir.model.access.csv 
+2026-11-22 06:27:37,681 6334 INFO ohs19 odoo.modules.loading: loading base_import_module/views/base_import_module_view.xml 
+2026-11-22 06:27:37,697 6334 INFO ohs19 odoo.modules.loading: loading base_import_module/views/ir_module_views.xml 
+2026-11-22 06:27:37,734 6334 INFO ohs19 odoo.modules.loading: Module base_import_module loaded in 0.11s, 172 queries (+172 other) 
+2026-11-22 06:27:37,734 6334 INFO ohs19 odoo.modules.loading: Loading module base_setup (8/14) 
+2026-11-22 06:27:37,746 6334 INFO ohs19 odoo.registry: module base_setup: creating or updating database tables 
+2026-11-22 06:27:37,776 6334 INFO ohs19 odoo.modules.loading: loading base_setup/data/base_setup_data.xml 
+2026-11-22 06:27:37,779 6334 INFO ohs19 odoo.modules.loading: loading base_setup/views/res_config_settings_views.xml 
+2026-11-22 06:27:37,805 6334 INFO ohs19 odoo.modules.loading: loading base_setup/views/res_partner_views.xml 
+2026-11-22 06:27:37,822 6334 INFO ohs19 odoo.modules.loading: Module base_setup loaded in 0.09s, 152 queries (+152 other) 
+2026-11-22 06:27:37,822 6334 INFO ohs19 odoo.modules.loading: Loading module bus (9/14) 
+2026-11-22 06:27:37,850 6334 INFO ohs19 odoo.registry: module bus: creating or updating database tables 
+2026-11-22 06:27:37,910 6334 INFO ohs19 odoo.modules.loading: loading bus/security/ir.model.access.csv 
+2026-11-22 06:27:37,921 6334 INFO ohs19 odoo.modules.loading: Module bus loaded in 0.10s, 159 queries (+159 other) 
+2026-11-22 06:27:37,921 6334 INFO ohs19 odoo.modules.loading: Loading module web_tour (10/14) 
+2026-11-22 06:27:37,929 6334 INFO ohs19 odoo.registry: module web_tour: creating or updating database tables 
+2026-11-22 06:27:37,932 6334 INFO ohs19 odoo.models: Prepare computation of res.users.tour_enabled 
+2026-11-22 06:27:37,983 6334 INFO ohs19 odoo.modules.loading: loading web_tour/security/ir.model.access.csv 
+2026-11-22 06:27:37,989 6334 INFO ohs19 odoo.modules.loading: loading web_tour/views/tour_views.xml 
+2026-11-22 06:27:38,022 6334 INFO ohs19 odoo.modules.loading: Module web_tour loaded in 0.10s, 180 queries (+180 other) 
+2026-11-22 06:27:38,022 6334 INFO ohs19 odoo.modules.loading: Loading module auth_passkey (11/14) 
+2026-11-22 06:27:38,120 6334 INFO ohs19 odoo.registry: module auth_passkey: creating or updating database tables 
+2026-11-22 06:27:38,163 6334 INFO ohs19 odoo.modules.loading: loading auth_passkey/views/auth_passkey_key_views.xml 
+2026-11-22 06:27:38,181 6334 INFO ohs19 odoo.modules.loading: loading auth_passkey/views/auth_passkey_login_templates.xml 
+2026-11-22 06:27:38,191 6334 INFO ohs19 odoo.modules.loading: loading auth_passkey/views/res_users_identitycheck_views.xml 
+2026-11-22 06:27:38,198 6334 INFO ohs19 odoo.modules.loading: loading auth_passkey/views/res_users_views.xml 
+2026-11-22 06:27:38,214 6334 INFO ohs19 odoo.modules.loading: loading auth_passkey/security/ir.model.access.csv 
+2026-11-22 06:27:38,221 6334 INFO ohs19 odoo.modules.loading: loading auth_passkey/security/security.xml 
+2026-11-22 06:27:38,244 6334 INFO ohs19 odoo.modules.loading: Module auth_passkey loaded in 0.22s, 218 queries (+218 other) 
+2026-11-22 06:27:38,244 6334 INFO ohs19 odoo.modules.loading: Loading module html_editor (12/14) 
+2026-11-22 06:27:38,677 6334 INFO ohs19 odoo.registry: module html_editor: creating or updating database tables 
+2026-11-22 06:27:39,002 6334 INFO ohs19 odoo.modules.loading: loading html_editor/security/ir.model.access.csv 
+2026-11-22 06:27:39,015 6334 INFO ohs19 odoo.modules.loading: Module html_editor loaded in 0.77s, 1034 queries (+1034 other) 
+2026-11-22 06:27:39,015 6334 INFO ohs19 odoo.modules.loading: Loading module iap (13/14) 
+2026-11-22 06:27:39,018 6334 INFO ohs19 odoo.registry: module iap: creating or updating database tables 
+2026-11-22 06:27:39,064 6334 INFO ohs19 odoo.modules.loading: loading iap/data/services.xml 
+2026-11-22 06:27:39,067 6334 INFO ohs19 odoo.modules.loading: loading iap/security/ir.model.access.csv 
+2026-11-22 06:27:39,074 6334 INFO ohs19 odoo.modules.loading: loading iap/security/ir_rule.xml 
+2026-11-22 06:27:39,080 6334 INFO ohs19 odoo.modules.loading: loading iap/views/iap_views.xml 
+2026-11-22 06:27:39,101 6334 INFO ohs19 odoo.modules.loading: loading iap/views/res_config_settings.xml 
+2026-11-22 06:27:39,119 6334 INFO ohs19 odoo.modules.loading: Module iap loaded in 0.10s, 185 queries (+185 other) 
+2026-11-22 06:27:39,119 6334 INFO ohs19 odoo.modules.loading: Loading module web_unsplash (14/14) 
+2026-11-22 06:27:39,129 6334 INFO ohs19 odoo.registry: module web_unsplash: creating or updating database tables 
+2026-11-22 06:27:39,153 6334 INFO ohs19 odoo.modules.loading: loading web_unsplash/views/res_config_settings_view.xml 
+2026-11-22 06:27:39,176 6334 INFO ohs19 odoo.modules.loading: Module web_unsplash loaded in 0.06s, 91 queries (+91 other) 
+2026-11-22 06:27:39,176 6334 INFO ohs19 odoo.modules.loading: 14 modules loaded in 2.70s, 4678 queries (+4678 extra) 
+2026-11-22 06:27:39,363 6334 INFO ohs19 odoo.modules.loading: Modules loaded. 
+2026-11-22 06:27:39,366 6334 INFO ohs19 odoo.registry: Registry changed, signaling through the database 
+2026-11-22 06:27:39,367 6334 INFO ohs19 odoo.registry: Registry loaded in 9.672s 
+2026-11-22 06:27:39,367 6334 INFO ohs19 odoo.service.server: Initiating shutdown 
+2026-11-22 06:27:39,367 6334 INFO ohs19 odoo.service.server: Hit CTRL-C again or send a second signal to force the shutdown. 
+2026-11-22 06:27:39,367 6334 INFO ohs19 odoo.sql_db: ConnectionPool(read/write;used=0/count=0/max=64): Closed 1 connections  

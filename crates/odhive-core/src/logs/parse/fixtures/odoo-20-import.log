@@ -1,0 +1,44 @@
+2026-11-22 06:28:03,043 6413 INFO ? odoo: Odoo version 20.0
+2026-11-22 06:28:03,043 6413 INFO ? odoo: addons paths: _NamespacePath(['/home/dev/OdHive/sources/odoo-20.0/odoo/addons', '/home/dev/.local/share/Odoo/addons/20.0', '/home/dev/OdHive/sources/odoo-20.0/addons', '/home/dev/work/addons'])
+2026-11-22 06:28:03,043 6413 INFO ? odoo: database: odoo@127.0.0.1:25432
+2026-11-22 06:28:03,394 6413 INFO ohs20 odoo.modules.loading: loading 1 modules...
+2026-11-22 06:28:03,398 6413 INFO ohs20 odoo.modules.loading: 1 modules loaded in 0.00s, 0 queries (+0 extra)
+2026-11-22 06:28:03,421 6413 INFO ohs20 odoo.modules.loading: updating modules list
+2026-11-22 06:28:03,422 6413 INFO ohs20 odoo.addons.base.models.ir_module: ALLOW access to module.update_list on [] to user __system__ #1 via n/a
+2026-11-22 06:28:03,549 6413 WARNING ohs20 odoo.modules.module: Missing `author` key in manifest for 'brk_import', defaulting to ''
+2026-11-22 06:28:03,549 6413 WARNING ohs20 odoo.modules.module: Missing `author` key in manifest for 'brk_import', defaulting to ''
+2026-11-22 06:28:03,550 6413 WARNING ohs20 odoo.modules.module: Missing `author` key in manifest for 'brk_view', defaulting to ''
+2026-11-22 06:28:03,550 6413 WARNING ohs20 odoo.modules.module: Missing `author` key in manifest for 'brk_view', defaulting to ''
+2026-11-22 06:28:03,926 6413 INFO ohs20 odoo.addons.base.models.ir_module: ALLOW access to module.button_install on ['Broken import'] to user __system__ #1 via n/a
+2026-11-22 06:28:03,962 6413 INFO ohs20 odoo.modules.loading: loading 17 modules...
+2026-11-22 06:28:04,073 6413 WARNING ohs20 odoo.addons.mail.controllers.attachment: markdown2 is not installed, markdown will not be rendered
+2026-11-22 06:28:04,081 6413 INFO ohs20 odoo.modules.loading: Loading module brk_import (17/17)
+2026-11-22 06:28:04,082 6413 CRITICAL ohs20 odoo.modules.module: Couldn't load module brk_import
+2026-11-22 06:28:04,083 6413 WARNING ohs20 odoo.modules.loading: Transient module states were reset
+2026-11-22 06:28:04,084 6413 ERROR ohs20 odoo.registry: Failed to load registry
+2026-11-22 06:28:04,084 6413 CRITICAL ohs20 odoo.service.server: Failed to initialize database `ohs20`.
+Traceback (most recent call last):
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/service/server.py", line 1525, in preload_registries
+    registry = Registry.new(dbname, update_module=update_module, install_modules=config['init'], upgrade_modules=config['update'], reinit_modules=config['reinit'])
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/tools/func.py", line 67, in locked
+    return func(inst, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/orm/registry.py", line 239, in new
+    contextvars.Context().run(
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/modules/loading.py", line 449, in load_modules
+    load_module_graph(
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/modules/loading.py", line 173, in load_module_graph
+    load_openerp_module(package.name)
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/modules/module.py", line 541, in load_openerp_module
+    __import__(qualname)
+  File "/home/dev/work/addons/brk_import/__init__.py", line 1, in <module>
+    from . import models
+  File "/home/dev/work/addons/brk_import/models.py", line 1, in <module>
+    import ldap_missing_pkg  # noqa
+    ^^^^^^^^^^^^^^^^^^^^^^^
+ModuleNotFoundError: No module named 'ldap_missing_pkg'
+2026-11-22 06:28:04,091 6413 INFO ohs20 odoo.service.server.ThreadedServer: Initiating shutdown
+2026-11-22 06:28:04,092 6413 INFO ohs20 odoo.service.server.ThreadedServer: Hit CTRL-C again or send a second signal to force the shutdown.
+2026-11-22 06:28:04,092 6413 INFO ohs20 odoo.addons.bus.websocket: Disconnecting 0 websockets
+2026-11-22 06:28:04,197 6413 INFO ohs20 odoo.sql_db: ConnectionPool(read/write;used=0/count=0/max=64): Closed 1 connections 

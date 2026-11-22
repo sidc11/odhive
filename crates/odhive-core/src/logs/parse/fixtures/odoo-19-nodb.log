@@ -1,0 +1,34 @@
+2026-11-22 06:28:35,383 6476 INFO ? odoo: Odoo version 19.0 
+2026-11-22 06:28:35,383 6476 INFO ? odoo: addons paths: _NamespacePath(['/home/dev/OdHive/sources/odoo-19.0/odoo/addons', '/home/dev/.local/share/Odoo/addons/19.0', '/home/dev/OdHive/sources/odoo-19.0/addons']) 
+2026-11-22 06:28:35,383 6476 INFO ? odoo: database: default@127.0.0.1:25499 
+2026-11-22 06:28:35,383 6476 INFO ? odoo.sql_db: Connection to the database failed 
+Traceback (most recent call last):
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo-bin", line 6, in <module>
+    odoo.cli.main()
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/cli/command.py", line 133, in main
+    command().run(args)
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/cli/server.py", line 127, in run
+    main(args)
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/cli/server.py", line 104, in main
+    db._create_empty_database(db_name)
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/service/db.py", line 132, in _create_empty_database
+    with closing(db.cursor()) as cr:
+                 ^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/sql_db.py", line 769, in cursor
+    return Cursor(self.__pool, self.__dbname, self.__dsn)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/sql_db.py", line 365, in __init__
+    self._cnx: PsycoConnection = pool.borrow(dsn)
+                                 ^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/tools/func.py", line 88, in locked
+    return func(inst, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/sql_db.py", line 693, in borrow
+    result = psycopg2.connect(
+             ^^^^^^^^^^^^^^^^^
+  File "/home/dev/work/venv19/lib/python3.12/site-packages/psycopg2/__init__.py", line 122, in connect
+    conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+psycopg2.OperationalError: connection to server at "127.0.0.1", port 25499 failed: Connection refused
+	Is the server running on that host and accepting TCP/IP connections?
+

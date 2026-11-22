@@ -1,0 +1,61 @@
+2026-11-22 06:28:04,569 6418 INFO ? odoo: Odoo version 20.0
+2026-11-22 06:28:04,569 6418 INFO ? odoo: addons paths: _NamespacePath(['/home/dev/OdHive/sources/odoo-20.0/odoo/addons', '/home/dev/.local/share/Odoo/addons/20.0', '/home/dev/OdHive/sources/odoo-20.0/addons', '/home/dev/work/addons'])
+2026-11-22 06:28:04,569 6418 INFO ? odoo: database: odoo@127.0.0.1:25432
+2026-11-22 06:28:04,911 6418 INFO ohs20 odoo.modules.loading: loading 1 modules...
+2026-11-22 06:28:04,915 6418 INFO ohs20 odoo.modules.loading: 1 modules loaded in 0.00s, 0 queries (+0 extra)
+2026-11-22 06:28:04,938 6418 INFO ohs20 odoo.modules.loading: updating modules list
+2026-11-22 06:28:04,939 6418 INFO ohs20 odoo.addons.base.models.ir_module: ALLOW access to module.update_list on [] to user __system__ #1 via n/a
+2026-11-22 06:28:05,066 6418 WARNING ohs20 odoo.modules.module: Missing `author` key in manifest for 'brk_import', defaulting to ''
+2026-11-22 06:28:05,066 6418 WARNING ohs20 odoo.modules.module: Missing `author` key in manifest for 'brk_import', defaulting to ''
+2026-11-22 06:28:05,067 6418 WARNING ohs20 odoo.modules.module: Missing `author` key in manifest for 'brk_view', defaulting to ''
+2026-11-22 06:28:05,067 6418 WARNING ohs20 odoo.modules.module: Missing `author` key in manifest for 'brk_view', defaulting to ''
+2026-11-22 06:28:05,445 6418 INFO ohs20 odoo.addons.base.models.ir_module: ALLOW access to module.button_install on ['Broken view'] to user __system__ #1 via n/a
+2026-11-22 06:28:05,482 6418 INFO ohs20 odoo.modules.loading: loading 17 modules...
+2026-11-22 06:28:05,591 6418 WARNING ohs20 odoo.addons.mail.controllers.attachment: markdown2 is not installed, markdown will not be rendered
+2026-11-22 06:28:05,599 6418 INFO ohs20 odoo.modules.loading: Loading module brk_view (17/17)
+2026-11-22 06:28:05,642 6418 INFO ohs20 odoo.modules.loading: loading brk_view/views/bad.xml
+2026-11-22 06:28:05,657 6418 WARNING ohs20 odoo.modules.loading: Transient module states were reset
+2026-11-22 06:28:05,657 6418 ERROR ohs20 odoo.registry: Failed to load registry
+2026-11-22 06:28:05,657 6418 CRITICAL ohs20 odoo.service.server: Failed to initialize database `ohs20`.
+Traceback (most recent call last):
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/service/server.py", line 1525, in preload_registries
+    registry = Registry.new(dbname, update_module=update_module, install_modules=config['init'], upgrade_modules=config['update'], reinit_modules=config['reinit'])
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/tools/func.py", line 67, in locked
+    return func(inst, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/orm/registry.py", line 239, in new
+    contextvars.Context().run(
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/modules/loading.py", line 449, in load_modules
+    load_module_graph(
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/modules/loading.py", line 212, in load_module_graph
+    load_data(env, idref, 'init', kind='data', package=package)
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/modules/loading.py", line 57, in load_data
+    convert_file(env, package.name, filename, idref, mode, noupdate=kind == 'demo')
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/tools/convert.py", line 718, in convert_file
+    convert_xml_import(env, module, fp, idref, mode, noupdate)
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/tools/convert.py", line 817, in convert_xml_import
+    obj.parse(doc.getroot())
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/tools/convert.py", line 688, in parse
+    self._tag_root(de)
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/tools/convert.py", line 641, in _tag_root
+    raise ParseError(msg) from None  # Restart with "--log-handler odoo.tools.convert:DEBUG" for complete traceback
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+odoo.tools.convert.ParseError: while parsing /home/dev/work/addons/brk_view/views/bad.xml:2
+Error while parsing or validating view:
+
+Element '<field name="no_such_field_xyz">' cannot be located in parent view
+
+View error context:
+{'file': '/home/dev/work/addons/brk_view/views/bad.xml',
+ 'line': 1,
+ 'name': 'res.partner.bad',
+ 'view': ir.ui.view(261,),
+ 'view.model': 'res.partner',
+ 'view.parent': ir.ui.view(127,),
+ 'xmlid': ''}
+
+2026-11-22 06:28:05,663 6418 INFO ohs20 odoo.service.server.ThreadedServer: Initiating shutdown
+2026-11-22 06:28:05,663 6418 INFO ohs20 odoo.service.server.ThreadedServer: Hit CTRL-C again or send a second signal to force the shutdown.
+2026-11-22 06:28:05,663 6418 INFO ohs20 odoo.addons.bus.websocket: Disconnecting 0 websockets
+2026-11-22 06:28:05,769 6418 INFO ohs20 odoo.sql_db: ConnectionPool(read/write;used=0/count=0/max=64): Closed 1 connections 

@@ -131,6 +131,33 @@ jobs:
             echo "::endgroup::"
           done
 
+  fuzz:
+    name: Fuzz (log parser)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-fuzz
+      - name: fmt
+        run: cargo fmt --manifest-path fuzz/Cargo.toml --check
+      # rust-toolchain.toml pins stable, so nightly is selected explicitly.
+      # The target is explicit too: the prebuilt cargo-fuzz defaults to musl.
+      - name: fuzz (seeded with captured Odoo logs)
+        run: |
+          mkdir -p fuzz/corpus/log_parser
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu log_parser fuzz/corpus/log_parser \
+            crates/odhive-core/src/logs/parse/fixtures \
+            -- -max_total_time=120 -max_len=65536
+
   cargo-deny:
     name: cargo-deny
     runs-on: ubuntu-latest

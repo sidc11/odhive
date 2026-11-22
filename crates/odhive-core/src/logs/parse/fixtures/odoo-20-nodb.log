@@ -1,0 +1,31 @@
+2026-11-22 06:28:35,650 6488 INFO ? odoo: Odoo version 20.0
+2026-11-22 06:28:35,650 6488 INFO ? odoo: addons paths: _NamespacePath(['/home/dev/OdHive/sources/odoo-20.0/odoo/addons', '/home/dev/.local/share/Odoo/addons/20.0', '/home/dev/OdHive/sources/odoo-20.0/addons'])
+2026-11-22 06:28:35,650 6488 INFO ? odoo: database: default@127.0.0.1:25499
+2026-11-22 06:28:35,651 6488 INFO ? odoo.sql_db: Connection to the database failed
+Traceback (most recent call last):
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo-bin", line 6, in <module>
+    odoo.cli.main()
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/cli/command.py", line 139, in main
+    command().run(args)
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/cli/server.py", line 127, in run
+    main(args)
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/cli/server.py", line 104, in main
+    db._create_empty_database(db_name)
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/modules/db.py", line 344, in _create_empty_database
+    sys_cr = odoo.sql_db.db_connect(db_system_name).cursor()
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/sql_db.py", line 801, in cursor
+    cnx = self.__pool.borrow(self.__dsn)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/tools/func.py", line 67, in locked
+    return func(inst, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-20.0/odoo/sql_db.py", line 714, in borrow
+    result = psycopg2.connect(
+             ^^^^^^^^^^^^^^^^^
+  File "/home/dev/work/venv20/lib/python3.12/site-packages/psycopg2/__init__.py", line 122, in connect
+    conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+psycopg2.OperationalError: connection to server at "127.0.0.1", port 25499 failed: Connection refused
+	Is the server running on that host and accepting TCP/IP connections?
+

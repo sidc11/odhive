@@ -16,3 +16,8 @@ trim_trailing_whitespace = false
 
 [Makefile]
 indent_style = tab
+
+# Captured Odoo output: trailing spaces and tabs are part of the sample.
+[crates/odhive-core/src/logs/parse/fixtures/*.log]
+trim_trailing_whitespace = false
+indent_style = unset

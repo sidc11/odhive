@@ -44,6 +44,15 @@ pnpm test
 pnpm build
 ```
 
+Fuzzing (optional locally, runs in CI; needs nightly and `cargo install cargo-fuzz`):
+
+```sh
+cargo +nightly fuzz run log_parser fuzz/corpus/log_parser \
+  crates/odhive-core/src/logs/parse/fixtures -- -max_total_time=60
+```
+
+Use `mkdir -p fuzz/corpus/log_parser` first; the corpus is not committed.
+
 ## Security rules for contributions
 
 - No `unsafe` code (`#![forbid(unsafe_code)]` in every crate).
