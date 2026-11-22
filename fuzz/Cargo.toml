@@ -1,0 +1,26 @@
+[package]
+name = "odhive-fuzz"
+version = "0.0.0"
+description = "Fuzz targets for OdHive (cargo-fuzz, nightly)"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Kept out of the main workspace: it needs nightly and libFuzzer.
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+odhive-core = { path = "../crates/odhive-core" }
+serde_json = "1.0.154"
+
+[[bin]]
+name = "log_parser"
+path = "fuzz_targets/log_parser.rs"
+test = false
+doc = false
+bench = false
