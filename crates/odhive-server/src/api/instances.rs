@@ -62,7 +62,7 @@ pub struct LogPage {
 }
 
 /// A project's instance, checked to exist.
-fn instance(svc: &Service, name: &str, id: &str) -> ApiResult<PortOwner> {
+pub(super) fn instance(svc: &Service, name: &str, id: &str) -> ApiResult<PortOwner> {
     let (_, project) = svc.project(name)?;
     project.select(&Target {
         project: name.to_owned(),

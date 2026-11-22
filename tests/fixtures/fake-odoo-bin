@@ -21,6 +21,7 @@ Simulation flags (not real Odoo options):
   --exit-after SECONDS           stop by itself after SECONDS (0 = run until signalled)
   --start-delay SECONDS          wait SECONDS before binding the HTTP port (a slow start)
   --odoo-version VERSION         version reported in logs (default: 19.0)
+  --flood N                      after startup, log N INFO lines as fast as possible
 """
 
 import argparse
@@ -95,6 +96,7 @@ def parse_args(argv):
     p.add_argument("--exit-after", type=float, default=0.0)
     p.add_argument("--start-delay", type=float, default=0.0)
     p.add_argument("--odoo-version", default="19.0")
+    p.add_argument("--flood", type=int, default=0)
     args, _unknown = p.parse_known_args(argv)
     return args
 
@@ -172,6 +174,9 @@ def main(argv):
                 log("INFO", "odoo.modules.loading", f"Loading module {mod} (2/42)", db=db)
         log("INFO", "odoo.modules.loading", "42 modules loaded in 0.52s, 0 queries (+0 extra)", db=db)
         log("INFO", "odoo.registry", "Registry loaded in 0.734s", db=db)
+
+    for i in range(args.flood):
+        log("INFO", "odoo.flood", f"flood line {i + 1}", db=db)
 
     if args.simulate == "no-wkhtmltopdf":
         log("INFO", "odoo.addons.base.models.ir_actions_report",

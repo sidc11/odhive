@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import document from './openapi.json'
-import { API_PREFIX, type InstanceInfo, type LogRecord, type Project } from './index'
+import {
+  API_PREFIX,
+  WS_PATH,
+  type ClientMessage,
+  type InstanceInfo,
+  type LogRecord,
+  type Project,
+  type ServerMessage,
+} from './index'
 
 describe('API document', () => {
   it('mounts every route below the API prefix', () => {
@@ -66,9 +74,35 @@ const record: LogRecord = {
   truncated: false,
 }
 
+// WebSocket messages (see crates/odhive-server/tests/ws.rs).
+const subscribe: ClientMessage = { op: 'subscribe_logs', project: 'shop', instance: 'main', tail: 100 }
+
+const frames: ServerMessage[] = [
+  { type: 'hello', version: '0.1.0' },
+  { type: 'subscribed', project: 'shop', instance: 'main', next: 1, running: false },
+  { type: 'logs', project: 'shop', instance: 'main', records: [record], next: 2 },
+  { type: 'gap', project: 'shop', instance: 'main', skipped: 12 },
+  { type: 'reset', project: 'shop', instance: 'main' },
+  {
+    type: 'events',
+    events: [
+      { project: 'shop', instance: 'main', event: 'spawned', pid: 4242, http_port: 19100, gevent_port: 19101, changes: [] },
+      { project: 'shop', instance: 'main', event: 'status', status: { state: 'running', pid: 4242 } },
+    ],
+  },
+  { type: 'snapshot', instances: [running] },
+  { type: 'error', error: 'unknown_project', message: 'no project named "x"' },
+]
+
 describe('API types', () => {
   it('describe what the server sends', () => {
     expect(project.instances[0]?.live?.status.state).toBe('running')
     expect(record.level).toBe('info')
+  })
+
+  it('describe the WebSocket messages', () => {
+    expect(WS_PATH).toBe('/api/v1/ws')
+    expect(subscribe.op).toBe('subscribe_logs')
+    expect(frames.map((f) => f.type)).toContain('logs')
   })
 })

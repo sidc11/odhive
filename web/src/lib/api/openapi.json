@@ -861,10 +861,103 @@
           }
         }
       }
+    },
+    "/api/v1/ws": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Opens the WebSocket. The connection first gets a\n[`ServerMessage::Hello`]; see [`ClientMessage`] and [`ServerMessage`]\nfor the protocol.",
+        "operationId": "websocket",
+        "responses": {
+          "101": {
+            "description": "WebSocket opened; messages are ServerMessage (from the server) and ClientMessage (from the client)"
+          },
+          "400": {
+            "description": "Not a WebSocket upgrade request"
+          },
+          "403": {
+            "description": "Foreign Origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "Action": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Restart the process.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "restart"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Restart the process with `-u <modules>`, so their data is reloaded.",
+            "required": [
+              "modules",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "update"
+                ]
+              },
+              "modules": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Modules to update, sorted."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Only static files changed: reload the page in the browser.",
+            "required": [
+              "modules",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "refresh_browser"
+                ]
+              },
+              "modules": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Modules whose static files changed, sorted."
+              }
+            }
+          }
+        ],
+        "description": "What to do about a batch of changes."
+      },
       "AutofixMode": {
         "type": "string",
         "description": "What happens on `ModuleNotFoundError`.",
@@ -908,6 +1001,126 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "ClientMessage": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Follow the log of one instance. Answered with\n[`ServerMessage::Subscribed`]. Without `from` or `tail` only new\nentries are sent. The instance does not have to run: its entries\narrive once it does.",
+            "required": [
+              "project",
+              "instance",
+              "op"
+            ],
+            "properties": {
+              "from": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "First sequence number wanted, e.g. `next` of a REST log page.",
+                "minimum": 0
+              },
+              "instance": {
+                "type": "string",
+                "description": "Instance id."
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "subscribe_logs"
+                ]
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              },
+              "tail": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Start with up to this many of the newest entries (at most 5000).",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Stop following the log of one instance.",
+            "required": [
+              "project",
+              "instance",
+              "op"
+            ],
+            "properties": {
+              "instance": {
+                "type": "string",
+                "description": "Instance id."
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "unsubscribe_logs"
+                ]
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Receive every instance's events. Answered with a\n[`ServerMessage::Snapshot`].",
+            "required": [
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "subscribe_events"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Stop receiving instance events.",
+            "required": [
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "unsubscribe_events"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A message from the client."
+      },
+      "Command": {
+        "type": "object",
+        "description": "One manager's install command.",
+        "required": [
+          "manager",
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The command, as text."
+          },
+          "manager": {
+            "$ref": "#/components/schemas/PackageManager",
+            "description": "The package manager."
           }
         }
       },
@@ -1022,6 +1235,100 @@
           }
         }
       },
+      "Event": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A process was spawned (first start or restart).",
+            "required": [
+              "pid",
+              "http_port",
+              "gevent_port",
+              "changes",
+              "event"
+            ],
+            "properties": {
+              "changes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PortChange"
+                },
+                "description": "Automatic ports that moved (\"http port 8069 busy → using 8070\").\nOnly reported on the first start."
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "spawned"
+                ]
+              },
+              "gevent_port": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Gevent port.",
+                "minimum": 0
+              },
+              "http_port": {
+                "type": "integer",
+                "format": "int32",
+                "description": "HTTP port.",
+                "minimum": 0
+              },
+              "pid": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Process id.",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "One output line.",
+            "required": [
+              "stream",
+              "line",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "output"
+                ]
+              },
+              "line": {
+                "type": "string",
+                "description": "The line, trimmed, at most 4 KiB."
+              },
+              "stream": {
+                "$ref": "#/components/schemas/Stream",
+                "description": "Where it came from."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The status changed.",
+            "required": [
+              "status",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "status"
+                ]
+              },
+              "status": {
+                "$ref": "#/components/schemas/Status",
+                "description": "New status."
+              }
+            }
+          }
+        ],
+        "description": "Something that happened to a supervised instance."
+      },
       "ExitInfo": {
         "type": "object",
         "description": "How a process ended.",
@@ -1087,6 +1394,76 @@
           }
         }
       },
+      "FixAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The package is installed now, then the instance restarts.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "install"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Waiting for [`super::Manager::confirm_fix`] or\n[`super::Manager::decline_fix`].",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "confirm"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Reported only ([`AutofixMode::Off`]).",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "report"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Nothing will be installed for this start.",
+            "required": [
+              "reason",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "give_up"
+                ]
+              },
+              "reason": {
+                "$ref": "#/components/schemas/GiveUp",
+                "description": "Why."
+              }
+            }
+          }
+        ],
+        "description": "What the auto-fix does about a missing module."
+      },
       "FixInfo": {
         "type": "object",
         "description": "Auto-fix state shown with an instance.",
@@ -1122,6 +1499,73 @@
             ]
           }
         }
+      },
+      "GiveUp": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "[`MAX_ATTEMPTS`] installs were made since the instance was started.",
+            "required": [
+              "max",
+              "reason"
+            ],
+            "properties": {
+              "max": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The limit.",
+                "minimum": 0
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "limit"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The package was already installed for this start and the module is\nstill missing.",
+            "required": [
+              "package",
+              "reason"
+            ],
+            "properties": {
+              "package": {
+                "type": "string",
+                "description": "The package."
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "still_missing"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "No package can be installed for the module.",
+            "required": [
+              "refusal",
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "refused"
+                ]
+              },
+              "refusal": {
+                "$ref": "#/components/schemas/Refusal",
+                "description": "Why."
+              }
+            }
+          }
+        ],
+        "description": "Why the auto-fix stops for this start."
       },
       "HeaderFields": {
         "type": "object",
@@ -1184,6 +1628,65 @@
             "example": "0.1.0"
           }
         }
+      },
+      "Hint": {
+        "type": "object",
+        "description": "What to install for a missing library. Text only: never run by OdHive.",
+        "required": [
+          "library",
+          "commands"
+        ],
+        "properties": {
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The install command for the host's manager, when it has a package."
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Command"
+            },
+            "description": "The install command for each manager that has a package (for\nsystems whose manager is not known, or to show alternatives)."
+          },
+          "library": {
+            "$ref": "#/components/schemas/Library",
+            "description": "What is missing."
+          },
+          "manager": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PackageManager",
+                "description": "The host's package manager, when known."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Extra advice."
+          }
+        }
+      },
+      "InstanceEvent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Event",
+            "description": "From the instance's supervisor (attached instances report their\nstatus changes this way too). Never [`Event::Output`]: output lines\nreach the log topic as parsed entries."
+          },
+          {
+            "$ref": "#/components/schemas/Notice",
+            "description": "From the manager."
+          }
+        ],
+        "description": "One event of one instance."
       },
       "InstanceInfo": {
         "allOf": [
@@ -1350,6 +1853,22 @@
           "critical"
         ]
       },
+      "Library": {
+        "type": "string",
+        "description": "A system library or tool OdHive can recognise as missing.",
+        "enum": [
+          "compiler",
+          "python_headers",
+          "libpq",
+          "ldap",
+          "sasl",
+          "libxml2",
+          "jpeg",
+          "zlib",
+          "ffi",
+          "wkhtmltopdf"
+        ]
+      },
       "Location": {
         "type": "object",
         "description": "A source location named in an entry.",
@@ -1407,6 +1926,19 @@
           }
         }
       },
+      "ManagerEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PortOwner",
+            "description": "The instance."
+          },
+          {
+            "$ref": "#/components/schemas/InstanceEvent",
+            "description": "What happened."
+          }
+        ],
+        "description": "An event, with the instance it belongs to."
+      },
       "NewSource": {
         "type": "object",
         "description": "A source tree to register.",
@@ -1427,6 +1959,377 @@
           }
         },
         "additionalProperties": false
+      },
+      "Notice": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The first process lost the race for its port; the instance is started\nagain on newly allocated ports. A [`Event::Spawned`] follows.",
+            "required": [
+              "http_port",
+              "gevent_port",
+              "exit",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "port_retry"
+                ]
+              },
+              "exit": {
+                "$ref": "#/components/schemas/ExitInfo",
+                "description": "How the process ended."
+              },
+              "gevent_port": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Gevent port that failed.",
+                "minimum": 0
+              },
+              "http_port": {
+                "type": "integer",
+                "format": "int32",
+                "description": "HTTP port that failed.",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An instance of an earlier OdHive was re-attached. It runs without\noutput until it is restarted under supervision.",
+            "required": [
+              "pid",
+              "http_port",
+              "gevent_port",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "attached"
+                ]
+              },
+              "gevent_port": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Gevent port.",
+                "minimum": 0
+              },
+              "http_port": {
+                "type": "integer",
+                "format": "int32",
+                "description": "HTTP port.",
+                "minimum": 0
+              },
+              "pid": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Process id.",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The instance's log file could not be opened or written; its log is\nkept in memory only until it is started again.",
+            "required": [
+              "error",
+              "event"
+            ],
+            "properties": {
+              "error": {
+                "type": "string",
+                "description": "What failed."
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "log_file"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The log reports a missing Python module.",
+            "required": [
+              "module",
+              "action",
+              "event"
+            ],
+            "properties": {
+              "action": {
+                "$ref": "#/components/schemas/FixAction",
+                "description": "What happens next."
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "dependency_missing"
+                ]
+              },
+              "module": {
+                "type": "string",
+                "description": "Top-level import name."
+              },
+              "package": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Package that provides it, when one can be named."
+              },
+              "trust": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Trust",
+                    "description": "Why the package is trusted; `None` = untrusted (or no package)."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The package is being installed into the instance's venv.",
+            "required": [
+              "module",
+              "package",
+              "requirements",
+              "attempt",
+              "max",
+              "event"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Install number since the instance was started (from 1).",
+                "minimum": 0
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "dependency_installing"
+                ]
+              },
+              "max": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Installs allowed per start.",
+                "minimum": 0
+              },
+              "module": {
+                "type": "string",
+                "description": "Missing module."
+              },
+              "package": {
+                "type": "string",
+                "description": "Package."
+              },
+              "requirements": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Requirement"
+                },
+                "description": "What the installer gets."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The package was installed; the instance restarts.",
+            "required": [
+              "package",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "dependency_installed"
+                ]
+              },
+              "package": {
+                "type": "string",
+                "description": "Package."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The install failed; the instance is left as it is.",
+            "required": [
+              "package",
+              "error",
+              "event"
+            ],
+            "properties": {
+              "error": {
+                "type": "string",
+                "description": "Installer error (with its last output lines)."
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "dependency_failed"
+                ]
+              },
+              "hint": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Hint",
+                    "description": "The system library the build was probably missing."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "package": {
+                "type": "string",
+                "description": "Package."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The log reports a missing system library or tool (e.g.\n`wkhtmltopdf`). Reported once per library while the instance's log\nlives; OdHive never installs system packages.",
+            "required": [
+              "hint",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "system_library_missing"
+                ]
+              },
+              "hint": {
+                "$ref": "#/components/schemas/Hint",
+                "description": "What to install, as text."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Smart Reload watches the instance's addons folders.",
+            "required": [
+              "roots",
+              "modules",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "reload_watching"
+                ]
+              },
+              "modules": {
+                "type": "integer",
+                "description": "Modules found in them.",
+                "minimum": 0
+              },
+              "roots": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Watched folders."
+              },
+              "unwatched": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Module folders that link out of their addons folder; changes in\nthem are not seen."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The addons folders could not be watched; Smart Reload is off for this\nstart.",
+            "required": [
+              "error",
+              "event"
+            ],
+            "properties": {
+              "error": {
+                "type": "string",
+                "description": "Why."
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "reload_failed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Files changed: the instance restarts ([`Action::Restart`], with `-u`\nfor [`Action::Update`]) or the browser should reload the page\n([`Action::RefreshBrowser`]).",
+            "required": [
+              "action",
+              "files",
+              "file_count",
+              "event"
+            ],
+            "properties": {
+              "action": {
+                "$ref": "#/components/schemas/Action",
+                "description": "What happens."
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "reload"
+                ]
+              },
+              "file_count": {
+                "type": "integer",
+                "description": "Number of changed files.",
+                "minimum": 0
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Changed files (at most [`crate::reload::MAX_LISTED_FILES`])."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A new module appeared in an addons folder. It is not installed\nautomatically; it needs a restart with `-i <module>` or the Apps menu\n(after \"Update Apps List\").",
+            "required": [
+              "module",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "module_added"
+                ]
+              },
+              "module": {
+                "type": "string",
+                "description": "Module name."
+              }
+            }
+          }
+        ],
+        "description": "Something the manager itself reports, next to the supervisor's events."
       },
       "OdooOption": {
         "allOf": [
@@ -1711,6 +2614,56 @@
         ],
         "description": "Where a requirement came from."
       },
+      "PackageManager": {
+        "type": "string",
+        "description": "A system package manager OdHive can name install commands for.",
+        "enum": [
+          "apt",
+          "pacman",
+          "dnf",
+          "brew"
+        ]
+      },
+      "PortChange": {
+        "type": "object",
+        "description": "An automatic port that moved away from its starting point.",
+        "required": [
+          "kind",
+          "requested",
+          "assigned",
+          "reason"
+        ],
+        "properties": {
+          "assigned": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Port assigned instead.",
+            "minimum": 0
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PortKind",
+            "description": "Which port."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/Unavailable",
+            "description": "Why `requested` was not used."
+          },
+          "requested": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Port tried first.",
+            "minimum": 0
+          }
+        }
+      },
+      "PortKind": {
+        "type": "string",
+        "description": "Which of an instance's ports.",
+        "enum": [
+          "http",
+          "gevent"
+        ]
+      },
       "PortOwner": {
         "type": "object",
         "description": "The OdHive instance a port belongs to.",
@@ -1819,6 +2772,14 @@
         ],
         "description": "An entry with its sequence number."
       },
+      "Refusal": {
+        "type": "string",
+        "description": "Why nothing can be installed for a missing module.",
+        "enum": [
+          "part_of_odoo",
+          "invalid_name"
+        ]
+      },
       "ReloadInfo": {
         "type": "object",
         "description": "Smart Reload state shown with an instance.",
@@ -1890,6 +2851,259 @@
           "introspected",
           "bundled"
         ]
+      },
+      "ServerMessage": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "First message of every connection.",
+            "required": [
+              "version",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "hello"
+                ]
+              },
+              "version": {
+                "type": "string",
+                "description": "OdHive version."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A log subscription is in place.",
+            "required": [
+              "project",
+              "instance",
+              "next",
+              "running",
+              "type"
+            ],
+            "properties": {
+              "instance": {
+                "type": "string",
+                "description": "Instance id."
+              },
+              "next": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Sequence number of the first entry that will be sent.",
+                "minimum": 0
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              },
+              "running": {
+                "type": "boolean",
+                "description": "This service runs the instance (it has a log in memory)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "subscribed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A log subscription ended.",
+            "required": [
+              "project",
+              "instance",
+              "type"
+            ],
+            "properties": {
+              "instance": {
+                "type": "string",
+                "description": "Instance id."
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "unsubscribed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "New entries of one instance's log, in order.",
+            "required": [
+              "project",
+              "instance",
+              "records",
+              "next",
+              "type"
+            ],
+            "properties": {
+              "instance": {
+                "type": "string",
+                "description": "Instance id."
+              },
+              "next": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Sequence number of the next entry.",
+                "minimum": 0
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              },
+              "records": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Record"
+                },
+                "description": "The entries."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "logs"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Entries were dropped from memory before the client got them (the\nlog file still has them).",
+            "required": [
+              "project",
+              "instance",
+              "skipped",
+              "type"
+            ],
+            "properties": {
+              "instance": {
+                "type": "string",
+                "description": "Instance id."
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              },
+              "skipped": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Entries lost.",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "gap"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The instance's log started over (it was stopped and started again\nwith a new log); sequence numbers begin again at 1.",
+            "required": [
+              "project",
+              "instance",
+              "type"
+            ],
+            "properties": {
+              "instance": {
+                "type": "string",
+                "description": "Instance id."
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "reset"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Instance events, oldest first.",
+            "required": [
+              "events",
+              "type"
+            ],
+            "properties": {
+              "events": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ManagerEvent"
+                },
+                "description": "The events."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "events"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Every instance as it is now. Sent on [`ClientMessage::SubscribeEvents`]\nand in place of events the connection could not keep up with.",
+            "required": [
+              "instances",
+              "type"
+            ],
+            "properties": {
+              "instances": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/InstanceInfo"
+                },
+                "description": "The instances."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "snapshot"
+                ]
+              }
+            }
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody",
+                "description": "A client message was refused; the connection stays open."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "error"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A client message was refused; the connection stays open."
+          }
+        ],
+        "description": "A message from the server."
       },
       "SourceEntry": {
         "type": "object",
@@ -2080,6 +3294,14 @@
           }
         }
       },
+      "Stream": {
+        "type": "string",
+        "description": "Output stream a line came from.",
+        "enum": [
+          "stdout",
+          "stderr"
+        ]
+      },
       "Trust": {
         "oneOf": [
           {
@@ -2119,6 +3341,61 @@
           }
         ],
         "description": "Why a package is trusted."
+      },
+      "Unavailable": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Another program is listening on it.",
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "in_use"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Reserved by another OdHive instance.",
+            "required": [
+              "owner",
+              "reason"
+            ],
+            "properties": {
+              "owner": {
+                "$ref": "#/components/schemas/PortOwner",
+                "description": "Reserved by another OdHive instance."
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "reserved_by"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Already taken by the other port of the same instance.",
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "other_port"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Why a port could not be used."
       }
     }
   },

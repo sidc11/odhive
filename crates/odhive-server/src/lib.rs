@@ -11,7 +11,8 @@ use axum::middleware;
 use odhive_core::ports::LoopbackListeners;
 use tracing::info;
 
-pub use service::Service;
+pub use api::ws::WsLimits;
+pub use service::{Service, ServiceOptions};
 
 /// Runtime configuration for the HTTP app.
 #[derive(Debug, Clone)]
@@ -25,6 +26,10 @@ pub fn app(config: AppConfig, service: Service) -> Router {
     let host_guard = security::HostGuard::new(config.port);
     api::router(service)
         .fallback(assets::serve)
+        .layer(middleware::from_fn_with_state(
+            host_guard,
+            security::require_same_origin_upgrade,
+        ))
         .layer(middleware::from_fn(security::security_headers))
         .layer(middleware::from_fn_with_state(
             host_guard,
@@ -45,13 +50,15 @@ pub async fn serve(
         AppConfig {
             port: listeners.port,
         },
-        service,
+        service.clone(),
     );
     info!("OdHive is running at {}", listeners.url());
 
     let (tx, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
         shutdown.await;
+        // WebSockets are not tracked by the graceful shutdown: close them.
+        service.begin_shutdown();
         let _ = tx.send(true);
     });
     let wait = |mut rx: tokio::sync::watch::Receiver<bool>| async move {

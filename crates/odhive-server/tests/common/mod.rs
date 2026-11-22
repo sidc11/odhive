@@ -20,7 +20,7 @@ use odhive_core::pidfile::RunDir;
 use odhive_core::project::{Instance, ProjectConfig};
 use odhive_core::python::find_executable;
 use odhive_core::workspace::bootstrap;
-use odhive_server::{AppConfig, Service, app};
+use odhive_server::{AppConfig, Service, ServiceOptions, app};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -76,22 +76,48 @@ impl Env {
 
     /// A service (with its own manager) and its router.
     pub fn app(&self) -> Api {
+        self.app_with(ManagerOptions::default(), ServiceOptions::default(), PORT)
+    }
+
+    /// Like [`Env::app`] with other options, for an app serving on `port`.
+    pub fn app_with(&self, manager: ManagerOptions, opts: ServiceOptions, port: u16) -> Api {
         let boot = bootstrap(&self.paths).expect("bootstrap");
         let manager = Manager::new(ManagerOptions {
             run_dir: Some(RunDir::new(self.paths.run_dir())),
             stop_timeout: Duration::from_secs(5),
-            ..ManagerOptions::default()
+            ..manager
         });
-        let service = Service::new(self.paths.clone(), boot.workspace, manager);
+        let service = Service::with_options(self.paths.clone(), boot.workspace, manager, opts);
         Api {
-            router: app(AppConfig { port: PORT }, service.clone()),
+            router: app(AppConfig { port }, service.clone()),
             service,
+            host: format!("localhost:{port}"),
         }
+    }
+
+    /// Serves an app with these options on a loopback port; returns it and
+    /// the port.
+    pub async fn serve_with(&self, manager: ManagerOptions, opts: ServiceOptions) -> (Api, u16) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let api = self.app_with(manager, opts, port);
+        let router = api.router.clone();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve");
+        });
+        (api, port)
     }
 
     /// Gives project `name` a venv (a link to python3) and pins the ports of
     /// its one `main` instance.
     pub fn make_runnable(&self, name: &str, http: u16, gevent: u16) {
+        self.make_runnable_with(name, http, gevent, &[]);
+    }
+
+    /// Like [`Env::make_runnable`], with extra `odoo-bin` arguments.
+    pub fn make_runnable_with(&self, name: &str, http: u16, gevent: u16, args: &[&str]) {
         let dir = self.project_dir(name);
         let bin = dir.join(".venv/bin");
         fs::create_dir_all(&bin).expect("mkdir");
@@ -105,6 +131,7 @@ impl Env {
         let mut i = Instance::new("main");
         i.http_port = Some(http);
         i.gevent_port = Some(gevent);
+        i.extra_args = args.iter().map(|&a| a.to_owned()).collect();
         p.instances = vec![i];
         p.save(&dir).expect("save");
     }
@@ -113,6 +140,8 @@ impl Env {
 pub struct Api {
     pub router: Router,
     pub service: Service,
+    /// The `Host` header requests carry.
+    pub host: String,
 }
 
 impl Api {
@@ -132,7 +161,7 @@ impl Api {
         let mut req = Request::builder()
             .method(method)
             .uri(path)
-            .header(header::HOST, HOST)
+            .header(header::HOST, &self.host)
             .header("x-odhive", "1");
         let body = match body {
             Some(v) => {

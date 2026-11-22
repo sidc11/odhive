@@ -75,7 +75,7 @@ pub struct Change {
 }
 
 /// What to do about a batch of changes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Action {
     /// Restart the process.

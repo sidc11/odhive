@@ -70,6 +70,15 @@ impl ApiError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", message)
     }
+
+    /// The JSON body, without the status.
+    #[must_use]
+    pub fn body(&self) -> ErrorBody {
+        ErrorBody {
+            error: self.code.to_owned(),
+            message: self.message.clone(),
+        }
+    }
 }
 
 impl IntoResponse for ApiError {
@@ -77,11 +86,7 @@ impl IntoResponse for ApiError {
         if self.status.is_server_error() {
             tracing::error!(code = self.code, "{}", self.message);
         }
-        let body = ErrorBody {
-            error: self.code.to_owned(),
-            message: self.message,
-        };
-        (self.status, Json(body)).into_response()
+        (self.status, Json(self.body())).into_response()
     }
 }
 

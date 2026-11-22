@@ -27,3 +27,12 @@ export type StopResult = Schemas['StopResult']
 export type Candidate = Schemas['Candidate']
 export type LogPage = Schemas['LogPage']
 export type LogRecord = Schemas['Record']
+
+/** WebSocket of live logs and instance events (below the API prefix). */
+export const WS_PATH = `${API_PREFIX}/ws`
+
+/** What the web UI sends over the WebSocket. */
+export type ClientMessage = Schemas['ClientMessage']
+/** What the server sends over the WebSocket. */
+export type ServerMessage = Schemas['ServerMessage']
+export type ManagerEvent = Schemas['ManagerEvent']
