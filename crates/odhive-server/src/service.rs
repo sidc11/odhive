@@ -43,6 +43,8 @@ struct Inner {
     ws_slots: Arc<Semaphore>,
     /// Turns `true` when the server begins to shut down.
     shutdown: watch::Sender<bool>,
+    /// Turns `true` when a client asked the service to quit.
+    quit: watch::Sender<bool>,
 }
 
 /// Tunables of a [`Service`].
@@ -122,6 +124,7 @@ impl Service {
                 ws_slots: Arc::new(Semaphore::new(opts.ws.max_connections)),
                 ws_limits: opts.ws,
                 shutdown: watch::Sender::new(false),
+                quit: watch::Sender::new(false),
             }),
         }
     }
@@ -131,6 +134,19 @@ impl Service {
     /// resolves.
     pub fn begin_shutdown(&self) {
         self.inner.shutdown.send_replace(true);
+    }
+
+    /// Asks whoever awaits [`Service::quit_requested`] to end the service.
+    pub fn request_quit(&self) {
+        self.inner.quit.send_replace(true);
+    }
+
+    /// Resolves once [`Service::request_quit`] was called (also when it was
+    /// called before).
+    pub async fn quit_requested(&self) {
+        let mut rx = self.inner.quit.subscribe();
+        // The sender lives in `self`, so `wait_for` only ends on `true`.
+        let _ = rx.wait_for(|quit| *quit).await;
     }
 
     /// Cancels the running jobs and waits up to `wait` for them to clean up.

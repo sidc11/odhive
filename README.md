@@ -33,12 +33,23 @@ pnpm --dir web build
 cargo run -p odhive
 ```
 
-Then open <http://localhost:7069>.
+`odhive` starts the OdHive service in the background (one per user) if it
+isn't running and signs your browser in to <http://localhost:7069>. The
+service keeps running when the browser is closed.
+
+```sh
+odhive                  # start the service if needed, open the browser
+odhive --no-browser     # print a one-time sign-in link instead
+odhive serve            # start the service only
+odhive serve --foreground   # run it in this terminal until Ctrl+C
+odhive quit             # stop the service and the instances it runs
+```
 
 ## Command line (preview)
 
-Until the background service lands, `odhive start` runs in the foreground and
-stops its instances on Ctrl+C. The other commands work from any terminal.
+`odhive start` still runs instances in the foreground and stops them on
+Ctrl+C (it moves onto the service soon). The other commands work from any
+terminal.
 
 ```sh
 odhive source add ~/src/odoo                 # or: odhive source clone 19.0

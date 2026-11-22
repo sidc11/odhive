@@ -61,7 +61,7 @@ impl std::fmt::Debug for Auth {
 }
 
 /// A one-time login code.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, ToSchema)]
 pub struct LoginCode {
     /// The code (64 hex characters).
     pub code: String,

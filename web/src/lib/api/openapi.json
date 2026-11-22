@@ -930,6 +930,20 @@
         }
       }
     },
+    "/api/v1/service/quit": {
+      "post": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Ends the service: running jobs are cancelled and the instances it runs\nare stopped, then it exits. Answers before it begins.",
+        "operationId": "quit",
+        "responses": {
+          "202": {
+            "description": "The service is shutting down"
+          }
+        }
+      }
+    },
     "/api/v1/sources": {
       "get": {
         "tags": [

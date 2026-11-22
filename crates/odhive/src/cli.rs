@@ -9,13 +9,18 @@ use odhive_core::version::OdooVersion;
 
 /// Your Odoo servers, one hive.
 ///
-/// Without a command, OdHive serves its web UI on 127.0.0.1.
+/// Without a command, OdHive starts its background service (if it isn't
+/// running) and opens the web UI in your browser.
 #[derive(Debug, Parser)]
 #[command(name = "odhive", version, about)]
 pub struct Cli {
     /// Preferred UI port; the next free port is used if it is busy.
     #[arg(long, default_value_t = DEFAULT_UI_PORT, value_parser = clap::value_parser!(u16).range(1..))]
     pub port: u16,
+
+    /// Print the sign-in link instead of opening the browser.
+    #[arg(long)]
+    pub no_browser: bool,
 
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -39,6 +44,20 @@ pub enum Command {
     Status(StatusArgs),
     /// Show an instance's log.
     Logs(LogsArgs),
+    /// Start the background service that serves the web UI and API.
+    Serve(ServeArgs),
+    /// Stop the background service and the instances it runs.
+    Quit,
+}
+
+#[derive(Debug, Args)]
+pub struct ServeArgs {
+    /// Run in this terminal until Ctrl+C instead of in the background.
+    #[arg(long)]
+    pub foreground: bool,
+    /// Started by the launcher without a terminal (internal).
+    #[arg(long, hide = true, requires = "foreground")]
+    pub detached: bool,
 }
 
 #[derive(Debug, Subcommand)]

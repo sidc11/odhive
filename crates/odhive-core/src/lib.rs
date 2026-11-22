@@ -20,6 +20,7 @@ pub mod python;
 pub mod reload;
 pub mod requirements;
 pub mod schema;
+pub mod service_lock;
 pub mod setup;
 pub mod sources;
 pub mod supervisor;
