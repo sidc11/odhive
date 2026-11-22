@@ -836,11 +836,15 @@ async fn failure_reports_tail_and_build_hint() {
     };
     assert_eq!(status.code(), Some(1));
     assert!(output.ends_with("build failed"), "{output}");
-    assert!(
-        hint.as_deref().is_some_and(|h| h.contains("libpq")),
+    assert_eq!(
+        hint.as_ref().map(|h| h.library),
+        Some(crate::syslib::Library::Libpq),
         "{hint:?}"
     );
-    assert!(err.to_string().contains("libpq"));
+    let hint = hint.as_ref().expect("hint");
+    let text = err.to_string();
+    assert!(text.ends_with(&format!("\nhint: {hint}")), "{text}");
+    assert!(text.contains("PostgreSQL client headers"), "{text}");
 }
 
 #[tokio::test]
@@ -875,16 +879,6 @@ async fn timeout_kills_the_installer_group() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-}
-
-#[test]
-fn hints_cover_common_missing_headers() {
-    assert!(build_hint("fatal error: Python.h: No such file or directory").is_some());
-    assert!(
-        build_hint("Modules/LDAPObject.c:4:10: fatal error: lber.h: No such file or directory")
-            .is_some()
-    );
-    assert!(build_hint("all good").is_none());
 }
 
 /// Installs a real Odoo checkout's requirements into a fresh venv with the

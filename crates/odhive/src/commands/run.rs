@@ -510,8 +510,12 @@ impl Output {
             InstanceEvent::Manager(Notice::DependencyInstalled { package }) => {
                 say(format!("{owner}: installed {package}; restarting"));
             }
-            InstanceEvent::Manager(Notice::DependencyFailed { package, error }) => {
+            // The error ends with the system-library hint, when there is one.
+            InstanceEvent::Manager(Notice::DependencyFailed { package, error, .. }) => {
                 say(format!("{owner}: installing {package} failed: {error}"));
+            }
+            InstanceEvent::Manager(Notice::SystemLibraryMissing { hint }) => {
+                say(format!("{owner}: hint: {hint}"));
             }
         }
     }

@@ -22,6 +22,7 @@ use odhive_core::ports::{AllocOptions, PortOwner};
 use odhive_core::project::{Instance, ProjectConfig};
 use odhive_core::python::find_executable;
 use odhive_core::supervisor::{Event, Status};
+use odhive_core::syslib::Library;
 use rustix::process::{Pid, test_kill_process};
 use tokio::process::{Child, Command};
 
@@ -770,6 +771,41 @@ async fn an_unwritable_log_dir_keeps_the_log_in_memory() {
     assert!(
         m.read_log(&owner("main"), 1, 10)
             .is_some_and(|p| !p.records.is_empty())
+    );
+    m.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_missing_wkhtmltopdf_is_reported_once_with_a_hint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let m = Manager::new(options(28_450));
+    let mut instances = m.subscribe();
+    let mut rx = m.subscribe_logs();
+    m.start(plan(dir.path(), "main", &["--simulate", "no-wkhtmltopdf"]))
+        .await
+        .expect("start");
+    wait_running(&m, "main").await;
+    logs_until(&mut rx, "main", "You need Wkhtmltopdf").await;
+
+    // The restarted process logs it again; the log (and its report) lives on.
+    m.restart(&owner("main")).await.expect("restart");
+    wait_running(&m, "main").await;
+    // The notice is published before its entry reaches the log topic.
+    logs_until(&mut rx, "main", "You need Wkhtmltopdf").await;
+
+    let hints: Vec<_> = drain(&mut instances)
+        .into_iter()
+        .filter_map(|e| match e.event {
+            InstanceEvent::Manager(Notice::SystemLibraryMissing { hint }) => Some(hint),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(hints.len(), 1, "{hints:?}");
+    assert_eq!(hints[0].library, Library::Wkhtmltopdf);
+    assert!(
+        hints[0].to_string().contains("wkhtmltopdf/packaging"),
+        "{}",
+        hints[0]
     );
     m.shutdown().await;
 }

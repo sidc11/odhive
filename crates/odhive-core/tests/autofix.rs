@@ -413,7 +413,7 @@ async fn a_failed_install_leaves_the_instance_crashed() {
     .await;
     assert!(has(&events, |n| matches!(
         n,
-        Notice::DependencyFailed { package, error } if package == "requests" && error.contains("no matching distribution")
+        Notice::DependencyFailed { package, error, hint: None } if package == "requests" && error.contains("no matching distribution")
     )));
     wait_done(&m).await;
     assert_eq!(spawns(&events), 1);
