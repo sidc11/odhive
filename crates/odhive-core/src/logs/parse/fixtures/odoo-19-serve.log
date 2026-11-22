@@ -1,0 +1,68 @@
+2026-11-22 06:27:43,056 6350 INFO ? odoo: Odoo version 19.0 
+2026-11-22 06:27:43,056 6350 INFO ? odoo: addons paths: _NamespacePath(['/home/dev/OdHive/sources/odoo-19.0/odoo/addons', '/home/dev/.local/share/Odoo/addons/19.0', '/home/dev/OdHive/sources/odoo-19.0/addons', '/home/dev/work/addons']) 
+2026-11-22 06:27:43,056 6350 INFO ? odoo: database: odoo@127.0.0.1:25432 
+2026-11-22 06:27:43,294 6350 INFO ? odoo.service.server: HTTP service (werkzeug) running on localhost:28019 
+2026-11-22 06:27:43,304 6350 INFO ohs19 odoo.modules.loading: loading 1 modules... 
+2026-11-22 06:27:43,307 6350 INFO ohs19 odoo.modules.loading: 1 modules loaded in 0.00s, 0 queries (+0 extra) 
+2026-11-22 06:27:43,311 6350 INFO ohs19 odoo.modules.loading: loading 14 modules... 
+2026-11-22 06:27:43,454 6350 INFO ohs19 odoo.modules.loading: 14 modules loaded in 0.14s, 0 queries (+0 extra) 
+2026-11-22 06:27:43,483 6350 INFO ohs19 odoo.modules.loading: Modules loaded. 
+2026-11-22 06:27:43,492 6350 INFO ohs19 odoo.registry: Registry loaded in 0.197s 
+2026-11-22 06:27:50,861 6350 INFO ohs19 odoo.addons.base.models.ir_http: Generating routing map for key None 
+2026-11-22 06:27:51,002 6350 INFO ohs19 werkzeug: 127.0.0.1 - - [22/Nov/2026 06:27:51] "GET /web/login HTTP/1.1" 200 - 52 0.017 0.126
+2026-11-22 06:27:51,012 6350 INFO ohs19 werkzeug: 127.0.0.1 - - [22/Nov/2026 06:27:51] "GET /nope HTTP/1.1" 404 - 3 0.001 0.002
+2026-11-22 06:27:51,019 6350 WARNING ohs19 odoo.addons.rpc.controllers.jsonrpc: The /xmlrpc, /xmlrpc/2 and /jsonrpc endpoints are deprecated in Odoo 19 and scheduled for removal in Odoo 22. Please report the problem to the client making the request.
+Mute this logger: --log-handler odoo.addons.rpc.controllers.jsonrpc:ERROR
+https://www.odoo.com/documentation/latest/developer/reference/external_api.html#migrating-from-xml-rpc-json-rpc 
+2026-11-22 06:27:51,333 6350 ERROR ohs19 odoo.http: Exception during request handling. 
+Traceback (most recent call last):
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/http.py", line 2932, in __call__
+    response = request._serve_db()
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/http.py", line 2411, in _serve_db
+    raise self._update_served_exception(exc)
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/http.py", line 2409, in _serve_db
+    return service_model.retrying(serve_func, env=self.env)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/service/model.py", line 188, in retrying
+    result = func()
+             ^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/http.py", line 2459, in _serve_ir_http
+    response = self.dispatcher.dispatch(rule.endpoint, args)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/http.py", line 2674, in dispatch
+    result = self.request.registry['ir.http']._dispatch(endpoint)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/addons/base/models/ir_http.py", line 353, in _dispatch
+    result = endpoint(**request.params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/http.py", line 837, in route_wrapper
+    result = endpoint(self, *args, **params_ok)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/addons/rpc/controllers/jsonrpc.py", line 16, in jsonrpc
+    return dispatch_rpc(service, method, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/http.py", line 448, in dispatch_rpc
+    return dispatch(method, params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/service/model.py", line 133, in dispatch
+    res = execute_cr(cr, uid, model, method_, args, kw)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/service/model.py", line 150, in execute_cr
+    result = retrying(partial(call_kw, recs, method, args, kw), env)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/service/model.py", line 188, in retrying
+    result = func()
+             ^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/service/model.py", line 79, in call_kw
+    method = get_public_method(model, name)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/OdHive/sources/odoo-19.0/odoo/service/model.py", line 60, in get_public_method
+    raise AttributeError(f"The method '{model._name}.{name}' does not exist")  # noqa: TRY004
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: The method 'res.partner.nofn' does not exist
+2026-11-22 06:27:51,334 6350 INFO ohs19 werkzeug: 127.0.0.1 - - [22/Nov/2026 06:27:51] "POST /jsonrpc#res.partner.nofn HTTP/1.1" 200 - 6 0.002 0.314
+2026-11-22 06:27:51,335 6350 INFO ohs19 odoo.service.server: Initiating shutdown 
+2026-11-22 06:27:51,335 6350 INFO ohs19 odoo.service.server: Hit CTRL-C again or send a second signal to force the shutdown. 
+2026-11-22 06:27:51,519 6350 INFO ohs19 odoo.sql_db: ConnectionPool(read/write;used=0/count=0/max=64): Closed 3 connections  
+2026-11-22 06:27:51,520 6350 INFO ? odoo.service.server: cron0 max age (0s) reached, releasing connection. 

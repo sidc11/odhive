@@ -8,6 +8,8 @@
 //!
 //! Files are created `0600` in a `0700` folder and are never opened through a
 //! symlink.
+//!
+//! [`parse`] turns the lines into structured entries.
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -16,6 +18,8 @@ use std::path::{Path, PathBuf};
 
 use crate::fsutil::{DIR_MODE, FILE_MODE};
 use crate::names;
+
+pub mod parse;
 
 #[cfg(test)]
 mod tests;
