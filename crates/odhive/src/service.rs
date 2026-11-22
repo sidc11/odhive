@@ -23,6 +23,7 @@ use odhive_server::Service;
 use odhive_server::auth::LoginCode;
 use tokio::signal::unix::{SignalKind, signal};
 
+use crate::autostart;
 use crate::client::Client;
 
 /// How long running jobs get to clean up when the service ends.
@@ -58,7 +59,13 @@ pub async fn run(port: u16, mode: Mode) -> anyhow::Result<ExitCode> {
         Acquired::Locked(lock) => lock,
         Acquired::Running(state) => {
             eprintln!("{}", already_running(state.as_ref()));
-            return Ok(ExitCode::FAILURE);
+            // Detached, the service is wanted and it runs: that is success,
+            // and service managers must not restart this one over and over.
+            return Ok(if mode == Mode::Detached {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            });
         }
     };
     let boot = bootstrap(&paths).context("could not prepare the OdHive workspace")?;
@@ -189,7 +196,7 @@ pub async fn start(port: u16) -> anyhow::Result<ExitCode> {
         eprintln!("{}", already_running(state.as_ref()));
         return Ok(ExitCode::FAILURE);
     }
-    let up = launch(&paths, port).await?;
+    let up = start_service(&paths, port).await?;
     eprintln!(
         "OdHive is running at http://localhost:{} (pid {}); `odhive quit` stops it",
         up.state.port, up.state.pid
@@ -203,7 +210,7 @@ pub async fn open(port: u16, browser: bool) -> anyhow::Result<ExitCode> {
     let paths = AppPaths::discover()?;
     let up = match service_lock::probe(&paths.data_dir)? {
         None => {
-            let up = launch(&paths, port).await?;
+            let up = start_service(&paths, port).await?;
             eprintln!(
                 "Started OdHive in the background (pid {}); `odhive quit` stops it",
                 up.state.pid
@@ -272,6 +279,28 @@ pub async fn quit() -> anyhow::Result<ExitCode> {
 struct Up {
     state: ServiceState,
     client: Client,
+}
+
+/// Starts the service: through the service manager when `odhive service
+/// install` registered it there (it then owns the process and its port),
+/// else by spawning it.
+async fn start_service(paths: &AppPaths, port: u16) -> anyhow::Result<Up> {
+    if autostart::installed(paths) {
+        match autostart::start_installed().await {
+            Ok(()) => {
+                return wait_ready(paths, None)
+                    .await
+                    .with_context(|| format!("see {}", autostart::log_hint(paths)));
+            }
+            Err(e) => eprintln!("note: {e:#}; starting OdHive directly"),
+        }
+    }
+    launch(paths, port).await
+}
+
+/// Waits until a service started elsewhere (by the service manager) answers.
+pub async fn wait_started(paths: &AppPaths) -> anyhow::Result<ServiceState> {
+    Ok(wait_ready(paths, None).await?.state)
 }
 
 /// Starts `odhive serve --foreground --detached` in its own process group,

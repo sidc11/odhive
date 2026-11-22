@@ -1,6 +1,7 @@
 //! `odhive` — the daily driver for Odoo developers.
 #![forbid(unsafe_code)]
 
+mod autostart;
 mod cli;
 mod client;
 mod commands;
@@ -12,7 +13,7 @@ use clap::Parser;
 use odhive_core::platform::{effective_uid, ensure_not_root};
 use tracing_subscriber::EnvFilter;
 
-use crate::cli::{Cli, Command};
+use crate::cli::{Cli, Command, ServiceCommand};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<ExitCode> {
@@ -42,6 +43,8 @@ async fn main() -> anyhow::Result<ExitCode> {
         }
         Some(Command::Serve(_)) => service::start(cli.port).await,
         Some(Command::Quit) => service::quit().await,
+        Some(Command::Service(ServiceCommand::Install)) => autostart::install(cli.port).await,
+        Some(Command::Service(ServiceCommand::Uninstall)) => autostart::uninstall().await,
         Some(command) => commands::dispatch(command).await,
     }
 }
@@ -81,6 +84,14 @@ mod tests {
         assert_eq!(cli.port, 7070);
         assert!(Cli::try_parse_from(["odhive", "serve", "--detached"]).is_err());
         assert!(Cli::try_parse_from(["odhive", "quit"]).is_ok());
+        let cli =
+            Cli::try_parse_from(["odhive", "--port", "7070", "service", "install"]).expect("parse");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Service(ServiceCommand::Install))
+        ));
+        assert!(Cli::try_parse_from(["odhive", "service", "uninstall"]).is_ok());
+        assert!(Cli::try_parse_from(["odhive", "service"]).is_err());
     }
 
     #[test]
