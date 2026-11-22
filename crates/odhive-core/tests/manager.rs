@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use odhive_core::events::{BusOptions, Delivery, LogEvent, Subscription};
+use odhive_core::logs::{self, LogSettings};
 use odhive_core::manager::{
     InstanceEvent, InstancePlan, Manager, ManagerError, ManagerEvent, ManagerOptions, Notice,
     Recovery, StopOutcome,
@@ -22,7 +24,6 @@ use odhive_core::python::find_executable;
 use odhive_core::supervisor::{Event, Status};
 use rustix::process::{Pid, test_kill_process};
 use tokio::process::{Child, Command};
-use tokio::sync::broadcast;
 
 const WAIT: Duration = Duration::from_secs(20);
 
@@ -103,24 +104,37 @@ async fn eventually(check: impl Fn() -> bool, what: &str) {
         .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
 }
 
-fn drain(rx: &mut broadcast::Receiver<ManagerEvent>) -> Vec<ManagerEvent> {
-    let mut out = Vec::new();
-    while let Ok(e) = rx.try_recv() {
-        out.push(e);
-    }
-    out
+fn drain<T: Clone>(rx: &mut Subscription<T>) -> Vec<T> {
+    rx.drain()
 }
 
-fn output_of(events: &[ManagerEvent], id: &str) -> String {
+fn output_of(events: &[LogEvent], id: &str) -> String {
     events
         .iter()
         .filter(|e| e.owner.instance == id)
-        .filter_map(|e| match &e.event {
-            InstanceEvent::Supervisor(Event::Output { line, .. }) => Some(line.as_str()),
-            _ => None,
-        })
+        .map(|e| e.record.entry.to_string())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Collects log events until `id`'s output contains `needle`.
+async fn logs_until(rx: &mut Subscription<LogEvent>, id: &str, needle: &str) -> Vec<LogEvent> {
+    let mut events = Vec::new();
+    let found = tokio::time::timeout(WAIT, async {
+        while !output_of(&events, id).contains(needle) {
+            match rx.recv().await.expect("bus open") {
+                Delivery::Event(e) => events.push(e),
+                Delivery::Lagged { missed } => panic!("lagged by {missed}"),
+            }
+        }
+    })
+    .await;
+    assert!(
+        found.is_ok(),
+        "no {needle:?} from {id}:\n{}",
+        output_of(&events, id)
+    );
+    events
 }
 
 fn spawned(events: &[ManagerEvent]) -> usize {
@@ -150,7 +164,7 @@ fn alive(pid: u32) -> bool {
 async fn instances_of_a_project_run_with_their_own_ports_db_and_args() {
     let dir = tempfile::tempdir().expect("tempdir");
     let m = Manager::new(options(27_000));
-    let mut rx = m.subscribe();
+    let mut rx = m.subscribe_logs();
     let p = project();
     let main = m
         .start(plan_for(&p, dir.path(), "main"))
@@ -192,7 +206,7 @@ async fn instances_of_a_project_run_with_their_own_ports_db_and_args() {
         while !(output_of(&events, "main").contains("odoo.registry")
             && output_of(&events, "test").contains("odoo.registry"))
         {
-            events.push(rx.recv().await.expect("event"));
+            events.extend(rx.next_event().await);
         }
     })
     .await;
@@ -362,7 +376,7 @@ async fn pinned_ports_are_not_retried() {
 async fn restart_keeps_ports_and_replace_applies_new_settings() {
     let dir = tempfile::tempdir().expect("tempdir");
     let m = Manager::new(options(28_600));
-    let mut rx = m.subscribe();
+    let mut rx = m.subscribe_logs();
     let first = m.start(plan(dir.path(), "main", &[])).await.expect("start");
     let pid = wait_running(&m, "main").await;
 
@@ -381,16 +395,7 @@ async fn restart_keeps_ports_and_replace_applies_new_settings() {
     let newest = wait_running(&m, "main").await;
     assert_ne!(newest, new_pid);
     assert!(!alive(new_pid));
-    eventually(
-        || {
-            m.get(&owner("main"))
-                .is_some_and(|i| matches!(i.status, Status::Running { .. }))
-        },
-        "running",
-    )
-    .await;
-    let out = output_of(&drain(&mut rx), "main");
-    assert!(out.contains("Odoo version 20.0"), "{out}");
+    logs_until(&mut rx, "main", "Odoo version 20.0").await;
     m.shutdown().await;
     assert!(m.registry().reserved().is_empty());
 }
@@ -567,7 +572,7 @@ async fn replace_takes_an_attached_instance_under_supervision() {
     let (m, run) = recovering_manager(dir.path(), 29_400);
     let (mut child, record) = orphan(&run, 29_495, &[]).await;
     attached_pid(&m.recover().expect("recover"));
-    let mut rx = m.subscribe();
+    let mut rx = m.subscribe_logs();
 
     let info = m
         .replace(plan(dir.path(), "main", &[]))
@@ -581,20 +586,190 @@ async fn replace_takes_an_attached_instance_under_supervision() {
     assert_eq!(new_record.process.pid, pid);
 
     // Supervised again: its output is captured.
-    let line = tokio::time::timeout(WAIT, async {
-        loop {
-            if let Ok(ManagerEvent {
-                event: InstanceEvent::Supervisor(Event::Output { line, .. }),
-                ..
-            }) = rx.recv().await
-            {
-                break line;
-            }
-        }
-    })
-    .await
-    .expect("output in time");
-    assert!(!line.is_empty());
+    logs_until(&mut rx, "main", "Odoo version").await;
     m.shutdown().await;
     assert!(run.read(&owner("main")).expect("read").is_none());
+}
+
+fn log_file(dir: &Path, id: &str) -> String {
+    let path = logs::log_path(&dir.join(logs::LOGS_DIR), id).expect("path");
+    std::fs::read_to_string(path).expect("log file")
+}
+
+#[tokio::test]
+async fn output_goes_to_the_log_buffer_file_and_bus() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let m = Manager::new(options(28_000));
+    let mut rx = m.subscribe_logs();
+    m.start(plan(dir.path(), "main", &["--simulate", "traceback"]))
+        .await
+        .expect("start");
+
+    // The traceback is the last output: it is completed once output pauses.
+    let events = logs_until(&mut rx, "main", "ValueError").await;
+    let tb = events.last().expect("traceback entry");
+    let entry = &tb.record.entry;
+    assert_eq!(entry.summary(), "Exception during request handling.");
+    assert_eq!(
+        entry.exceptions,
+        ["ValueError: Expected singleton: res.partner(1, 2)"]
+    );
+    assert!(
+        entry
+            .locations
+            .iter()
+            .any(|l| l.path.ends_with("models/sale_order.py") && l.line == 57)
+    );
+
+    // The bus delivered what the buffer holds, in order, from seq 1.
+    let seqs: Vec<u64> = events.iter().map(|e| e.record.seq).collect();
+    assert_eq!(seqs, (1..=seqs.len() as u64).collect::<Vec<_>>());
+    let page = m.read_log(&owner("main"), 1, 10_000).expect("log");
+    assert_eq!(page.skipped, 0);
+    assert_eq!(page.records.len(), events.len());
+    assert!(
+        page.records
+            .iter()
+            .zip(&events)
+            .all(|(a, b)| std::sync::Arc::ptr_eq(a, &b.record))
+    );
+    assert!(
+        page.records[0]
+            .entry
+            .message
+            .starts_with("----- odhive: started pid")
+    );
+    assert_eq!(
+        m.tail_log(&owner("main"), 1).expect("log")[0].seq,
+        *seqs.last().expect("seq")
+    );
+    assert_eq!(m.log_next_seq(&owner("main")), Some(seqs.len() as u64 + 1));
+
+    let file = log_file(dir.path(), "main");
+    assert!(file.starts_with("----- odhive: started pid"), "{file}");
+    assert!(
+        file.contains("Traceback (most recent call last):"),
+        "{file}"
+    );
+    assert!(file.contains("ValueError: Expected singleton"), "{file}");
+
+    m.shutdown().await;
+    assert!(
+        m.read_log(&owner("main"), 1, 10).is_none(),
+        "gone once stopped"
+    );
+}
+
+#[tokio::test]
+async fn the_log_survives_restarts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let m = Manager::new(options(28_100));
+    let mut rx = m.subscribe_logs();
+    m.start(plan(dir.path(), "main", &[])).await.expect("start");
+    logs_until(&mut rx, "main", "odoo.registry").await;
+    let first_run = m.log_next_seq(&owner("main")).expect("log");
+
+    m.restart(&owner("main")).await.expect("restart");
+    wait_running(&m, "main").await;
+    let events = logs_until(&mut rx, "main", "odoo.registry").await;
+    assert!(events.iter().all(|e| e.record.seq >= first_run));
+
+    let page = m.read_log(&owner("main"), 1, 10_000).expect("log");
+    let markers = page
+        .records
+        .iter()
+        .filter(|r| r.entry.message.starts_with("----- odhive: started pid"))
+        .count();
+    assert_eq!(markers, 2, "one buffer across both runs");
+    let file = log_file(dir.path(), "main");
+    assert_eq!(file.matches("----- odhive: started pid").count(), 2);
+    m.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_lagging_log_subscriber_catches_up_from_the_buffer() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let m = Manager::new(ManagerOptions {
+        bus: BusOptions {
+            log_capacity: 2,
+            ..BusOptions::default()
+        },
+        ..options(28_200)
+    });
+    let mut slow = m.subscribe_logs();
+    let mut instances = m.subscribe();
+    m.start(plan(dir.path(), "main", &[])).await.expect("start");
+    wait_running(&m, "main").await;
+    eventually(
+        || {
+            m.tail_log(&owner("main"), 1).is_some_and(|t| {
+                t.first()
+                    .is_some_and(|r| r.entry.message.starts_with("Registry"))
+            })
+        },
+        "the registry line",
+    )
+    .await;
+
+    let Some(Delivery::Lagged { missed }) = slow.try_recv().ok() else {
+        panic!("expected a lag notice");
+    };
+    let held: Vec<LogEvent> = slow.drain();
+    assert_eq!(held.len(), 2);
+    let first_held = held[0].record.seq;
+    assert_eq!(missed, first_held - 1);
+
+    // Everything missed is still in the buffer.
+    let page = m
+        .read_log(&owner("main"), 1, first_held as usize - 1)
+        .expect("log");
+    assert_eq!(page.skipped, 0);
+    assert_eq!(page.records.len() as u64, missed);
+    assert_eq!(page.next, first_held);
+
+    // The log flood did not cost the instance topic anything.
+    let events = drain(&mut instances);
+    assert_eq!(instances.missed(), 0);
+    assert!(events.iter().any(|e| matches!(
+        e.event,
+        InstanceEvent::Supervisor(Event::Status {
+            status: Status::Running { .. }
+        })
+    )));
+    assert!(
+        events
+            .iter()
+            .all(|e| !matches!(e.event, InstanceEvent::Supervisor(Event::Output { .. }))),
+        "output lines go to the log topic only"
+    );
+    m.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_unwritable_log_dir_keeps_the_log_in_memory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let not_a_dir = dir.path().join("logs-file");
+    std::fs::write(&not_a_dir, "").expect("write");
+    let m = Manager::new(options(29_000));
+    let mut instances = m.subscribe();
+    let mut rx = m.subscribe_logs();
+    let mut p = plan(dir.path(), "main", &[]);
+    p.logs_dir = Some(not_a_dir.join("sub"));
+    p.log_settings = LogSettings::default();
+    m.start(p).await.expect("start");
+
+    logs_until(&mut rx, "main", "odoo.registry").await;
+    let notices: Vec<_> = drain(&mut instances)
+        .into_iter()
+        .filter_map(|e| match e.event {
+            InstanceEvent::Manager(Notice::LogFile { error }) => Some(error),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(
+        m.read_log(&owner("main"), 1, 10)
+            .is_some_and(|p| !p.records.is_empty())
+    );
+    m.shutdown().await;
 }

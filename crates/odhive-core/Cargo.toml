@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 directories = "6.0.0"
 rustix = { version = "1.1.6", features = ["process", "net", "fs"] }
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.154"
 sysinfo = { version = "0.40.4", default-features = false, features = ["system"] }
 tempfile = "3.27.0"

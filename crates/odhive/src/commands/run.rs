@@ -1,18 +1,19 @@
 //! `odhive start`, `restart` and `stop`.
 //!
 //! Until the background service exists (Milestone 5), `start` runs in the
-//! foreground: it supervises the instances, prints their output, writes it to
-//! `<project>/logs/<instance>.log`, and stops them on Ctrl+C. `stop` works
+//! foreground: it supervises the instances, prints their log entries (the
+//! manager writes them to `<project>/logs/<instance>.log`), and stops them on
+//! Ctrl+C. `stop` works
 //! from any terminal through the PID files: it interrupts the recorded
 //! process, and the supervising `start` sees it exit.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use odhive_core::launch::{self, LoadedProject, Target};
-use odhive_core::logs::{self, LogFile};
+use odhive_core::events::{Delivery, LogEvent};
+use odhive_core::launch::{self, Target};
 use odhive_core::manager::{
     InstanceEvent, Manager, ManagerEvent, ManagerOptions, Notice, Recovery,
 };
@@ -21,7 +22,6 @@ use odhive_core::ports::PortOwner;
 use odhive_core::schema::SchemaOrigin;
 use odhive_core::supervisor::{DEFAULT_STOP_TIMEOUT, Event, ExitInfo, Status};
 use tokio::signal::unix::{Signal, SignalKind, signal};
-use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinSet;
 
 use super::{Ctx, say};
@@ -104,7 +104,8 @@ pub async fn start(ctx: &Ctx, target: &Target, quiet: bool) -> anyhow::Result<Ex
     }
 
     let mut rx = manager.subscribe();
-    let mut out = Output::new(&project, quiet, prepared.plans.len() > 1);
+    let mut log_rx = manager.subscribe_logs();
+    let mut out = Output::new(quiet, prepared.plans.len() > 1);
     let mut ours = Vec::new();
     for plan in prepared.plans {
         let owner = plan.owner.clone();
@@ -126,7 +127,7 @@ pub async fn start(ctx: &Ctx, target: &Target, quiet: bool) -> anyhow::Result<Ex
     let mut stopper = None;
     let mut forced = false;
     loop {
-        if rx.is_empty() && all_done(&manager, &ours) {
+        if rx.is_empty() && log_rx.is_empty() && all_done(&manager, &ours) {
             break;
         }
         tokio::select! {
@@ -141,11 +142,18 @@ pub async fn start(ctx: &Ctx, target: &Target, quiet: bool) -> anyhow::Result<Ex
                 stopper = Some(tokio::spawn(async move { stop_all(&m, &o).await }));
             }
             ev = rx.recv() => match ev {
-                Ok(ev) => out.event(&manager, &ev),
-                Err(RecvError::Lagged(n)) => {
-                    say(format!("warning: {n} events were dropped; the log file misses them too"));
+                Some(Delivery::Event(ev)) => out.event(&manager, &ev),
+                Some(Delivery::Lagged { missed }) => {
+                    say(format!("warning: {missed} instance events were not shown"));
                 }
-                Err(RecvError::Closed) => break,
+                None => break,
+            },
+            ev = log_rx.recv() => match ev {
+                Some(Delivery::Event(ev)) => out.log(&ev),
+                Some(Delivery::Lagged { missed }) => {
+                    say(format!("warning: {missed} log entries were not shown; the log file has them"));
+                }
+                None => break,
             },
             () = tokio::time::sleep(CHECK_EVERY) => {}
         }
@@ -155,7 +163,10 @@ pub async fn start(ctx: &Ctx, target: &Target, quiet: bool) -> anyhow::Result<Ex
         drop(manager);
         return Ok(ExitCode::FAILURE);
     }
-    while let Ok(ev) = rx.try_recv() {
+    for ev in log_rx.drain() {
+        out.log(&ev);
+    }
+    for ev in rx.drain() {
         out.event(&manager, &ev);
     }
     if let Some(s) = stopper {
@@ -266,45 +277,33 @@ fn all_done(manager: &Manager, owners: &[PortOwner]) -> bool {
         .all(|o| manager.get(o).is_none_or(|i| i.status.is_terminal()))
 }
 
-/// Prints events and writes output lines to the log files.
+/// Prints instance events and log entries.
 struct Output {
-    logs_dir: std::path::PathBuf,
-    rotation: logs::Rotation,
     quiet: bool,
     prefix: bool,
-    files: HashMap<PortOwner, Option<LogFile>>,
     failed: bool,
 }
 
 impl Output {
-    fn new(project: &LoadedProject, quiet: bool, prefix: bool) -> Self {
+    fn new(quiet: bool, prefix: bool) -> Self {
         Self {
-            logs_dir: project.logs_dir(),
-            rotation: project.config.logs.rotation(),
             quiet,
             prefix,
-            files: HashMap::new(),
             failed: false,
         }
     }
 
-    fn log(&mut self, owner: &PortOwner, line: &str) {
-        let file = self.files.entry(owner.clone()).or_insert_with(|| {
-            let opened = logs::log_path(&self.logs_dir, &owner.instance)
-                .and_then(|p| LogFile::open(&p, self.rotation));
-            match opened {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    say(format!("warning: {owner}: cannot write its log file: {e}"));
-                    None
-                }
+    fn log(&self, ev: &LogEvent) {
+        if self.quiet {
+            return;
+        }
+        let text = ev.record.entry.to_string();
+        if self.prefix {
+            for line in text.lines() {
+                say(format!("[{}] {line}", ev.owner.instance));
             }
-        });
-        if let Some(f) = file
-            && let Err(e) = f.write_line(line)
-        {
-            say(format!("warning: {owner}: log file write failed: {e}"));
-            *file = None;
+        } else {
+            say(text);
         }
     }
 
@@ -323,18 +322,10 @@ impl Output {
                 say(format!(
                     "{owner}: starting (pid {pid}) on http://localhost:{http_port}"
                 ));
-                self.log(owner, &format!("----- odhive: started pid {pid} -----"));
             }
-            InstanceEvent::Supervisor(Event::Output { line, .. }) => {
-                self.log(owner, line);
-                if !self.quiet {
-                    if self.prefix {
-                        say(format!("[{}] {line}", owner.instance));
-                    } else {
-                        say(line);
-                    }
-                }
-            }
+            // The manager turns output into log entries.
+            InstanceEvent::Supervisor(Event::Output { .. })
+            | InstanceEvent::Manager(Notice::Attached { .. }) => {}
             InstanceEvent::Supervisor(Event::Status { status }) => match status {
                 Status::Running { .. } => {
                     let port = manager.get(owner).and_then(|i| i.http_port);
@@ -364,7 +355,11 @@ impl Output {
                     "{owner}: port {http_port} was taken at the last moment; retrying on other ports"
                 ));
             }
-            InstanceEvent::Manager(Notice::Attached { .. }) => {}
+            InstanceEvent::Manager(Notice::LogFile { error }) => {
+                say(format!(
+                    "warning: {owner}: log file failed ({error}); its log is kept in memory only"
+                ));
+            }
         }
     }
 }

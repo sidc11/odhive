@@ -257,6 +257,26 @@ impl Entry {
     }
 }
 
+/// Odoo's text form, `YYYY-MM-DD HH:MM:SS,mmm PID LEVEL DB LOGGER: message`
+/// (just the message for unformatted text). Continuation lines follow on
+/// their own lines; ANSI colors are not restored.
+impl fmt::Display for Entry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(h) = &self.header {
+            write!(
+                f,
+                "{} {} {} {} {}: ",
+                h.timestamp,
+                h.pid,
+                h.level,
+                h.db.as_deref().unwrap_or("?"),
+                h.logger
+            )?;
+        }
+        f.write_str(&self.message)
+    }
+}
+
 /// Turns log lines into [`Entry`] values, one line at a time.
 ///
 /// An entry is complete once the next record starts, so [`Parser::push`]

@@ -3,6 +3,7 @@
 
 pub mod conf;
 pub mod config;
+pub mod events;
 pub mod fsutil;
 pub mod launch;
 pub mod logs;
