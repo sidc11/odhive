@@ -52,7 +52,7 @@ const MAX_EXCEPTION_BYTES: usize = 1024;
 const TRACEBACK_START: &str = "Traceback (most recent call last):";
 
 /// Severity of a record, in increasing order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
     /// `DEBUG`.
@@ -209,7 +209,7 @@ pub struct Header {
 }
 
 /// A source location named in an entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct Location {
     /// File path as logged (not validated).
     pub path: String,
@@ -219,11 +219,31 @@ pub struct Location {
     pub function: Option<String>,
 }
 
+/// How [`Entry::header`] appears in an entry's JSON (flattened): every
+/// field is present for an Odoo record and absent for unformatted text. For
+/// the OpenAPI document only.
+#[derive(utoipa::ToSchema)]
+#[allow(dead_code)]
+struct HeaderFields {
+    /// When the record was logged (UTC, RFC 3339).
+    #[schema(format = DateTime)]
+    timestamp: Option<String>,
+    /// Process id.
+    pid: Option<u32>,
+    /// Severity.
+    level: Option<Level>,
+    /// Database; `null` for Odoo's `?`.
+    db: Option<String>,
+    /// Python logger name.
+    logger: Option<String>,
+}
+
 /// One log record, possibly spanning several lines.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct Entry {
     /// The record header; `None` for text that is not in Odoo's format.
     #[serde(flatten)]
+    #[schema(value_type = HeaderFields)]
     pub header: Option<Header>,
     /// The message: its first line and every continuation line, joined by
     /// `\n`, without trailing whitespace.

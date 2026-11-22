@@ -163,7 +163,7 @@ impl Trusted {
 }
 
 /// Why a package is trusted.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "source")]
 pub enum Trust {
     /// A requirements file or manifest of the project lists it.
@@ -176,7 +176,7 @@ pub enum Trust {
 }
 
 /// What would be installed for a missing module.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct Candidate {
     /// The missing top-level module.
     pub module: String,

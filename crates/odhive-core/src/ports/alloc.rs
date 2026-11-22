@@ -35,7 +35,7 @@ pub const DEFAULT_GEVENT_PORT: u16 = 8072;
 pub const DEFAULT_SCAN: u16 = 100;
 
 /// The OdHive instance a port belongs to.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, utoipa::ToSchema)]
 pub struct PortOwner {
     /// Project name.
     pub project: String,

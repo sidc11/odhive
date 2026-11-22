@@ -383,7 +383,7 @@ pub struct ManagerEvent {
 }
 
 /// What is known about one instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct InstanceInfo {
     /// The instance.
     #[serde(flatten)]

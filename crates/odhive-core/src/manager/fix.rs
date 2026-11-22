@@ -57,7 +57,7 @@ pub enum FixAction {
 }
 
 /// Auto-fix state shown with an instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct FixInfo {
     /// Mode.
     pub mode: AutofixMode,

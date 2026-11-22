@@ -241,7 +241,7 @@ impl Default for SuperviseOptions {
 }
 
 /// How a process ended.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct ExitInfo {
     /// Exit code, if it exited normally.
     pub code: Option<i32>,
@@ -271,7 +271,7 @@ impl ExitInfo {
 }
 
 /// State of a supervised instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Status {
     /// Spawned; the HTTP port is not accepting connections yet.

@@ -1,13 +1,17 @@
 //! OdHive HTTP server: axum app with the security layer and the embedded web UI.
 #![forbid(unsafe_code)]
 
+pub mod api;
 mod assets;
 pub mod security;
+pub mod service;
 
 use axum::Router;
 use axum::middleware;
 use odhive_core::ports::LoopbackListeners;
 use tracing::info;
+
+pub use service::Service;
 
 /// Runtime configuration for the HTTP app.
 #[derive(Debug, Clone)]
@@ -16,10 +20,10 @@ pub struct AppConfig {
     pub port: u16,
 }
 
-/// Builds the router with every security middleware applied.
-pub fn app(config: AppConfig) -> Router {
+/// Builds the router (API and web UI) with every security middleware applied.
+pub fn app(config: AppConfig, service: Service) -> Router {
     let host_guard = security::HostGuard::new(config.port);
-    Router::new()
+    api::router(service)
         .fallback(assets::serve)
         .layer(middleware::from_fn(security::security_headers))
         .layer(middleware::from_fn_with_state(
@@ -34,11 +38,15 @@ pub fn app(config: AppConfig) -> Router {
 /// Returns an error if a listener fails while serving.
 pub async fn serve(
     listeners: LoopbackListeners,
+    service: Service,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    let router = app(AppConfig {
-        port: listeners.port,
-    });
+    let router = app(
+        AppConfig {
+            port: listeners.port,
+        },
+        service,
+    );
     info!("OdHive is running at {}", listeners.url());
 
     let (tx, rx) = tokio::sync::watch::channel(false);

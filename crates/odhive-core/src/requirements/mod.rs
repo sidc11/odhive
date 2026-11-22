@@ -111,12 +111,13 @@ pub enum RequirementsError {
 }
 
 /// Where a requirement came from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Origin {
     /// A line of a requirements file.
     File {
         /// The file.
+        #[schema(value_type = String)]
         path: PathBuf,
         /// 1-based line number.
         line: usize,
@@ -124,6 +125,7 @@ pub enum Origin {
     /// A module manifest's `external_dependencies['python']`.
     Manifest {
         /// The manifest file.
+        #[schema(value_type = String)]
         path: PathBuf,
         /// Module (directory) name.
         module: String,
