@@ -216,7 +216,7 @@ impl Candidate {
 }
 
 /// Why nothing can be installed for a missing module.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Refusal {
     /// The name is part of Odoo (a missing Odoo module, not a package).
@@ -291,7 +291,7 @@ pub fn decide(mode: AutofixMode, candidate: &Candidate) -> Action {
 }
 
 /// Why the auto-fix stops for this start.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "reason")]
 pub enum GiveUp {
     /// [`MAX_ATTEMPTS`] installs were made since the instance was started.

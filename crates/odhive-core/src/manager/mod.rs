@@ -247,7 +247,7 @@ impl Default for ManagerOptions {
 }
 
 /// Something the manager itself reports, next to the supervisor's events.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Notice {
     /// The first process lost the race for its port; the instance is started
@@ -325,12 +325,14 @@ pub enum Notice {
     /// Smart Reload watches the instance's addons folders.
     ReloadWatching {
         /// Watched folders.
+        #[schema(value_type = Vec<String>)]
         roots: Vec<PathBuf>,
         /// Modules found in them.
         modules: usize,
         /// Module folders that link out of their addons folder; changes in
         /// them are not seen.
         #[serde(skip_serializing_if = "Vec::is_empty")]
+        #[schema(value_type = Vec<String>)]
         unwatched: Vec<PathBuf>,
     },
     /// The addons folders could not be watched; Smart Reload is off for this
@@ -346,6 +348,7 @@ pub enum Notice {
         /// What happens.
         action: Action,
         /// Changed files (at most [`crate::reload::MAX_LISTED_FILES`]).
+        #[schema(value_type = Vec<String>)]
         files: Vec<PathBuf>,
         /// Number of changed files.
         file_count: usize,
@@ -360,7 +363,7 @@ pub enum Notice {
 }
 
 /// One event of one instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum InstanceEvent {
     /// From the instance's supervisor (attached instances report their
@@ -372,7 +375,7 @@ pub enum InstanceEvent {
 }
 
 /// An event, with the instance it belongs to.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct ManagerEvent {
     /// The instance.
     #[serde(flatten)]
@@ -623,6 +626,29 @@ impl Manager {
     #[must_use]
     pub fn read_log(&self, owner: &PortOwner, from: u64, limit: usize) -> Option<Page> {
         Some(self.log_of(owner)?.read_from(from, limit))
+    }
+
+    /// Like [`Manager::read_log`], with the id of the log read. An instance
+    /// gets a new log, whose sequence numbers start again at 1, when it is
+    /// started after a stop or with other log settings; ids are unique
+    /// within the process.
+    #[must_use]
+    pub fn read_log_with_id(
+        &self,
+        owner: &PortOwner,
+        from: u64,
+        limit: usize,
+    ) -> Option<(u64, Page)> {
+        let log = self.log_of(owner)?;
+        Some((log.id(), log.read_from(from, limit)))
+    }
+
+    /// The id of the instance's log (see [`Manager::read_log_with_id`]) and
+    /// the sequence number its next entry gets.
+    #[must_use]
+    pub fn log_position(&self, owner: &PortOwner) -> Option<(u64, u64)> {
+        let log = self.log_of(owner)?;
+        Some((log.id(), log.next_seq()))
     }
 
     /// The last `n` buffered entries of the instance.

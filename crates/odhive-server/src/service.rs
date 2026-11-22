@@ -12,9 +12,10 @@ use odhive_core::pidfile::{self, PidRecord, RecordState, RunDir};
 use odhive_core::ports::PortOwner;
 use odhive_core::supervisor::DEFAULT_STOP_TIMEOUT;
 use odhive_core::workspace::Workspace;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 
 use crate::api::error::{ApiError, ApiResult};
+use crate::api::ws::WsLimits;
 
 /// Shared state of the API. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -29,6 +30,16 @@ struct Inner {
     manager: Manager,
     /// Serializes read-modify-write cycles of the global config.
     config_lock: Mutex<()>,
+    ws_limits: WsLimits,
+    /// Turns `true` when the server begins to shut down.
+    shutdown: watch::Sender<bool>,
+}
+
+/// Tunables of a [`Service`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ServiceOptions {
+    /// Limits of each WebSocket connection.
+    pub ws: WsLimits,
 }
 
 /// An instance this OdHive does not manage that runs according to its PID
@@ -59,14 +70,43 @@ impl Service {
     /// The manager should use `paths.run_dir()` for its PID files.
     #[must_use]
     pub fn new(paths: AppPaths, workspace: Workspace, manager: Manager) -> Self {
+        Self::with_options(paths, workspace, manager, ServiceOptions::default())
+    }
+
+    /// Like [`Service::new`] with non-default `opts`.
+    #[must_use]
+    pub fn with_options(
+        paths: AppPaths,
+        workspace: Workspace,
+        manager: Manager,
+        opts: ServiceOptions,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 paths,
                 workspace,
                 manager,
                 config_lock: Mutex::new(()),
+                ws_limits: opts.ws,
+                shutdown: watch::Sender::new(false),
             }),
         }
+    }
+
+    /// Tells long-lived connections (WebSockets) to close: the server is
+    /// shutting down. [`crate::serve`] calls it when its shutdown future
+    /// resolves.
+    pub fn begin_shutdown(&self) {
+        self.inner.shutdown.send_replace(true);
+    }
+
+    /// Turns `true` once [`Service::begin_shutdown`] was called.
+    pub(crate) fn shutdown_signal(&self) -> watch::Receiver<bool> {
+        self.inner.shutdown.subscribe()
+    }
+
+    pub(crate) fn ws_limits(&self) -> WsLimits {
+        self.inner.ws_limits
     }
 
     /// The instance manager.

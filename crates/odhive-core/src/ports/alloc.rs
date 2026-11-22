@@ -61,7 +61,7 @@ impl fmt::Display for PortOwner {
 }
 
 /// Which of an instance's ports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PortKind {
     /// `--http-port`.
@@ -80,7 +80,7 @@ impl fmt::Display for PortKind {
 }
 
 /// Why a port could not be used.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "reason", content = "owner")]
 pub enum Unavailable {
     /// Another program is listening on it.
@@ -102,7 +102,7 @@ impl fmt::Display for Unavailable {
 }
 
 /// An automatic port that moved away from its starting point.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct PortChange {
     /// Which port.
     pub kind: PortKind,

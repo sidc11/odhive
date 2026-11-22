@@ -39,7 +39,7 @@ pub struct AutoFix {
 }
 
 /// What the auto-fix does about a missing module.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum FixAction {
     /// The package is installed now, then the instance restarts.

@@ -14,6 +14,7 @@
 use std::collections::BTreeSet;
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
@@ -47,8 +48,14 @@ struct State {
     reported: BTreeSet<Library>,
 }
 
+/// Source of [`LogSlot::id`]s.
+static NEXT_LOG_ID: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Debug)]
 pub(super) struct LogSlot {
+    /// Tells this log from an earlier or later one of the same instance
+    /// (whose sequence numbers start over). Unique within the process.
+    id: u64,
     owner: PortOwner,
     target: LogTarget,
     /// Receives the system-library notices.
@@ -85,6 +92,7 @@ impl LogSlot {
         };
         let idle = Arc::new(Notify::new());
         let slot = Arc::new(Self {
+            id: NEXT_LOG_ID.fetch_add(1, Ordering::Relaxed),
             owner,
             target,
             inner,
@@ -100,6 +108,10 @@ impl LogSlot {
         });
         tokio::spawn(flush_when_idle(Arc::downgrade(&slot), idle));
         (slot, error)
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     pub fn target(&self) -> &LogTarget {

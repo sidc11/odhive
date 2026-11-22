@@ -688,6 +688,35 @@ async fn the_log_survives_restarts() {
 }
 
 #[tokio::test]
+async fn a_new_log_after_a_stop_gets_a_new_id() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let m = Manager::new(options(28_750));
+    let mut rx = m.subscribe_logs();
+    m.start(plan(dir.path(), "main", &[])).await.expect("start");
+    logs_until(&mut rx, "main", "odoo.registry").await;
+    let (first, next) = m.log_position(&owner("main")).expect("log");
+    let (id, page) = m.read_log_with_id(&owner("main"), 1, 10_000).expect("log");
+    assert_eq!(id, first);
+    assert_eq!(page.next, next);
+
+    // A restart keeps the log.
+    m.restart(&owner("main")).await.expect("restart");
+    wait_running(&m, "main").await;
+    assert_eq!(m.log_position(&owner("main")).expect("log").0, first);
+
+    // A stop ends it; the next start begins a new one, from seq 1.
+    m.stop(&owner("main")).await.expect("stop");
+    assert!(m.log_position(&owner("main")).is_none());
+    m.start(plan(dir.path(), "main", &[])).await.expect("start");
+    let (second, _) = m.log_position(&owner("main")).expect("log");
+    assert_ne!(second, first);
+    let (id, page) = m.read_log_with_id(&owner("main"), 1, 1).expect("log");
+    assert_eq!(id, second);
+    assert_eq!(page.records[0].seq, 1);
+    m.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_lagging_log_subscriber_catches_up_from_the_buffer() {
     let dir = tempfile::tempdir().expect("tempdir");
     let m = Manager::new(ManagerOptions {

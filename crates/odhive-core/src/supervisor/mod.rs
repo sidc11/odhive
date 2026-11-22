@@ -327,7 +327,7 @@ impl Status {
 }
 
 /// Output stream a line came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Stream {
     /// Standard output.
@@ -337,7 +337,7 @@ pub enum Stream {
 }
 
 /// Something that happened to a supervised instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     /// A process was spawned (first start or restart).

@@ -283,10 +283,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ws": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Opens the WebSocket. The connection first gets a
+         *     [`ServerMessage::Hello`]; see [`ClientMessage`] and [`ServerMessage`]
+         *     for the protocol.
+         */
+        get: operations["websocket"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description What to do about a batch of changes. */
+        Action: {
+            /** @enum {string} */
+            kind: "restart";
+        } | {
+            /** @enum {string} */
+            kind: "update";
+            /** @description Modules to update, sorted. */
+            modules: string[];
+        } | {
+            /** @enum {string} */
+            kind: "refresh_browser";
+            /** @description Modules whose static files changed, sorted. */
+            modules: string[];
+        };
         /**
          * @description What happens on `ModuleNotFoundError`.
          * @enum {string}
@@ -304,6 +340,42 @@ export interface components {
              */
             requirements: components["schemas"]["Requirement"][];
             trust?: components["schemas"]["Trust"] | null;
+        };
+        /** @description A message from the client. */
+        ClientMessage: {
+            /**
+             * Format: int64
+             * @description First sequence number wanted, e.g. `next` of a REST log page.
+             */
+            from?: number | null;
+            /** @description Instance id. */
+            instance: string;
+            /** @enum {string} */
+            op: "subscribe_logs";
+            /** @description Project name. */
+            project: string;
+            /** @description Start with up to this many of the newest entries (at most 5000). */
+            tail?: number | null;
+        } | {
+            /** @description Instance id. */
+            instance: string;
+            /** @enum {string} */
+            op: "unsubscribe_logs";
+            /** @description Project name. */
+            project: string;
+        } | {
+            /** @enum {string} */
+            op: "subscribe_events";
+        } | {
+            /** @enum {string} */
+            op: "unsubscribe_events";
+        };
+        /** @description One manager's install command. */
+        Command: {
+            /** @description The command, as text. */
+            command: string;
+            /** @description The package manager. */
+            manager: components["schemas"]["PackageManager"];
         };
         /** @description A project to create. */
         CreateProject: {
@@ -362,6 +434,43 @@ export interface components {
             /** @description Human-readable explanation. */
             message: string;
         };
+        /** @description Something that happened to a supervised instance. */
+        Event: {
+            /**
+             * @description Automatic ports that moved ("http port 8069 busy → using 8070").
+             *     Only reported on the first start.
+             */
+            changes: components["schemas"]["PortChange"][];
+            /** @enum {string} */
+            event: "spawned";
+            /**
+             * Format: int32
+             * @description Gevent port.
+             */
+            gevent_port: number;
+            /**
+             * Format: int32
+             * @description HTTP port.
+             */
+            http_port: number;
+            /**
+             * Format: int32
+             * @description Process id.
+             */
+            pid: number;
+        } | {
+            /** @enum {string} */
+            event: "output";
+            /** @description The line, trimmed, at most 4 KiB. */
+            line: string;
+            /** @description Where it came from. */
+            stream: components["schemas"]["Stream"];
+        } | {
+            /** @enum {string} */
+            event: "status";
+            /** @description New status. */
+            status: components["schemas"]["Status"];
+        };
         /** @description How a process ended. */
         ExitInfo: {
             /**
@@ -401,6 +510,22 @@ export interface components {
              */
             supervisor?: number | null;
         };
+        /** @description What the auto-fix does about a missing module. */
+        FixAction: {
+            /** @enum {string} */
+            kind: "install";
+        } | {
+            /** @enum {string} */
+            kind: "confirm";
+        } | {
+            /** @enum {string} */
+            kind: "report";
+        } | {
+            /** @enum {string} */
+            kind: "give_up";
+            /** @description Why. */
+            reason: components["schemas"]["GiveUp"];
+        };
         /** @description Auto-fix state shown with an instance. */
         FixInfo: {
             /** @description A missing module is being handled (queued, installing, restarting). */
@@ -413,6 +538,26 @@ export interface components {
             /** @description Mode. */
             mode: components["schemas"]["AutofixMode"];
             pending?: components["schemas"]["Candidate"] | null;
+        };
+        /** @description Why the auto-fix stops for this start. */
+        GiveUp: {
+            /**
+             * Format: int32
+             * @description The limit.
+             */
+            max: number;
+            /** @enum {string} */
+            reason: "limit";
+        } | {
+            /** @description The package. */
+            package: string;
+            /** @enum {string} */
+            reason: "still_missing";
+        } | {
+            /** @enum {string} */
+            reason: "refused";
+            /** @description Why. */
+            refusal: components["schemas"]["Refusal"];
         };
         /**
          * @description How [`Entry::header`] appears in an entry's JSON (flattened): every
@@ -444,6 +589,23 @@ export interface components {
              */
             version: string;
         };
+        /** @description What to install for a missing library. Text only: never run by OdHive. */
+        Hint: {
+            /** @description The install command for the host's manager, when it has a package. */
+            command?: string | null;
+            /**
+             * @description The install command for each manager that has a package (for
+             *     systems whose manager is not known, or to show alternatives).
+             */
+            commands: components["schemas"]["Command"][];
+            /** @description What is missing. */
+            library: components["schemas"]["Library"];
+            manager?: components["schemas"]["PackageManager"] | null;
+            /** @description Extra advice. */
+            note?: string | null;
+        };
+        /** @description One event of one instance. */
+        InstanceEvent: components["schemas"]["Event"] | components["schemas"]["Notice"];
         /** @description What is known about one instance. */
         InstanceInfo: components["schemas"]["PortOwner"] & {
             autofix?: components["schemas"]["FixInfo"] | null;
@@ -500,6 +662,11 @@ export interface components {
          * @enum {string}
          */
         Level: "debug" | "info" | "runbot" | "warning" | "error" | "critical";
+        /**
+         * @description A system library or tool OdHive can recognise as missing.
+         * @enum {string}
+         */
+        Library: "compiler" | "python_headers" | "libpq" | "ldap" | "sasl" | "libxml2" | "jpeg" | "zlib" | "ffi" | "wkhtmltopdf";
         /** @description A source location named in an entry. */
         Location: {
             /** @description Function the frame is in, when the log names it. */
@@ -528,6 +695,8 @@ export interface components {
              */
             skipped: number;
         };
+        /** @description An event, with the instance it belongs to. */
+        ManagerEvent: components["schemas"]["PortOwner"] & components["schemas"]["InstanceEvent"];
         /** @description A source tree to register. */
         NewSource: {
             /**
@@ -540,6 +709,124 @@ export interface components {
              *     addons tree when `enterprise_version` is given.
              */
             path: string;
+        };
+        /** @description Something the manager itself reports, next to the supervisor's events. */
+        Notice: {
+            /** @enum {string} */
+            event: "port_retry";
+            /** @description How the process ended. */
+            exit: components["schemas"]["ExitInfo"];
+            /**
+             * Format: int32
+             * @description Gevent port that failed.
+             */
+            gevent_port: number;
+            /**
+             * Format: int32
+             * @description HTTP port that failed.
+             */
+            http_port: number;
+        } | {
+            /** @enum {string} */
+            event: "attached";
+            /**
+             * Format: int32
+             * @description Gevent port.
+             */
+            gevent_port: number;
+            /**
+             * Format: int32
+             * @description HTTP port.
+             */
+            http_port: number;
+            /**
+             * Format: int32
+             * @description Process id.
+             */
+            pid: number;
+        } | {
+            /** @description What failed. */
+            error: string;
+            /** @enum {string} */
+            event: "log_file";
+        } | {
+            /** @description What happens next. */
+            action: components["schemas"]["FixAction"];
+            /** @enum {string} */
+            event: "dependency_missing";
+            /** @description Top-level import name. */
+            module: string;
+            /** @description Package that provides it, when one can be named. */
+            package?: string | null;
+            trust?: components["schemas"]["Trust"] | null;
+        } | {
+            /**
+             * Format: int32
+             * @description Install number since the instance was started (from 1).
+             */
+            attempt: number;
+            /** @enum {string} */
+            event: "dependency_installing";
+            /**
+             * Format: int32
+             * @description Installs allowed per start.
+             */
+            max: number;
+            /** @description Missing module. */
+            module: string;
+            /** @description Package. */
+            package: string;
+            /** @description What the installer gets. */
+            requirements: components["schemas"]["Requirement"][];
+        } | {
+            /** @enum {string} */
+            event: "dependency_installed";
+            /** @description Package. */
+            package: string;
+        } | {
+            /** @description Installer error (with its last output lines). */
+            error: string;
+            /** @enum {string} */
+            event: "dependency_failed";
+            hint?: components["schemas"]["Hint"] | null;
+            /** @description Package. */
+            package: string;
+        } | {
+            /** @enum {string} */
+            event: "system_library_missing";
+            /** @description What to install, as text. */
+            hint: components["schemas"]["Hint"];
+        } | {
+            /** @enum {string} */
+            event: "reload_watching";
+            /** @description Modules found in them. */
+            modules: number;
+            /** @description Watched folders. */
+            roots: string[];
+            /**
+             * @description Module folders that link out of their addons folder; changes in
+             *     them are not seen.
+             */
+            unwatched?: string[];
+        } | {
+            /** @description Why. */
+            error: string;
+            /** @enum {string} */
+            event: "reload_failed";
+        } | {
+            /** @description What happens. */
+            action: components["schemas"]["Action"];
+            /** @enum {string} */
+            event: "reload";
+            /** @description Number of changed files. */
+            file_count: number;
+            /** @description Changed files (at most [`crate::reload::MAX_LISTED_FILES`]). */
+            files: string[];
+        } | {
+            /** @enum {string} */
+            event: "module_added";
+            /** @description Module name. */
+            module: string;
         };
         /** @description One option, merged across all flags that share a config key. */
         OdooOption: components["schemas"]["OptionKind"] & {
@@ -615,6 +902,33 @@ export interface components {
             /** @description The import name. */
             module: string;
         };
+        /**
+         * @description A system package manager OdHive can name install commands for.
+         * @enum {string}
+         */
+        PackageManager: "apt" | "pacman" | "dnf" | "brew";
+        /** @description An automatic port that moved away from its starting point. */
+        PortChange: {
+            /**
+             * Format: int32
+             * @description Port assigned instead.
+             */
+            assigned: number;
+            /** @description Which port. */
+            kind: components["schemas"]["PortKind"];
+            /** @description Why `requested` was not used. */
+            reason: components["schemas"]["Unavailable"];
+            /**
+             * Format: int32
+             * @description Port tried first.
+             */
+            requested: number;
+        };
+        /**
+         * @description Which of an instance's ports.
+         * @enum {string}
+         */
+        PortKind: "http" | "gevent";
         /** @description The OdHive instance a port belongs to. */
         PortOwner: {
             /** @description Instance id within the project. */
@@ -651,6 +965,11 @@ export interface components {
              */
             seq: number;
         };
+        /**
+         * @description Why nothing can be installed for a missing module.
+         * @enum {string}
+         */
+        Refusal: "part_of_odoo" | "invalid_name";
         /** @description Smart Reload state shown with an instance. */
         ReloadInfo: {
             /** @description Mode. */
@@ -682,6 +1001,80 @@ export interface components {
          * @enum {string}
          */
         SchemaSource: "cached" | "introspected" | "bundled";
+        /** @description A message from the server. */
+        ServerMessage: {
+            /** @enum {string} */
+            type: "hello";
+            /** @description OdHive version. */
+            version: string;
+        } | {
+            /** @description Instance id. */
+            instance: string;
+            /**
+             * Format: int64
+             * @description Sequence number of the first entry that will be sent.
+             */
+            next: number;
+            /** @description Project name. */
+            project: string;
+            /** @description This service runs the instance (it has a log in memory). */
+            running: boolean;
+            /** @enum {string} */
+            type: "subscribed";
+        } | {
+            /** @description Instance id. */
+            instance: string;
+            /** @description Project name. */
+            project: string;
+            /** @enum {string} */
+            type: "unsubscribed";
+        } | {
+            /** @description Instance id. */
+            instance: string;
+            /**
+             * Format: int64
+             * @description Sequence number of the next entry.
+             */
+            next: number;
+            /** @description Project name. */
+            project: string;
+            /** @description The entries. */
+            records: components["schemas"]["Record"][];
+            /** @enum {string} */
+            type: "logs";
+        } | {
+            /** @description Instance id. */
+            instance: string;
+            /** @description Project name. */
+            project: string;
+            /**
+             * Format: int64
+             * @description Entries lost.
+             */
+            skipped: number;
+            /** @enum {string} */
+            type: "gap";
+        } | {
+            /** @description Instance id. */
+            instance: string;
+            /** @description Project name. */
+            project: string;
+            /** @enum {string} */
+            type: "reset";
+        } | {
+            /** @description The events. */
+            events: components["schemas"]["ManagerEvent"][];
+            /** @enum {string} */
+            type: "events";
+        } | {
+            /** @description The instances. */
+            instances: components["schemas"]["InstanceInfo"][];
+            /** @enum {string} */
+            type: "snapshot";
+        } | (components["schemas"]["ErrorBody"] & {
+            /** @enum {string} */
+            type: "error";
+        });
         /** @description One Odoo source tree known to OdHive, shared between projects. */
         SourceEntry: {
             /** @description Community or Enterprise. */
@@ -745,6 +1138,11 @@ export interface components {
             /** @description A process was running. */
             was_running: boolean;
         };
+        /**
+         * @description Output stream a line came from.
+         * @enum {string}
+         */
+        Stream: "stdout" | "stderr";
         /** @description Why a package is trusted. */
         Trust: {
             /** @description Where. */
@@ -754,6 +1152,19 @@ export interface components {
         } | {
             /** @enum {string} */
             source: "table";
+        };
+        /** @description Why a port could not be used. */
+        Unavailable: {
+            /** @enum {string} */
+            reason: "in_use";
+        } | {
+            /** @description Reserved by another OdHive instance. */
+            owner: components["schemas"]["PortOwner"];
+            /** @enum {string} */
+            reason: "reserved_by";
+        } | {
+            /** @enum {string} */
+            reason: "other_port";
         };
     };
     responses: never;
@@ -1406,6 +1817,40 @@ export interface operations {
             };
             /** @description Not a Community source */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    websocket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket opened; messages are ServerMessage (from the server) and ClientMessage (from the client) */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a WebSocket upgrade request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Foreign Origin */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -9,6 +9,7 @@ pub mod error;
 mod instances;
 mod projects;
 mod sources;
+pub mod ws;
 
 use axum::extract::{FromRequest, FromRequestParts, Request};
 use axum::http::{Method, StatusCode};
@@ -41,7 +42,8 @@ pub const MUTATION_HEADER: &str = "x-odhive";
         (name = "projects", description = "Projects and their instances"),
         (name = "instances", description = "Running Odoo instances"),
         (name = "service", description = "The OdHive service itself"),
-    )
+    ),
+    components(schemas(ws::ClientMessage, ws::ServerMessage))
 )]
 struct ApiDoc;
 
@@ -61,6 +63,7 @@ fn api_router() -> OpenApiRouter<Service> {
         .routes(routes!(instances::confirm_fix))
         .routes(routes!(instances::decline_fix))
         .routes(routes!(instances::logs))
+        .routes(routes!(ws::upgrade))
 }
 
 /// The OpenAPI document of the API.
