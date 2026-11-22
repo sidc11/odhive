@@ -16,7 +16,19 @@ use serde::Serialize;
 use crate::logs::parse::Entry;
 
 /// A system package manager OdHive can name install commands for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageManager {
     /// Debian, Ubuntu and derivatives.
@@ -112,7 +124,19 @@ impl fmt::Display for PackageManager {
 }
 
 /// A system library or tool OdHive can recognise as missing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Library {
     /// A C compiler (needed to build any package from source).
@@ -308,7 +332,7 @@ pub fn detect_log(entry: &Entry) -> Option<Library> {
 }
 
 /// One manager's install command.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct Command {
     /// The package manager.
     pub manager: PackageManager,
@@ -317,7 +341,7 @@ pub struct Command {
 }
 
 /// What to install for a missing library. Text only: never run by OdHive.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct Hint {
     /// What is missing.
     pub library: Library,

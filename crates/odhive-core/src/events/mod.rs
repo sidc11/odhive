@@ -183,7 +183,7 @@ impl<T: Clone> Subscription<T> {
 }
 
 /// A parsed log entry of one instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct LogEvent {
     /// The instance.
     #[serde(flatten)]

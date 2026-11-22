@@ -466,3 +466,17 @@ async fn repeated_non_canonical_path_keeps_both_origins() {
     );
     assert_eq!(d.interpreters[0].origins, [Origin::Path, Origin::Uv]);
 }
+
+#[test]
+fn versions_read_back_what_they_serialize_to() {
+    let v = PyVersion::new(3, 12, 7);
+    let json = serde_json::to_value(v).expect("json");
+    assert_eq!(json, "3.12.7");
+    assert_eq!(serde_json::from_value::<PyVersion>(json).expect("back"), v);
+    for bad in ["3.12", "3.12.7.1", "3.x.1", "", "3.12.70000"] {
+        assert!(
+            serde_json::from_value::<PyVersion>(bad.into()).is_err(),
+            "{bad}"
+        );
+    }
+}

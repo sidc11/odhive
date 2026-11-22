@@ -35,7 +35,18 @@ pub const DEFAULT_GEVENT_PORT: u16 = 8072;
 pub const DEFAULT_SCAN: u16 = 100;
 
 /// The OdHive instance a port belongs to.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, utoipa::ToSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+)]
 pub struct PortOwner {
     /// Project name.
     pub project: String,
@@ -61,7 +72,7 @@ impl fmt::Display for PortOwner {
 }
 
 /// Which of an instance's ports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PortKind {
     /// `--http-port`.
@@ -80,7 +91,7 @@ impl fmt::Display for PortKind {
 }
 
 /// Why a port could not be used.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "reason", content = "owner")]
 pub enum Unavailable {
     /// Another program is listening on it.
@@ -102,7 +113,7 @@ impl fmt::Display for Unavailable {
 }
 
 /// An automatic port that moved away from its starting point.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct PortChange {
     /// Which port.
     pub kind: PortKind,

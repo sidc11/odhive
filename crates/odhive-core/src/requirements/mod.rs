@@ -111,7 +111,7 @@ pub enum RequirementsError {
 }
 
 /// Where a requirement came from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Origin {
     /// A line of a requirements file.
@@ -138,7 +138,7 @@ pub enum Origin {
 }
 
 /// A requirement and its first origin.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Entry {
     /// Normalised requirement.
     pub requirement: Requirement,
@@ -147,7 +147,7 @@ pub struct Entry {
 }
 
 /// Something found but not installed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct Skipped {
     /// Where it was found.
     pub origin: Origin,
@@ -158,7 +158,7 @@ pub struct Skipped {
 }
 
 /// A problem that did not stop collection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct Warning {
     /// Path involved.
     #[schema(value_type = String)]
@@ -168,7 +168,7 @@ pub struct Warning {
 }
 
 /// What [`install`] will install.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct InstallPlan {
     /// Requirements in collection order, exact duplicates removed.
     pub requirements: Vec<Entry>,
@@ -359,7 +359,7 @@ impl InstallOptions {
 }
 
 /// Progress of [`install`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "event")]
 pub enum InstallEvent {
     /// The installer was started.

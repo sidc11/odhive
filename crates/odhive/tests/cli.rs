@@ -668,6 +668,15 @@ impl Drop for ServiceGuard<'_> {
     fn drop(&mut self) {
         if let Some((pid, _)) = service_state(self.0) {
             let _ = kill_process(Pid::from_raw(pid).expect("pid"), Signal::KILL);
+            eventually("the service exits", || !alive(pid));
+            // Its instances are left behind: stop them through their PID files.
+            for p in fs::read_dir(self.0.home.join("OdHive/projects"))
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let _ = self.0.run(&["stop", &p.file_name().to_string_lossy()]);
+            }
         }
     }
 }
@@ -961,4 +970,114 @@ fn a_failed_service_install_leaves_nothing_behind() {
     assert!(!out.status.success());
     assert!(err.contains("not found"), "{err}");
     assert!(!service_file(&env).exists());
+}
+
+#[test]
+fn commands_go_through_the_running_service() {
+    let env = Env::new();
+    let _guard = ServiceGuard(&env);
+    env.project(
+        "shop",
+        &[
+            ("main", 18_981, 18_982, &[]),
+            ("test", 18_983, 18_984, &[]),
+            ("bad", 18_985, 18_986, &["--simulate", "crash"]),
+        ],
+    );
+    let out = env.run(&["--port", "18980", "serve"]);
+    assert!(out.status.success(), "{out:?}");
+    let (pid, _) = service_state(&env).expect("state");
+
+    // Started in the service: the command returns, the instance runs on.
+    let out = env.ok(&["start", "shop#main", "-q"]);
+    assert!(
+        out.contains("shop#main: starting in the OdHive service"),
+        "{out}"
+    );
+    eventually("shop#main running", || {
+        status_line(&env, "shop#main").contains(" running ")
+    });
+    let st = status_line(&env, "shop#main");
+    assert!(st.contains("http://localhost:18981"), "{st}");
+    let log = fs::read_to_string(data_dir(&env).join("service.log")).expect("log");
+    assert!(!log.contains("shop#main"), "nothing else started it: {log}");
+    eventually("shop#main log", || {
+        env.ok(&["logs", "shop#main", "-n", "100"])
+            .contains("Odoo version 19.0")
+    });
+    assert!(env.ok(&["project", "list"]).contains("1/3 running"));
+    let err = env.fails(&["project", "remove", "shop"]);
+    assert!(err.contains("still running"), "{err}");
+
+    // `start` shows the output until the instance ends: here it is stopped
+    // from another terminal.
+    let mut run = env.start(&["start", "shop#test"]);
+    let line = run.wait_for("shop#test: running at");
+    assert!(line.ends_with("http://localhost:18983"), "{line}");
+    run.wait_for("Odoo version 19.0");
+    let mut follow = env.start(&["logs", "shop#test", "-f", "-n", "1"]);
+    follow.wait_for("Registry loaded");
+    let out = env.ok(&["stop", "shop#test"]);
+    assert!(out.contains("shop#test: stopped"), "{out}");
+    let (ok, all) = run.finish();
+    assert!(ok, "{all}");
+    assert!(all.contains("shop#test: stopped"), "{all}");
+    follow.wait_for("Initiating shutdown");
+    kill_process(follow.pid(), Signal::INT).expect("SIGINT");
+    assert!(follow.finish().0);
+    assert!(port_free(18_983));
+
+    // Ctrl+C only stops watching.
+    let mut run = env.start(&["start", "shop#test"]);
+    run.wait_for("shop#test: running at");
+    kill_process(run.pid(), Signal::INT).expect("SIGINT");
+    let (ok, all) = run.finish();
+    assert!(ok, "{all}");
+    assert!(all.contains("keeps running in the OdHive service"), "{all}");
+    assert!(!port_free(18_983));
+    assert!(status_line(&env, "shop#test").contains(" running "));
+
+    // A crash ends the watch with failure.
+    let mut run = env.start(&["start", "shop#bad"]);
+    let (ok, all) = run.finish();
+    assert!(!ok, "{all}");
+    assert!(all.contains("shop#bad: crashed (exit code 1)"), "{all}");
+    assert!(status_line(&env, "shop#bad").contains("crashed"));
+    env.ok(&["stop", "shop#bad"]);
+    assert!(status_line(&env, "shop#bad").contains("stopped"));
+
+    // Projects and sources are edited by the service too.
+    let out = env.ok(&[
+        "project",
+        "add",
+        "web",
+        "--source",
+        "odoo-19.0",
+        "--no-setup",
+    ]);
+    assert!(out.contains("created project web (Odoo 19.0)"), "{out}");
+    assert!(env.ok(&["project", "list"]).contains("web "));
+    let out = env.ok(&["project", "setup", "web", "--no-requirements"]);
+    assert!(
+        out.contains("venv ready") && out.contains("ready: `odhive start web`"),
+        "{out}"
+    );
+    assert!(env.project_dir("web").join(".venv/bin/python").exists());
+    let err = env.fails(&["source", "remove", "odoo-19.0"]);
+    assert!(err.contains("shop"), "{err}");
+    assert!(env.ok(&["source", "list"]).contains("odoo-19.0"));
+    let err = env.fails(&["source", "remove", "../x"]);
+    assert!(err.contains("no source"), "{err}");
+    let out = env.ok(&["project", "remove", "web"]);
+    assert!(out.contains("removed project web"), "{out}");
+    let err = env.fails(&["start", "shop#nope"]);
+    assert!(err.contains("no instance"), "{err}");
+
+    // Quitting stops what the service runs; then commands work locally.
+    assert!(env.run(&["quit"]).status.success());
+    eventually("the service exits", || !alive(pid));
+    assert!(port_free(18_981) && port_free(18_983));
+    assert!(status_line(&env, "shop#main").contains("stopped"));
+    let logs = env.ok(&["logs", "shop#main"]);
+    assert!(logs.contains("Initiating shutdown"), "{logs}");
 }

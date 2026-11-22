@@ -585,3 +585,23 @@ fn display_is_odoo_text_and_parses_back() {
         }
     }
 }
+
+#[test]
+fn timestamps_read_back_what_they_serialize_to() {
+    let ts = Timestamp::parse("2026-11-22 06:27:41,016").expect("ts");
+    let json = serde_json::to_value(ts).expect("json");
+    assert_eq!(json, "2026-11-22T06:27:41.016Z");
+    assert_eq!(serde_json::from_value::<Timestamp>(json).expect("back"), ts);
+    for bad in [
+        "2026-11-22 06:27:41,016",
+        "2026-13-22T06:27:41.016Z",
+        "2026-11-22T06:27:41.016",
+        "2026-11-22T06:27:41.0160Z",
+        "é026-11-22T06:27:41.016Z",
+    ] {
+        assert!(
+            serde_json::from_value::<Timestamp>(bad.into()).is_err(),
+            "{bad}"
+        );
+    }
+}

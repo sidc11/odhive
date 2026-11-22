@@ -298,6 +298,15 @@ async fn start_service(paths: &AppPaths, port: u16) -> anyhow::Result<Up> {
     launch(paths, port).await
 }
 
+/// A client of the running service; `None` when no service runs. Waits
+/// for a service that is starting up.
+pub async fn connect(paths: &AppPaths) -> anyhow::Result<Option<Client>> {
+    if service_lock::probe(&paths.data_dir)?.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(wait_ready(paths, None).await?.client))
+}
+
 /// Waits until a service started elsewhere (by the service manager) answers.
 pub async fn wait_started(paths: &AppPaths) -> anyhow::Result<ServiceState> {
     Ok(wait_ready(paths, None).await?.state)

@@ -39,7 +39,7 @@ pub const MAX_FINISHED_JOBS: usize = 50;
 const JOB_EVENT_CAPACITY: usize = 1024;
 
 /// What a job does.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobKind {
     /// Shallow-clones Odoo Community and registers it.
@@ -55,7 +55,7 @@ pub enum JobKind {
 }
 
 /// Where a job stands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum JobState {
     /// Still working.
@@ -69,7 +69,7 @@ pub enum JobState {
 }
 
 /// One step of a job's progress.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, ToSchema)]
 #[serde(tag = "job", rename_all = "snake_case")]
 pub enum JobStep {
     /// Progress of a clone.
@@ -79,7 +79,7 @@ pub enum JobStep {
 }
 
 /// What a successful job produced.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobResult {
     /// The cloned source, registered.
@@ -95,7 +95,7 @@ pub enum JobResult {
 }
 
 /// A background job.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, ToSchema)]
 pub struct Job {
     /// Id, unique while this service runs.
     pub id: u64,
@@ -121,7 +121,7 @@ pub struct Job {
 }
 
 /// A change to a job.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, ToSchema)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum JobEvent {
     /// A job was started.

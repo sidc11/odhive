@@ -12,6 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use odhive_core::events::BusOptions;
 use odhive_core::manager::ManagerOptions;
 use odhive_core::ports::PortOwner;
+use odhive_server::api::ws::ServerMessage;
 use odhive_server::{ServiceOptions, WsLimits};
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
@@ -515,6 +516,71 @@ async fn a_new_log_after_a_stop_is_announced_with_a_reset() {
     assert_eq!(after.first(), Some(&1), "starts over at 1");
     assert_eq!(after.len(), first.len(), "{after:?} vs {first:?}");
     stop(&api, "shop").await;
+}
+
+#[tokio::test]
+async fn the_last_entries_of_a_stopped_instance_still_arrive() {
+    let env = Env::new();
+    let (api, port) = setup(
+        &env,
+        "shop",
+        19_270,
+        &[],
+        ManagerOptions::default(),
+        WsLimits::default(),
+    )
+    .await;
+    let mut ws = connect(&api, port).await;
+    send(&mut ws, subscribe("shop")).await;
+    assert_eq!(recv(&mut ws).await["type"], "subscribed");
+    send(&mut ws, json!({ "op": "subscribe_events" })).await;
+    start(&api, "shop").await;
+    let mut all = recv_until(&mut ws, "the registry line", |m| {
+        has_message(m, "Registry loaded in 0.734s")
+    })
+    .await;
+    // Stopping removes the instance, and its log, from the manager before
+    // the batch with the shutdown lines is due.
+    stop(&api, "shop").await;
+    all.extend(
+        recv_until(&mut ws, "the shutdown line", |m| {
+            has_message(m, "Initiating shutdown")
+        })
+        .await,
+    );
+
+    // The next run's log starts over and is announced.
+    start(&api, "shop").await;
+    let msgs = recv_until(&mut ws, "the registry line", |m| {
+        has_message(m, "Registry loaded in 0.734s")
+    })
+    .await;
+    assert_eq!(
+        msgs.iter().filter(|m| m["type"] == "reset").count(),
+        1,
+        "{msgs:?}"
+    );
+    stop(&api, "shop").await;
+
+    // Clients (the CLI) read the messages back into the same types.
+    all.extend(msgs);
+    let mut seen_records = 0;
+    let kinds: std::collections::BTreeSet<String> = all
+        .iter()
+        .map(|m| m["type"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    for msg in all {
+        let back: ServerMessage = serde_json::from_value(msg.clone()).expect("decode");
+        if let ServerMessage::Logs { records, .. } = &back {
+            seen_records += records.len();
+        }
+        assert_eq!(serde_json::to_value(&back).expect("encode"), msg);
+    }
+    assert!(seen_records > 10, "{seen_records}");
+    assert!(
+        kinds.contains("snapshot") && kinds.contains("events"),
+        "{kinds:?}"
+    );
 }
 
 #[tokio::test]

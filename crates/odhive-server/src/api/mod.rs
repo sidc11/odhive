@@ -8,10 +8,10 @@
 //! check, body and time limits are applied app-wide ([`crate::security`]).
 
 pub mod error;
-mod instances;
+pub mod instances;
 mod jobs;
-mod projects;
-mod sources;
+pub mod projects;
+pub mod sources;
 pub mod ws;
 
 use axum::extract::{FromRequest, FromRequestParts, Request};
@@ -143,7 +143,7 @@ pub(crate) struct Params<T>(pub T);
 pub(crate) struct QueryArgs<T>(pub T);
 
 /// Service status.
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, ToSchema)]
 pub struct Health {
     /// OdHive version.
     #[schema(example = "0.1.0")]

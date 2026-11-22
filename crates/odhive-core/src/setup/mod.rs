@@ -285,7 +285,7 @@ impl EnvOptions {
 }
 
 /// Progress of [`setup_env`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "step")]
 pub enum SetupEvent {
     /// The interpreter for the venv.
@@ -325,7 +325,7 @@ pub enum SetupEvent {
 }
 
 /// What [`setup_env`] did.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct EnvReport {
     /// Base interpreter (`None` when an existing venv was kept).
     #[schema(value_type = Option<String>)]

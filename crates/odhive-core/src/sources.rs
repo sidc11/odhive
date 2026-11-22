@@ -81,7 +81,7 @@ pub enum SourceError {
 }
 
 /// Progress events emitted while cloning.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "event")]
 pub enum CloneEvent {
     /// git was started.

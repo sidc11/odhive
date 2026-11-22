@@ -37,7 +37,7 @@ impl Default for Limits {
 }
 
 /// An entry with its sequence number.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct Record {
     /// Position in the instance's log, from 1, never reused.
     pub seq: u64,

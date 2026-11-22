@@ -234,6 +234,42 @@ impl LogSlot {
     }
 }
 
+/// A reference to one log of an instance, for reading it. It stays
+/// readable after the instance is stopped and removed from the manager, so
+/// a reader can take the entries it has not seen yet; holding it also keeps
+/// the log's buffer and file open, so readers drop it once they are done.
+#[derive(Clone)]
+pub struct LogHandle(pub(super) Arc<LogSlot>);
+
+impl std::fmt::Debug for LogHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LogHandle")
+            .field("id", &self.0.id)
+            .field("owner", &self.0.owner)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LogHandle {
+    /// The log's id (see [`super::Manager::read_log_with_id`]).
+    #[must_use]
+    pub fn id(&self) -> u64 {
+        self.0.id()
+    }
+
+    /// Up to `limit` entries from sequence number `from` on.
+    #[must_use]
+    pub fn read_from(&self, from: u64, limit: usize) -> Page {
+        self.0.read_from(from, limit)
+    }
+
+    /// The sequence number the next entry gets.
+    #[must_use]
+    pub fn next_seq(&self) -> u64 {
+        self.0.next_seq()
+    }
+}
+
 /// Completes a slot's pending entry once its output pauses. Ends when the
 /// slot is dropped.
 async fn flush_when_idle(slot: Weak<LogSlot>, idle: Arc<Notify>) {

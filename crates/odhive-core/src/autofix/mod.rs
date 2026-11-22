@@ -163,7 +163,7 @@ impl Trusted {
 }
 
 /// Why a package is trusted.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "source")]
 pub enum Trust {
     /// A requirements file or manifest of the project lists it.
@@ -176,7 +176,7 @@ pub enum Trust {
 }
 
 /// What would be installed for a missing module.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct Candidate {
     /// The missing top-level module.
     pub module: String,
@@ -216,7 +216,7 @@ impl Candidate {
 }
 
 /// Why nothing can be installed for a missing module.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Refusal {
     /// The name is part of Odoo (a missing Odoo module, not a package).
@@ -267,7 +267,7 @@ pub fn resolve(module: &str, trusted: &Trusted) -> Result<Candidate, Refusal> {
 }
 
 /// What to do about a resolved candidate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
     /// Install it now.
@@ -291,7 +291,7 @@ pub fn decide(mode: AutofixMode, candidate: &Candidate) -> Action {
 }
 
 /// Why the auto-fix stops for this start.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "reason")]
 pub enum GiveUp {
     /// [`MAX_ATTEMPTS`] installs were made since the instance was started.

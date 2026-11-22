@@ -134,8 +134,24 @@ impl Serialize for PyVersion {
     }
 }
 
+impl<'de> serde::Deserialize<'de> for PyVersion {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        let mut parts = text.split('.');
+        let parsed = (|| {
+            let v = Self::new(
+                parts.next()?.parse().ok()?,
+                parts.next()?.parse().ok()?,
+                parts.next()?.parse().ok()?,
+            );
+            parts.next().is_none().then_some(v)
+        })();
+        parsed.ok_or_else(|| serde::de::Error::custom(format!("invalid Python version {text:?}")))
+    }
+}
+
 /// How a Python version relates to what an Odoo source supports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Compat {
     /// Within `MIN_PY_VERSION ..= MAX_PY_VERSION`.
@@ -147,7 +163,7 @@ pub enum Compat {
 }
 
 /// The Python range (inclusive, by `major.minor`) an Odoo source supports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct PySupport {
     /// Oldest supported `(major, minor)`.
     #[schema(value_type = Vec<u8>)]
@@ -221,7 +237,7 @@ impl fmt::Display for PySupport {
 }
 
 /// Where a candidate was found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Origin {
     /// An explicitly given path.
@@ -233,7 +249,7 @@ pub enum Origin {
 }
 
 /// A probed, working Python interpreter.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Interpreter {
     /// Real interpreter executable (`sys.executable`, symlinks resolved).
     pub path: PathBuf,
@@ -256,7 +272,7 @@ impl Interpreter {
 }
 
 /// A candidate that was not accepted, with the reason.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Skipped {
     /// Candidate path as found.
     pub path: PathBuf,
@@ -265,7 +281,7 @@ pub struct Skipped {
 }
 
 /// Result of [`discover`].
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, serde::Deserialize)]
 pub struct Discovery {
     /// Working interpreters, deduplicated by real path, in discovery order.
     pub interpreters: Vec<Interpreter>,
