@@ -269,6 +269,7 @@ fn all_done(manager: &Manager, owners: &[PortOwner]) -> bool {
 /// Prints events and writes output lines to the log files.
 struct Output {
     logs_dir: std::path::PathBuf,
+    rotation: logs::Rotation,
     quiet: bool,
     prefix: bool,
     files: HashMap<PortOwner, Option<LogFile>>,
@@ -279,6 +280,7 @@ impl Output {
     fn new(project: &LoadedProject, quiet: bool, prefix: bool) -> Self {
         Self {
             logs_dir: project.logs_dir(),
+            rotation: project.config.logs.rotation(),
             quiet,
             prefix,
             files: HashMap::new(),
@@ -289,7 +291,7 @@ impl Output {
     fn log(&mut self, owner: &PortOwner, line: &str) {
         let file = self.files.entry(owner.clone()).or_insert_with(|| {
             let opened = logs::log_path(&self.logs_dir, &owner.instance)
-                .and_then(|p| LogFile::open(&p, logs::DEFAULT_MAX_BYTES));
+                .and_then(|p| LogFile::open(&p, self.rotation));
             match opened {
                 Ok(f) => Some(f),
                 Err(e) => {
