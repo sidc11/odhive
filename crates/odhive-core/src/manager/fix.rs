@@ -345,6 +345,10 @@ pub(super) async fn apply(
         }
         Some(Err(e)) => {
             let error = e.to_string();
+            let hint = match e {
+                requirements::RequirementsError::Failed { hint, .. } => hint.map(|h| *h),
+                _ => None,
+            };
             marker(&format!("install of {} failed", candidate.package));
             notify(
                 inner,
@@ -352,6 +356,7 @@ pub(super) async fn apply(
                 Notice::DependencyFailed {
                     package: candidate.package.clone(),
                     error,
+                    hint,
                 },
             );
             None

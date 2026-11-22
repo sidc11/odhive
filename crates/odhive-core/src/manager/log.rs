@@ -6,7 +6,12 @@
 //! event subscriber. An entry is complete when the next one starts; the last
 //! one is completed after [`IDLE_FLUSH`] without output, or when the process
 //! ends.
+//!
+//! Entries naming a missing system tool (see [`crate::syslib::detect_log`])
+//! are reported as [`Notice::SystemLibraryMissing`], once per library for
+//! the life of the log.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -15,10 +20,12 @@ use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
 use super::fix::Watcher;
+use super::{Inner, Notice};
 use crate::events::{LogEvent, Topic};
 use crate::logs::LogSettings;
 use crate::logs::store::{InstanceLog, Page, Record};
 use crate::ports::PortOwner;
+use crate::syslib::{self, Hint, Library};
 
 /// Time without output after which the pending entry is completed.
 pub const IDLE_FLUSH: Duration = Duration::from_millis(200);
@@ -36,12 +43,16 @@ struct State {
     last_line: Instant,
     /// Processes started so far; entries belong to the latest.
     run: u64,
+    /// Missing system libraries already reported.
+    reported: BTreeSet<Library>,
 }
 
 #[derive(Debug)]
 pub(super) struct LogSlot {
     owner: PortOwner,
     target: LogTarget,
+    /// Receives the system-library notices.
+    inner: Weak<Inner>,
     state: Mutex<State>,
     topic: Topic<LogEvent>,
     idle: Arc<Notify>,
@@ -62,6 +73,7 @@ impl LogSlot {
     pub fn new(
         owner: PortOwner,
         target: LogTarget,
+        inner: Weak<Inner>,
         topic: Topic<LogEvent>,
     ) -> (Arc<Self>, Option<io::Error>) {
         let (log, error) = match &target.dir {
@@ -75,10 +87,12 @@ impl LogSlot {
         let slot = Arc::new(Self {
             owner,
             target,
+            inner,
             state: Mutex::new(State {
                 log,
                 last_line: Instant::now(),
                 run: 0,
+                reported: BTreeSet::new(),
             }),
             topic,
             idle: idle.clone(),
@@ -104,9 +118,20 @@ impl LogSlot {
 
     /// Hands an output entry to the watcher, then publishes it. Called with
     /// the state lock held, so events keep log order.
-    fn output(&self, state: &State, record: Arc<Record>) {
+    fn output(&self, state: &mut State, record: Arc<Record>) {
         if let Some(w) = &*self.watcher.lock().unwrap_or_else(PoisonError::into_inner) {
             w.observe(&record.entry, state.run);
+        }
+        if let Some(library) = syslib::detect_log(&record.entry)
+            && state.reported.insert(library)
+            && let Some(inner) = self.inner.upgrade()
+        {
+            inner.notify(
+                &self.owner,
+                Notice::SystemLibraryMissing {
+                    hint: Hint::for_host(library),
+                },
+            );
         }
         self.publish(record);
     }
@@ -125,7 +150,7 @@ impl LogSlot {
         let pushed = state.log.push_line(line);
         state.last_line = Instant::now();
         if let Some(record) = pushed.record {
-            self.output(&state, record);
+            self.output(&mut state, record);
         }
         if state.log.has_pending() {
             self.idle.notify_one();
@@ -147,7 +172,7 @@ impl LogSlot {
         let mut state = self.lock();
         // The pending output entry is completed first; it belongs to the run.
         if let Some(record) = state.log.flush() {
-            self.output(&state, record);
+            self.output(&mut state, record);
         }
         let (records, error) = state.log.push_marker(text);
         for record in records {
@@ -163,7 +188,7 @@ impl LogSlot {
     pub fn flush(&self) {
         let mut state = self.lock();
         if let Some(record) = state.log.flush() {
-            self.output(&state, record);
+            self.output(&mut state, record);
         }
     }
 
@@ -179,7 +204,7 @@ impl LogSlot {
             return Some(idle - quiet);
         }
         if let Some(record) = state.log.flush() {
-            self.output(&state, record);
+            self.output(&mut state, record);
         }
         None
     }

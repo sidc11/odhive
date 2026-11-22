@@ -35,6 +35,7 @@ use tokio::process::Command;
 
 use crate::proc::{self, RunError};
 use crate::python;
+use crate::syslib::{self, Hint};
 use crate::venv::VenvTool;
 pub use manifest::{MANIFEST_FILE, Manifest, ManifestError};
 pub use spec::Requirement;
@@ -84,7 +85,7 @@ pub enum RequirementsError {
         source: io::Error,
     },
     /// The installer exited with an error.
-    #[error("{tool} failed with {status}{}:\n{output}", hint.as_ref().map(|h| format!(" ({h})")).unwrap_or_default())]
+    #[error("{tool} failed with {status}:\n{output}{}", hint.as_ref().map(|h| format!("\nhint: {h}")).unwrap_or_default())]
     Failed {
         /// Installer label.
         tool: String,
@@ -93,7 +94,7 @@ pub enum RequirementsError {
         /// Last lines of output.
         output: String,
         /// What is probably missing on the system, when recognised.
-        hint: Option<String>,
+        hint: Option<Box<Hint>>,
     },
     /// The install took longer than allowed.
     #[error("requirements install did not finish within {0:?}")]
@@ -436,7 +437,7 @@ pub async fn install(
     let mut hint = None;
     let run = proc::run_streaming(cmd, OUTPUT_TAIL_LINES, |line| {
         if hint.is_none() {
-            hint = build_hint(&line);
+            hint = syslib::detect_build_failure(&line).map(|l| Box::new(Hint::for_host(l)));
         }
         on_event(InstallEvent::Output { line });
     });
@@ -503,40 +504,6 @@ fn installer_command(opts: &InstallOptions, req_file: &Path) -> (PathBuf, String
             (opts.python.clone(), "pip install".into(), c)
         }
     }
-}
-
-/// Recognises common "missing system library" build failures.
-fn build_hint(line: &str) -> Option<String> {
-    const HINTS: [(&str, &str); 6] = [
-        (
-            "pg_config executable not found",
-            "PostgreSQL client headers are missing: install libpq-dev (Debian/Ubuntu), libpq-devel (Fedora/RHEL) or `brew install libpq`",
-        ),
-        (
-            "Python.h: No such file",
-            "Python headers are missing: install python3-dev (Debian/Ubuntu) or python3-devel (Fedora/RHEL)",
-        ),
-        (
-            "lber.h: No such file",
-            "LDAP headers are missing: install libldap2-dev and libsasl2-dev (Debian/Ubuntu) or openldap-devel (Fedora/RHEL)",
-        ),
-        (
-            "ldap.h: No such file",
-            "LDAP headers are missing: install libldap2-dev and libsasl2-dev (Debian/Ubuntu) or openldap-devel (Fedora/RHEL)",
-        ),
-        (
-            "sasl.h: No such file",
-            "SASL headers are missing: install libsasl2-dev (Debian/Ubuntu) or cyrus-sasl-devel (Fedora/RHEL)",
-        ),
-        (
-            "libxml/xmlversion.h: No such file",
-            "libxml2 headers are missing: install libxml2-dev and libxslt1-dev (Debian/Ubuntu) or libxml2-devel and libxslt-devel (Fedora/RHEL)",
-        ),
-    ];
-    HINTS
-        .iter()
-        .find(|(needle, _)| line.contains(needle))
-        .map(|(_, hint)| (*hint).to_owned())
 }
 
 #[cfg(test)]

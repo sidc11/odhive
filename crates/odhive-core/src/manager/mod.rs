@@ -59,6 +59,7 @@ use crate::supervisor::{
     self, DEFAULT_STOP_TIMEOUT, Event, ExitInfo, LaunchSpec, Status, SuperviseOptions, Supervised,
     SupervisorError,
 };
+use crate::syslib::Hint;
 
 mod fix;
 mod log;
@@ -298,6 +299,16 @@ pub enum Notice {
         package: String,
         /// Installer error (with its last output lines).
         error: String,
+        /// The system library the build was probably missing.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hint: Option<Hint>,
+    },
+    /// The log reports a missing system library or tool (e.g.
+    /// `wkhtmltopdf`). Reported once per library while the instance's log
+    /// lives; OdHive never installs system packages.
+    SystemLibraryMissing {
+        /// What to install, as text.
+        hint: Hint,
     },
 }
 
@@ -1010,7 +1021,12 @@ impl Inner {
         let log = match log.filter(|l| *l.target() == target) {
             Some(log) => log,
             None => {
-                let (log, error) = LogSlot::new(owner.clone(), target, self.bus.logs().clone());
+                let (log, error) = LogSlot::new(
+                    owner.clone(),
+                    target,
+                    Arc::downgrade(self),
+                    self.bus.logs().clone(),
+                );
                 log_error = error;
                 log
             }
