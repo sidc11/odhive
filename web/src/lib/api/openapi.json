@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OdHive API",
-    "description": "Local API of OdHive, used by its web UI and CLI. Every request other than GET/HEAD must carry the header `X-OdHive: 1`.",
+    "description": "Local API of OdHive, used by its web UI and CLI. Every request needs the session cookie `odhive_session` (set by `/login`) or `Authorization: Bearer <token>`, else 401. Every request other than GET/HEAD must also carry the header `X-OdHive: 1`.",
     "contact": {
       "name": "Siddharth Chaudhari"
     },
@@ -13,6 +13,37 @@
     "version": "0.0.1"
   },
   "paths": {
+    "/api/v1/auth/codes": {
+      "post": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Issues a one-time code that signs a browser in when it opens\n`path` (valid for 60 s, once).",
+        "operationId": "create_login_code",
+        "responses": {
+          "201": {
+            "description": "A new code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginCode"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "No random numbers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "tags": [
@@ -2768,6 +2799,33 @@
             "format": "int64",
             "description": "Entries asked for that were already dropped from memory (the log\nfile still has them).",
             "minimum": 0
+          }
+        }
+      },
+      "LoginCode": {
+        "type": "object",
+        "description": "A one-time login code.",
+        "required": [
+          "code",
+          "path",
+          "expires_in"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The code (64 hex characters)."
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds until the code expires.",
+            "example": 60,
+            "minimum": 0
+          },
+          "path": {
+            "type": "string",
+            "description": "Path to open in the browser: `/login?t=<code>`.",
+            "example": "/login?t=0123…"
           }
         }
       },

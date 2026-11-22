@@ -1,9 +1,10 @@
 //! The REST API under `/api/v1`, described by an OpenAPI document
 //! ([`openapi`]) from which the web UI's TypeScript types are generated.
 //!
-//! Every mutation (any method but `GET`/`HEAD`) must carry
-//! `X-OdHive: 1`: browsers cannot add that header to a cross-site request
-//! without a CORS preflight, which OdHive never answers.
+//! Every request must be signed in (session cookie or bearer token, see
+//! [`crate::auth`]). Every mutation (any method but `GET`/`HEAD`) must also
+//! carry `X-OdHive: 1`: browsers cannot add that header to a cross-site
+//! request without a CORS preflight, which OdHive never answers.
 
 pub mod error;
 mod instances;
@@ -35,7 +36,7 @@ pub const MUTATION_HEADER: &str = "x-odhive";
 #[openapi(
     info(
         title = "OdHive API",
-        description = "Local API of OdHive, used by its web UI and CLI. Every request other than GET/HEAD must carry the header `X-OdHive: 1`.",
+        description = "Local API of OdHive, used by its web UI and CLI. Every request needs the session cookie `odhive_session` (set by `/login`) or `Authorization: Bearer <token>`, else 401. Every request other than GET/HEAD must also carry the header `X-OdHive: 1`.",
         license(name = "Apache-2.0", identifier = "Apache-2.0")
     ),
     tags(
@@ -52,6 +53,7 @@ struct ApiDoc;
 fn api_router() -> OpenApiRouter<Service> {
     OpenApiRouter::new()
         .routes(routes!(health))
+        .routes(routes!(crate::auth::create_code))
         .routes(routes!(sources::list, sources::add))
         .routes(routes!(sources::clone))
         .routes(routes!(sources::remove))
@@ -86,12 +88,18 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 /// JSON 404 instead of the web UI.
 pub(crate) fn router(service: Service) -> Router {
     let (api, _) = api_router().split_for_parts();
+    let auth = service.auth().clone();
     let api = api.fallback(not_found).with_state(service);
     Router::new()
         .nest(PREFIX, api)
         .route("/api", axum::routing::any(not_found))
         .route("/api/{*rest}", axum::routing::any(not_found))
         .layer(middleware::from_fn(require_mutation_header))
+        // Outermost: nothing below /api answers before the caller is known.
+        .layer(middleware::from_fn_with_state(
+            auth,
+            crate::auth::require_auth,
+        ))
 }
 
 async fn not_found() -> ApiError {

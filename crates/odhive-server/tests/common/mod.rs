@@ -20,8 +20,9 @@ use odhive_core::pidfile::RunDir;
 use odhive_core::project::{Instance, ProjectConfig};
 use odhive_core::python::{DiscoverOptions, find_executable};
 use odhive_core::sources::CloneOptions;
+use odhive_core::token::Token;
 use odhive_core::workspace::bootstrap;
-use odhive_server::{AppConfig, Service, ServiceOptions, app};
+use odhive_server::{AppConfig, Auth, Service, ServiceOptions, app};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -141,17 +142,38 @@ impl Env {
 
     /// Like [`Env::app`] with other options, for an app serving on `port`.
     pub fn app_with(&self, manager: ManagerOptions, opts: ServiceOptions, port: u16) -> Api {
+        let token = Token::generate().expect("token");
+        self.app_with_auth(manager, opts, port, token, odhive_server::auth::CODE_TTL)
+    }
+
+    /// Like [`Env::app_with`] for `token`, with login codes valid for `ttl`.
+    pub fn app_with_auth(
+        &self,
+        manager: ManagerOptions,
+        opts: ServiceOptions,
+        port: u16,
+        token: Token,
+        ttl: Duration,
+    ) -> Api {
         let boot = bootstrap(&self.paths).expect("bootstrap");
         let manager = Manager::new(ManagerOptions {
             run_dir: Some(RunDir::new(self.paths.run_dir())),
             stop_timeout: Duration::from_secs(5),
             ..manager
         });
-        let service = Service::with_options(self.paths.clone(), boot.workspace, manager, opts);
+        let cookie = format!("{}={}", odhive_server::auth::SESSION_COOKIE, token.to_hex());
+        let service = Service::with_options(
+            self.paths.clone(),
+            Auth::with_code_ttl(token, ttl),
+            boot.workspace,
+            manager,
+            opts,
+        );
         Api {
             router: app(AppConfig { port }, service.clone()),
             service,
             host: format!("localhost:{port}"),
+            cookie,
         }
     }
 
@@ -202,6 +224,8 @@ pub struct Api {
     pub service: Service,
     /// The `Host` header requests carry.
     pub host: String,
+    /// The `Cookie` header of a signed-in browser.
+    pub cookie: String,
 }
 
 impl Api {
@@ -210,8 +234,9 @@ impl Api {
         self.router.clone().oneshot(req).await.expect("response")
     }
 
-    /// Sends an API request from the web UI (right Host, mutation header,
-    /// JSON body) and returns the status and JSON body (`Null` when empty).
+    /// Sends an API request from the signed-in web UI (right Host, session
+    /// cookie, mutation header, JSON body) and returns the status and JSON
+    /// body (`Null` when empty).
     pub async fn call(
         &self,
         method: Method,
@@ -222,6 +247,7 @@ impl Api {
             .method(method)
             .uri(path)
             .header(header::HOST, &self.host)
+            .header(header::COOKIE, &self.cookie)
             .header("x-odhive", "1");
         let body = match body {
             Some(v) => {

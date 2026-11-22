@@ -18,6 +18,7 @@ use tokio::sync::{Mutex, watch};
 
 use crate::api::error::{ApiError, ApiResult};
 use crate::api::ws::WsLimits;
+use crate::auth::Auth;
 use crate::jobs::{JobKind, Jobs};
 
 /// Shared state of the API. Cheap to clone.
@@ -29,6 +30,7 @@ pub struct Service {
 #[derive(Debug)]
 struct Inner {
     paths: AppPaths,
+    auth: Auth,
     workspace: Workspace,
     manager: Manager,
     jobs: Jobs,
@@ -88,17 +90,19 @@ pub(crate) enum Stopped {
 }
 
 impl Service {
-    /// State for `paths` and `workspace` with `manager` running the instances.
-    /// The manager should use `paths.run_dir()` for its PID files.
+    /// State for `paths` and `workspace` with `manager` running the instances
+    /// and `auth` guarding the API. The manager should use `paths.run_dir()`
+    /// for its PID files.
     #[must_use]
-    pub fn new(paths: AppPaths, workspace: Workspace, manager: Manager) -> Self {
-        Self::with_options(paths, workspace, manager, ServiceOptions::default())
+    pub fn new(paths: AppPaths, auth: Auth, workspace: Workspace, manager: Manager) -> Self {
+        Self::with_options(paths, auth, workspace, manager, ServiceOptions::default())
     }
 
     /// Like [`Service::new`] with non-default `opts`.
     #[must_use]
     pub fn with_options(
         paths: AppPaths,
+        auth: Auth,
         workspace: Workspace,
         manager: Manager,
         opts: ServiceOptions,
@@ -106,6 +110,7 @@ impl Service {
         Self {
             inner: Arc::new(Inner {
                 paths,
+                auth,
                 workspace,
                 manager,
                 jobs: Jobs::new(),
@@ -192,6 +197,12 @@ impl Service {
     #[must_use]
     pub fn manager(&self) -> &Manager {
         &self.inner.manager
+    }
+
+    /// Who may use the API.
+    #[must_use]
+    pub fn auth(&self) -> &Auth {
+        &self.inner.auth
     }
 
     pub(crate) fn paths(&self) -> &AppPaths {

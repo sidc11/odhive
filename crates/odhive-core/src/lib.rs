@@ -24,6 +24,7 @@ pub mod setup;
 pub mod sources;
 pub mod supervisor;
 pub mod syslib;
+pub mod token;
 pub mod venv;
 pub mod version;
 pub mod workspace;

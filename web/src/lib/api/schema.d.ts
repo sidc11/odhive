@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/api/v1/auth/codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issues a one-time code that signs a browser in when it opens
+         *     `path` (valid for 60 s, once).
+         */
+        post: operations["create_login_code"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -968,6 +988,22 @@ export interface components {
              */
             skipped: number;
         };
+        /** @description A one-time login code. */
+        LoginCode: {
+            /** @description The code (64 hex characters). */
+            code: string;
+            /**
+             * Format: int64
+             * @description Seconds until the code expires.
+             * @example 60
+             */
+            expires_in: number;
+            /**
+             * @description Path to open in the browser: `/login?t=<code>`.
+             * @example /login?t=0123…
+             */
+            path: string;
+        };
         /** @description An event, with the instance it belongs to. */
         ManagerEvent: components["schemas"]["PortOwner"] & components["schemas"]["InstanceEvent"];
         /** @description A source tree to register. */
@@ -1567,6 +1603,35 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    create_login_code: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A new code */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginCode"];
+                };
+            };
+            /** @description No random numbers */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     health: {
         parameters: {
             query?: never;
