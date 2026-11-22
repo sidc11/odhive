@@ -797,3 +797,168 @@ fn sigterm_ends_a_foreground_service_cleanly() {
     assert!(service_state(&env).is_none());
     assert!(port_free(18_955));
 }
+
+/// Where `odhive service install` puts the unit / agent file.
+fn service_file(env: &Env) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        env.home
+            .join("Library/LaunchAgents/io.github.sidc11.odhive.plist")
+    } else {
+        env.home.join(".config/systemd/user/odhive.service")
+    }
+}
+
+/// A folder with a fake `systemctl` and `launchctl` that log their
+/// arguments to `$HOME/manager.log`, start the service like the real ones
+/// would (on `start`, `kickstart`, `bootstrap`) and stop it on
+/// `disable --now` / `bootout`. Calls whose arguments contain `fail_on`
+/// fail.
+fn fake_manager(env: &Env, port: u16, fail_on: &str) -> PathBuf {
+    let bin = env.home.join("fake-manager");
+    fs::create_dir_all(&bin).expect("mkdir");
+    let odhive = env!("CARGO_BIN_EXE_odhive");
+    let script = format!(
+        "#!/bin/sh\n\
+         echo \"$*\" >> \"$HOME/manager.log\"\n\
+         case \" $* \" in *\" {fail_on} \"*) echo 'Failed to connect to bus' >&2; exit 1 ;; esac\n\
+         case \" $* \" in\n\
+           *' start '*|*' kickstart '*|*' bootstrap '*)\n\
+             '{odhive}' --port {port} serve --foreground --detached </dev/null >/dev/null 2>>\"$HOME/service.err\" & ;;\n\
+           *' --now '*|*' bootout '*) '{odhive}' quit >/dev/null 2>&1 ;;\n\
+         esac\n\
+         exit 0\n"
+    );
+    for name in ["systemctl", "launchctl"] {
+        let p = bin.join(name);
+        fs::write(&p, &script).expect("write");
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let path = std::env::var_os("PATH").expect("PATH");
+    let mut dirs = vec![bin];
+    dirs.extend(std::env::split_paths(&path));
+    std::env::join_paths(dirs).expect("join").into()
+}
+
+fn manager_log(env: &Env) -> String {
+    fs::read_to_string(env.home.join("manager.log")).unwrap_or_default()
+}
+
+#[test]
+fn service_install_hands_the_service_to_the_service_manager() {
+    let env = Env::new();
+    let _guard = ServiceGuard(&env);
+    let path = fake_manager(&env, 18_970, "never");
+    let run = |args: &[&str]| {
+        let out = env.cmd(args).env("PATH", &path).output().expect("run");
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "odhive {args:?}: {err}");
+        err
+    };
+
+    let err = run(&["--port", "18970", "service", "install"]);
+    assert!(err.contains("Installed the OdHive service"), "{err}");
+    assert!(err.contains("running at http://localhost:18970"), "{err}");
+    let file = service_file(&env);
+    let mode = fs::metadata(&file).expect("file").permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    let text = fs::read_to_string(&file).expect("read");
+    let exe = fs::canonicalize(env!("CARGO_BIN_EXE_odhive")).expect("exe");
+    assert!(text.contains(exe.to_str().expect("utf8")), "{text}");
+    assert!(
+        text.contains("18970") && text.contains("--detached"),
+        "{text}"
+    );
+    // The service finds the same tools as this shell.
+    assert!(text.contains("fake-manager:"), "{text}");
+    let log = manager_log(&env);
+    if cfg!(target_os = "macos") {
+        assert!(log.contains("bootstrap gui/"), "{log}");
+    } else {
+        assert_eq!(
+            log,
+            "--user daemon-reload\n--user enable odhive.service\n--user start odhive.service\n"
+        );
+    }
+    let (pid, port) = service_state(&env).expect("state");
+    assert_eq!(port, 18_970);
+
+    // A second detached service is not an error: service managers must not
+    // restart it in a loop.
+    let out = env
+        .cmd(&["--port", "18971", "serve", "--foreground", "--detached"])
+        .output()
+        .expect("run");
+    assert!(out.status.success());
+    assert!(port_free(18_971));
+
+    // Reinstalling while it runs leaves it running.
+    let err = run(&["--port", "18970", "service", "install"]);
+    assert!(err.contains("Updated the OdHive service"), "{err}");
+    assert!(err.contains("already running"), "{err}");
+    if !cfg!(target_os = "macos") {
+        assert_eq!(service_state(&env), Some((pid, port)));
+    }
+
+    // Once installed, the launcher starts it through the service manager.
+    run(&["quit"]);
+    eventually("the service exits", || service_state(&env).is_none());
+    fs::remove_file(env.home.join("manager.log")).expect("rm");
+    let err = run(&["--no-browser"]);
+    assert!(err.contains("Started OdHive in the background"), "{err}");
+    let log = manager_log(&env);
+    assert!(
+        log.contains("--user start odhive.service") || log.contains("kickstart gui/"),
+        "{log}"
+    );
+    let (pid, _) = service_state(&env).expect("state");
+
+    let err = run(&["service", "uninstall"]);
+    assert!(err.contains("Removed the OdHive service"), "{err}");
+    assert!(!file.exists());
+    eventually("the service exits", || !alive(pid));
+    let log = manager_log(&env);
+    assert!(
+        log.contains("--user disable --now odhive.service") || log.contains("bootout gui/"),
+        "{log}"
+    );
+    let err = run(&["service", "uninstall"]);
+    assert!(err.contains("not installed"), "{err}");
+}
+
+#[test]
+fn a_failed_service_install_leaves_nothing_behind() {
+    let env = Env::new();
+    let _guard = ServiceGuard(&env);
+    let fail_on = if cfg!(target_os = "macos") {
+        "bootstrap"
+    } else {
+        "enable"
+    };
+    let path = fake_manager(&env, 18_972, fail_on);
+    let out = env
+        .cmd(&["--port", "18972", "service", "install"])
+        .env("PATH", &path)
+        .output()
+        .expect("run");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        err.contains("could not register the OdHive service"),
+        "{err}"
+    );
+    assert!(err.contains("Failed to connect to bus"), "{err}");
+    assert!(!service_file(&env).exists());
+    assert!(service_state(&env).is_none());
+    assert!(port_free(18_972));
+
+    // Without a service manager at all, it says so.
+    let out = env
+        .cmd(&["service", "install"])
+        .env("PATH", "/nonexistent")
+        .output()
+        .expect("run");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(err.contains("not found"), "{err}");
+    assert!(!service_file(&env).exists());
+}

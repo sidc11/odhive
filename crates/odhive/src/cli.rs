@@ -48,6 +48,17 @@ pub enum Command {
     Serve(ServeArgs),
     /// Stop the background service and the instances it runs.
     Quit,
+    /// Let systemd (Linux) or launchd (macOS) start the service at login.
+    #[command(subcommand)]
+    Service(ServiceCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServiceCommand {
+    /// Install and start the service for your user (uses --port).
+    Install,
+    /// Stop the service and its instances, and remove it.
+    Uninstall,
 }
 
 #[derive(Debug, Args)]

@@ -43,7 +43,15 @@ odhive --no-browser     # print a one-time sign-in link instead
 odhive serve            # start the service only
 odhive serve --foreground   # run it in this terminal until Ctrl+C
 odhive quit             # stop the service and the instances it runs
+odhive service install  # start it at login (systemd user unit / launchd agent)
+odhive service uninstall
 ```
+
+With `odhive service install`, systemd (Linux) or launchd (macOS) owns the
+service: it starts at login, and `odhive` starts it through them. The
+service gets the `PATH` of the shell you install from, so it finds the same
+`uv`, `git` and Python. Its log is in `journalctl --user -u odhive` on Linux
+and in `service.log` in the OdHive data folder on macOS.
 
 ## Command line (preview)
 
