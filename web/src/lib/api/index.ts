@@ -36,3 +36,10 @@ export type ClientMessage = Schemas['ClientMessage']
 /** What the server sends over the WebSocket. */
 export type ServerMessage = Schemas['ServerMessage']
 export type ManagerEvent = Schemas['ManagerEvent']
+
+/** Background work (source clones, project setups) and its progress. */
+export type Job = Schemas['Job']
+export type JobEvent = Schemas['JobEvent']
+export type JobStep = Schemas['JobStep']
+export type CloneSource = Schemas['CloneSource']
+export type SetupRequest = Schemas['SetupRequest']

@@ -147,7 +147,7 @@ pub struct Entry {
 }
 
 /// Something found but not installed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct Skipped {
     /// Where it was found.
     pub origin: Origin,
@@ -158,9 +158,10 @@ pub struct Skipped {
 }
 
 /// A problem that did not stop collection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct Warning {
     /// Path involved.
+    #[schema(value_type = String)]
     pub path: PathBuf,
     /// What is wrong.
     pub message: String,
@@ -358,7 +359,7 @@ impl InstallOptions {
 }
 
 /// Progress of [`install`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "event")]
 pub enum InstallEvent {
     /// The installer was started.
@@ -366,6 +367,7 @@ pub enum InstallEvent {
         /// Installer label (`uv pip install` / `pip install`).
         tool: String,
         /// Target interpreter.
+        #[schema(value_type = String)]
         python: PathBuf,
         /// Number of requirements passed.
         count: usize,

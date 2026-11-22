@@ -10,12 +10,15 @@ use odhive_core::launch::{self, LoadedProject, Target};
 use odhive_core::manager::{InstanceInfo, Manager, StopOutcome};
 use odhive_core::pidfile::{self, PidRecord, RecordState, RunDir};
 use odhive_core::ports::PortOwner;
+use odhive_core::python::DiscoverOptions;
+use odhive_core::sources::CloneOptions;
 use odhive_core::supervisor::DEFAULT_STOP_TIMEOUT;
 use odhive_core::workspace::Workspace;
 use tokio::sync::{Mutex, watch};
 
 use crate::api::error::{ApiError, ApiResult};
 use crate::api::ws::WsLimits;
+use crate::jobs::{JobKind, Jobs};
 
 /// Shared state of the API. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -28,6 +31,9 @@ struct Inner {
     paths: AppPaths,
     workspace: Workspace,
     manager: Manager,
+    jobs: Jobs,
+    clone: CloneOptions,
+    discover: DiscoverOptions,
     /// Serializes read-modify-write cycles of the global config.
     config_lock: Mutex<()>,
     ws_limits: WsLimits,
@@ -36,10 +42,26 @@ struct Inner {
 }
 
 /// Tunables of a [`Service`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ServiceOptions {
     /// Limits of each WebSocket connection.
     pub ws: WsLimits,
+    /// git and the repository used to clone Odoo Community.
+    pub clone: CloneOptions,
+    /// Where project setups look for Python interpreters and uv.
+    pub discover: DiscoverOptions,
+}
+
+impl Default for ServiceOptions {
+    /// Default limits, the official Odoo repository, and Python and uv from
+    /// the service's `PATH`.
+    fn default() -> Self {
+        Self {
+            ws: WsLimits::default(),
+            clone: CloneOptions::default(),
+            discover: DiscoverOptions::from_env(),
+        }
+    }
 }
 
 /// An instance this OdHive does not manage that runs according to its PID
@@ -86,6 +108,9 @@ impl Service {
                 paths,
                 workspace,
                 manager,
+                jobs: Jobs::new(),
+                clone: opts.clone,
+                discover: opts.discover,
                 config_lock: Mutex::new(()),
                 ws_limits: opts.ws,
                 shutdown: watch::Sender::new(false),
@@ -98,6 +123,60 @@ impl Service {
     /// resolves.
     pub fn begin_shutdown(&self) {
         self.inner.shutdown.send_replace(true);
+    }
+
+    /// Cancels the running jobs and waits up to `wait` for them to clean up.
+    pub async fn cancel_jobs(&self, wait: std::time::Duration) {
+        self.inner.jobs.cancel_all(wait).await;
+    }
+
+    /// Background jobs.
+    #[must_use]
+    pub fn jobs(&self) -> &Jobs {
+        &self.inner.jobs
+    }
+
+    pub(crate) fn clone_options(&self) -> &CloneOptions {
+        &self.inner.clone
+    }
+
+    pub(crate) fn discover_options(&self) -> &DiscoverOptions {
+        &self.inner.discover
+    }
+
+    /// Instances of project `name` that run here or elsewhere.
+    pub(crate) fn running_instances(&self, name: &str) -> ApiResult<Vec<String>> {
+        let mut running: Vec<String> = self
+            .inner
+            .manager
+            .list_project(name)
+            .into_iter()
+            .filter(|i| !i.is_done())
+            .map(|i| i.owner.to_string())
+            .collect();
+        running.extend(
+            launch::running_records(&self.run_dir())?
+                .iter()
+                .filter(|r| r.project == name)
+                .map(|r| r.owner().to_string()),
+        );
+        running.sort();
+        running.dedup();
+        Ok(running)
+    }
+
+    /// `409 setup_running` while project `name` is being set up.
+    pub(crate) fn ensure_not_setting_up(&self, name: &str) -> ApiResult<()> {
+        let kind = JobKind::Setup {
+            project: name.to_owned(),
+        };
+        match self.inner.jobs.running(&kind) {
+            Some(job) => Err(ApiError::conflict(
+                "setup_running",
+                format!("project {name} is being set up (job {})", job.id),
+            )),
+            None => Ok(()),
+        }
     }
 
     /// Turns `true` once [`Service::begin_shutdown`] was called.
@@ -180,6 +259,7 @@ impl Service {
         id: &str,
         replace: bool,
     ) -> ApiResult<InstanceInfo> {
+        self.ensure_not_setting_up(name)?;
         let (cfg, project) = self.project(name)?;
         let target = Target {
             project: name.to_owned(),

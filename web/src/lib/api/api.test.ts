@@ -5,6 +5,7 @@ import {
   WS_PATH,
   type ClientMessage,
   type InstanceInfo,
+  type Job,
   type LogRecord,
   type Project,
   type ServerMessage,
@@ -91,8 +92,36 @@ const frames: ServerMessage[] = [
     ],
   },
   { type: 'snapshot', instances: [running] },
+  {
+    type: 'job_events',
+    events: [
+      { event: 'step', id: 1, step: { job: 'setup', step: 'venv', event: 'output', line: 'Using CPython 3.14.0' } },
+      { event: 'output', id: 1, line: 'Installed 42 packages' },
+    ],
+  },
   { type: 'error', error: 'unknown_project', message: 'no project named "x"' },
 ]
+
+// A job as GET /jobs/{id} returns it (see crates/odhive-server/tests/jobs.rs).
+const job: Job = {
+  id: 1,
+  kind: 'clone',
+  version: '19.0',
+  state: 'succeeded',
+  started_at: 1_790_000_000_000,
+  finished_at: 1_790_000_060_000,
+  steps: [
+    { job: 'clone', event: 'progress', phase: 'Receiving objects', percent: 100 },
+    { job: 'clone', event: 'finished', target: '/home/me/OdHive/sources/odoo-19.0' },
+  ],
+  output: [],
+  output_dropped: 0,
+  result: {
+    kind: 'clone',
+    source: { id: 'odoo-19.0', edition: 'community', odoo_version: '19.0', path: '/home/me/OdHive/sources/odoo-19.0' },
+  },
+  error: null,
+}
 
 describe('API types', () => {
   it('describe what the server sends', () => {
@@ -104,5 +133,8 @@ describe('API types', () => {
     expect(WS_PATH).toBe('/api/v1/ws')
     expect(subscribe.op).toBe('subscribe_logs')
     expect(frames.map((f) => f.type)).toContain('logs')
+    const jobs: ServerMessage = { type: 'job_snapshot', jobs: [job] }
+    expect(jobs.type).toBe('job_snapshot')
+    expect(job.result?.kind).toBe('clone')
   })
 })

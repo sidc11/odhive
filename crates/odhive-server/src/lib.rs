@@ -3,6 +3,7 @@
 
 pub mod api;
 mod assets;
+pub mod jobs;
 pub mod security;
 pub mod service;
 

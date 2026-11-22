@@ -132,7 +132,15 @@ async fn setup(
     manager: ManagerOptions,
     ws: WsLimits,
 ) -> (Api, u16) {
-    let (api, port) = env.serve_with(manager, ServiceOptions { ws }).await;
+    let (api, port) = env
+        .serve_with(
+            manager,
+            ServiceOptions {
+                ws,
+                ..ServiceOptions::default()
+            },
+        )
+        .await;
     let source = api.add_source(&env.source_dir()).await;
     api.create_project(name, &source).await;
     env.make_runnable_with(name, http, http + 1, args);
@@ -215,7 +223,13 @@ async fn oversized_client_messages_end_the_connection() {
         ..WsLimits::default()
     };
     let (_api, port) = env
-        .serve_with(ManagerOptions::default(), ServiceOptions { ws: limits })
+        .serve_with(
+            ManagerOptions::default(),
+            ServiceOptions {
+                ws: limits,
+                ..ServiceOptions::default()
+            },
+        )
         .await;
     let mut ws = connect(port).await;
     let big = json!({ "op": "subscribe_logs", "project": "x".repeat(2000), "instance": "main" });
@@ -613,4 +627,65 @@ async fn a_client_that_stops_reading_is_dropped() {
         "dropped before the end ({entries} entries): {end}"
     );
     stop(&api, "shop").await;
+}
+
+#[tokio::test]
+async fn job_progress_is_streamed_to_job_subscribers() {
+    let env = Env::new();
+    let (api, port) = env
+        .serve_with(
+            ManagerOptions::default(),
+            common::job_options("file:///none"),
+        )
+        .await;
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    let mut ws = connect(port).await;
+
+    send(&mut ws, json!({ "op": "subscribe_jobs" })).await;
+    let snap = recv(&mut ws).await;
+    assert_eq!(snap["type"], "job_snapshot", "{snap}");
+    assert_eq!(snap["jobs"], json!([]));
+
+    let python = common::python3();
+    let (status, job) = api
+        .post(
+            "/api/v1/projects/shop/setup",
+            Some(json!({ "python": python.to_str().expect("utf8"), "skip_requirements": true })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let id = job["id"].clone();
+
+    let msgs = recv_until(&mut ws, "the job to finish", |m| {
+        m["type"] == "job_events"
+            && m["events"]
+                .as_array()
+                .is_some_and(|e| e.iter().any(|e| e["event"] == "finished"))
+    })
+    .await;
+    let events: Vec<&Value> = msgs
+        .iter()
+        .flat_map(|m| m["events"].as_array().expect("events"))
+        .collect();
+    assert!(events.iter().all(|e| e["id"] == id || e["job"]["id"] == id));
+    assert_eq!(events.first().map(|e| &e["event"]), Some(&json!("started")));
+    assert!(
+        events.iter().any(|e| e["event"] == "step"
+            && e["step"]["job"] == "setup"
+            && e["step"]["step"] == "python"),
+        "{events:?}"
+    );
+    let last = events.last().expect("last");
+    assert_eq!(last["event"], "finished");
+    assert!(
+        matches!(last["job"]["state"].as_str(), Some("succeeded" | "failed")),
+        "{last}"
+    );
+
+    // Unsubscribed: the next job is not sent.
+    send(&mut ws, json!({ "op": "unsubscribe_jobs" })).await;
+    send(&mut ws, json!({ "op": "subscribe_events" })).await;
+    let snap = recv(&mut ws).await;
+    assert_eq!(snap["type"], "snapshot", "{snap}");
 }

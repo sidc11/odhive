@@ -41,6 +41,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Running and recently ended jobs, oldest first. */
+        get: operations["list_jobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One job. */
+        get: operations["get_job"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancels a running job: its tool is stopped and what it did is undone.
+         *     Answers once the job ended (or after 20 s); an ended job is returned as
+         *     is.
+         */
+        post: operations["cancel_job"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects": {
         parameters: {
             query?: never;
@@ -221,6 +276,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{name}/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Starts setting up the project's Python environment: creates `.venv`
+         *     (kept when it exists, unless `recreate`) and installs the requirements
+         *     of Odoo and of the project's modules. Follow it with `/jobs/{id}` or the
+         *     WebSocket. Refused while an instance of the project runs.
+         */
+        post: operations["setup_project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sources": {
         parameters: {
             query?: never;
@@ -236,6 +313,27 @@ export interface paths {
          *     returns its entry.
          */
         post: operations["add_source"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sources/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Starts a shallow clone of Odoo Community `version` from the official
+         *     repository into `<workspace>/sources/odoo-<branch>`, registered once it
+         *     was verified. Follow it with `/jobs/{id}` or the WebSocket.
+         */
+        post: operations["clone_source"];
         delete?: never;
         options?: never;
         head?: never;
@@ -369,6 +467,46 @@ export interface components {
         } | {
             /** @enum {string} */
             op: "unsubscribe_events";
+        } | {
+            /** @enum {string} */
+            op: "subscribe_jobs";
+        } | {
+            /** @enum {string} */
+            op: "unsubscribe_jobs";
+        };
+        /** @description Progress events emitted while cloning. */
+        CloneEvent: {
+            /** @description Branch being cloned. */
+            branch: string;
+            /** @enum {string} */
+            event: "started";
+            /** @description Final destination. */
+            target: string;
+            /** @description Clone URL. */
+            url: string;
+        } | {
+            /** @enum {string} */
+            event: "progress";
+            /**
+             * Format: int32
+             * @description Percentage, when git printed one.
+             */
+            percent?: number | null;
+            /** @description Phase name as printed by git. */
+            phase: string;
+        } | {
+            /** @enum {string} */
+            event: "finished";
+            /** @description Final destination. */
+            target: string;
+        };
+        /** @description A Community series to clone. */
+        CloneSource: {
+            /**
+             * @description Odoo series, e.g. `19.0` or `saas~19.2`.
+             * @example 19.0
+             */
+            version: string;
         };
         /** @description One manager's install command. */
         Command: {
@@ -377,6 +515,11 @@ export interface components {
             /** @description The package manager. */
             manager: components["schemas"]["PackageManager"];
         };
+        /**
+         * @description How a Python version relates to what an Odoo source supports.
+         * @enum {string}
+         */
+        Compat: "supported" | "too_old" | "too_new";
         /** @description A project to create. */
         CreateProject: {
             /**
@@ -423,6 +566,15 @@ export interface components {
             message: string;
             /** @description Whether lines were dropped because the entry hit its size cap. */
             truncated: boolean;
+        };
+        /** @description What [`setup_env`] did. */
+        EnvReport: {
+            /** @description Base interpreter (`None` when an existing venv was kept). */
+            base?: string | null;
+            /** @description Requirements passed to the installer. */
+            installed: number;
+            /** @description The venv's interpreter. */
+            python: string;
         };
         /** @description Body of every error response. */
         ErrorBody: {
@@ -604,6 +756,27 @@ export interface components {
             /** @description Extra advice. */
             note?: string | null;
         };
+        /** @description Progress of [`install`]. */
+        InstallEvent: {
+            /** @description Number of requirements passed. */
+            count: number;
+            /** @enum {string} */
+            event: "started";
+            /** @description Target interpreter. */
+            python: string;
+            /** @description Installer label (`uv pip install` / `pip install`). */
+            tool: string;
+        } | {
+            /** @enum {string} */
+            event: "output";
+            /** @description The line. */
+            line: string;
+        } | {
+            /** @description Number of requirements passed. */
+            count: number;
+            /** @enum {string} */
+            event: "finished";
+        };
         /** @description One event of one instance. */
         InstanceEvent: components["schemas"]["Event"] | components["schemas"]["Notice"];
         /** @description What is known about one instance. */
@@ -657,6 +830,106 @@ export interface components {
              */
             workers: number;
         };
+        /** @description A background job. */
+        Job: components["schemas"]["JobKind"] & {
+            error?: components["schemas"]["ErrorBody"] | null;
+            /**
+             * Format: int64
+             * @description End time, milliseconds since the Unix epoch.
+             */
+            finished_at?: number | null;
+            /**
+             * Format: int64
+             * @description Id, unique while this service runs.
+             */
+            id: number;
+            /** @description The last lines of tool output. */
+            output: string[];
+            /**
+             * Format: int64
+             * @description Older output lines that are no longer kept.
+             */
+            output_dropped: number;
+            result?: components["schemas"]["JobResult"] | null;
+            /**
+             * Format: int64
+             * @description Start time, milliseconds since the Unix epoch.
+             */
+            started_at: number;
+            /** @description Where it stands. */
+            state: components["schemas"]["JobState"];
+            /** @description Progress steps, oldest first (tool output is in `output`). */
+            steps: components["schemas"]["JobStep"][];
+        };
+        /** @description A change to a job. */
+        JobEvent: {
+            /** @enum {string} */
+            event: "started";
+            /** @description The job. */
+            job: components["schemas"]["Job"];
+        } | {
+            /** @enum {string} */
+            event: "step";
+            /**
+             * Format: int64
+             * @description Job id.
+             */
+            id: number;
+            /** @description The step. */
+            step: components["schemas"]["JobStep"];
+        } | {
+            /** @enum {string} */
+            event: "output";
+            /**
+             * Format: int64
+             * @description Job id.
+             */
+            id: number;
+            /** @description The line. */
+            line: string;
+        } | {
+            /** @enum {string} */
+            event: "finished";
+            /** @description The job as it ended. */
+            job: components["schemas"]["Job"];
+        };
+        /** @description What a job does. */
+        JobKind: {
+            /** @enum {string} */
+            kind: "clone";
+            /** @description Odoo series, e.g. `19.0`. */
+            version: string;
+        } | {
+            /** @enum {string} */
+            kind: "setup";
+            /** @description Project name. */
+            project: string;
+        };
+        /** @description What a successful job produced. */
+        JobResult: {
+            /** @enum {string} */
+            kind: "clone";
+            /** @description The new source. */
+            source: components["schemas"]["SourceEntry"];
+        } | {
+            /** @enum {string} */
+            kind: "setup";
+            /** @description What was set up. */
+            report: components["schemas"]["EnvReport"];
+        };
+        /**
+         * @description Where a job stands.
+         * @enum {string}
+         */
+        JobState: "running" | "succeeded" | "failed" | "cancelled";
+        /** @description One step of a job's progress. */
+        JobStep: (components["schemas"]["CloneEvent"] & {
+            /** @enum {string} */
+            job: "clone";
+        }) | (components["schemas"]["SetupEvent"] & {
+            /** @enum {string} */
+            job: "setup";
+        });
         /**
          * @description Severity of a record, in increasing order.
          * @enum {string}
@@ -957,6 +1230,13 @@ export interface components {
             /** @description Project folder. */
             path: string;
         };
+        /** @description The Python range (inclusive, by `major.minor`) an Odoo source supports. */
+        PySupport: {
+            /** @description Newest supported `(major, minor)`. */
+            max: number[];
+            /** @description Oldest supported `(major, minor)`. */
+            min: number[];
+        };
         /** @description An entry with its sequence number. */
         Record: components["schemas"]["Entry"] & {
             /**
@@ -1071,10 +1351,77 @@ export interface components {
             instances: components["schemas"]["InstanceInfo"][];
             /** @enum {string} */
             type: "snapshot";
+        } | {
+            /** @description The events. */
+            events: components["schemas"]["JobEvent"][];
+            /** @enum {string} */
+            type: "job_events";
+        } | {
+            /** @description The jobs, oldest first. */
+            jobs: components["schemas"]["Job"][];
+            /** @enum {string} */
+            type: "job_snapshot";
         } | (components["schemas"]["ErrorBody"] & {
             /** @enum {string} */
             type: "error";
         });
+        /** @description Progress of [`setup_env`]. */
+        SetupEvent: {
+            /** @description How it relates to what Odoo supports. */
+            compat: components["schemas"]["Compat"];
+            /** @description Interpreter. */
+            path: string;
+            /** @enum {string} */
+            step: "python";
+            /** @description What Odoo supports. */
+            support: components["schemas"]["PySupport"];
+            /** @description Its version. */
+            version: string;
+        } | (components["schemas"]["VenvEvent"] & {
+            /** @enum {string} */
+            step: "venv";
+        }) | {
+            /** @description Venv folder. */
+            dir: string;
+            /** @enum {string} */
+            step: "venv_kept";
+        } | {
+            /** @description Requirements to install. */
+            count: number;
+            /** @description Modules whose manifests were read. */
+            modules: number;
+            /** @description Entries that are not installed. */
+            skipped: components["schemas"]["Skipped"][];
+            /** @enum {string} */
+            step: "collected";
+            /** @description Problems while collecting. */
+            warnings: components["schemas"]["Warning"][];
+        } | (components["schemas"]["InstallEvent"] & {
+            /** @enum {string} */
+            step: "install";
+        });
+        /** @description How to set up a project's Python environment. */
+        SetupRequest: {
+            /**
+             * @description Build the venv with this interpreter (absolute path; remembered in
+             *     the project). Omitted = the project's setting, else the newest
+             *     suitable one found.
+             */
+            python?: string | null;
+            /** @description Replace an existing venv. */
+            recreate?: boolean;
+            /** @description Skip installing requirements. */
+            skip_requirements?: boolean;
+        };
+        /** @description Something found but not installed. */
+        Skipped: {
+            /** @description Where it was found. */
+            origin: components["schemas"]["Origin"];
+            /** @description Why it is not installed. */
+            reason: string;
+            /** @description The text as written. */
+            text: string;
+        };
         /** @description One Odoo source tree known to OdHive, shared between projects. */
         SourceEntry: {
             /** @description Community or Enterprise. */
@@ -1166,6 +1513,51 @@ export interface components {
             /** @enum {string} */
             reason: "other_port";
         };
+        /** @description Progress of [`create`]. */
+        VenvEvent: {
+            /** @description Venv directory. */
+            dir: string;
+            /** @enum {string} */
+            event: "removing";
+        } | {
+            /** @description Venv directory. */
+            dir: string;
+            /** @enum {string} */
+            event: "started";
+            /** @description Base interpreter. */
+            python: string;
+            /** @description Tool used. */
+            tool: components["schemas"]["VenvTool"];
+        } | {
+            /** @enum {string} */
+            event: "output";
+            /** @description The line, without its terminator. */
+            line: string;
+        } | {
+            /** @enum {string} */
+            event: "finished";
+            /** @description Venv interpreter (`.venv/bin/python`). */
+            python: string;
+            /** @description Its version. */
+            version: string;
+        };
+        /** @description Which tool creates the venv. */
+        VenvTool: {
+            /** @enum {string} */
+            kind: "uv";
+            /** @description `uv venv`, with this uv executable. */
+            path: string;
+        } | {
+            /** @enum {string} */
+            kind: "stdlib";
+        };
+        /** @description A problem that did not stop collection. */
+        Warning: {
+            /** @description What is wrong. */
+            message: string;
+            /** @description Path involved. */
+            path: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -1211,6 +1603,108 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstanceInfo"][];
+                };
+            };
+        };
+    };
+    list_jobs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"][];
+                };
+            };
+        };
+    };
+    get_job: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Job id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Invalid id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    cancel_job: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Job id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The job after the cancel */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Invalid id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
         };
@@ -1682,6 +2176,69 @@ export interface operations {
             };
         };
     };
+    setup_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Setup started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An instance runs or a setup runs */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Invalid project */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     list_sources: {
         parameters: {
             query?: never;
@@ -1735,6 +2292,48 @@ export interface operations {
             };
             /** @description Not an Odoo 19/20 tree */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    clone_source: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloneSource"];
+            };
+        };
+        responses: {
+            /** @description Clone started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Invalid version */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The folder exists or a clone of it runs */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

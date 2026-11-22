@@ -95,10 +95,11 @@ pub enum VenvError {
 }
 
 /// Which tool creates the venv.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "path")]
 pub enum VenvTool {
     /// `uv venv`, with this uv executable.
+    #[schema(value_type = String)]
     Uv(PathBuf),
     /// `python -m venv`.
     Stdlib,
@@ -122,12 +123,13 @@ impl std::fmt::Display for VenvTool {
 }
 
 /// Progress of [`create`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "event")]
 pub enum VenvEvent {
     /// An existing venv is being removed (`replace`).
     Removing {
         /// Venv directory.
+        #[schema(value_type = String)]
         dir: PathBuf,
     },
     /// The tool was started.
@@ -135,8 +137,10 @@ pub enum VenvEvent {
         /// Tool used.
         tool: VenvTool,
         /// Base interpreter.
+        #[schema(value_type = String)]
         python: PathBuf,
         /// Venv directory.
+        #[schema(value_type = String)]
         dir: PathBuf,
     },
     /// One line of tool output (stdout or stderr).
@@ -147,8 +151,10 @@ pub enum VenvEvent {
     /// The venv exists and its interpreter answered.
     Finished {
         /// Venv interpreter (`.venv/bin/python`).
+        #[schema(value_type = String)]
         python: PathBuf,
         /// Its version.
+        #[schema(value_type = String)]
         version: PyVersion,
     },
 }

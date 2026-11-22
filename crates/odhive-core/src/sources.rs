@@ -81,7 +81,8 @@ pub enum SourceError {
 }
 
 /// Progress events emitted while cloning.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case", tag = "event")]
 pub enum CloneEvent {
     /// git was started.
     Started {
@@ -90,6 +91,7 @@ pub enum CloneEvent {
         /// Branch being cloned.
         branch: String,
         /// Final destination.
+        #[schema(value_type = String)]
         target: PathBuf,
     },
     /// git reported progress for a phase (`Receiving objects`, `Resolving deltas`, ...).
@@ -102,6 +104,7 @@ pub enum CloneEvent {
     /// The clone was verified and moved into place.
     Finished {
         /// Final destination.
+        #[schema(value_type = String)]
         target: PathBuf,
     },
 }

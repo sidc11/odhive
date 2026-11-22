@@ -18,7 +18,8 @@ use odhive_core::config::AppPaths;
 use odhive_core::manager::{Manager, ManagerOptions};
 use odhive_core::pidfile::RunDir;
 use odhive_core::project::{Instance, ProjectConfig};
-use odhive_core::python::find_executable;
+use odhive_core::python::{DiscoverOptions, find_executable};
+use odhive_core::sources::CloneOptions;
 use odhive_core::workspace::bootstrap;
 use odhive_server::{AppConfig, Service, ServiceOptions, app};
 use serde_json::Value;
@@ -27,6 +28,53 @@ use tower::ServiceExt;
 /// The port the app believes it serves on.
 pub const PORT: u16 = 7069;
 pub const HOST: &str = "localhost:7069";
+
+/// Time a job may take in tests.
+pub const JOB_WAIT: Duration = Duration::from_secs(120);
+
+pub fn python3() -> PathBuf {
+    let path = std::env::var_os("PATH").expect("PATH");
+    find_executable(&path, "python3").expect("python3 on PATH")
+}
+
+/// Service options that look for nothing on `PATH` (setups name their
+/// Python) and use uv only if it is installed; clones come from `url`.
+pub fn job_options(url: &str) -> ServiceOptions {
+    let path = std::env::var_os("PATH").expect("PATH");
+    ServiceOptions {
+        clone: CloneOptions {
+            url: url.to_owned(),
+            ..CloneOptions::default()
+        },
+        discover: DiscoverOptions {
+            path_var: None,
+            uv: find_executable(&path, "uv"),
+            explicit: Vec::new(),
+            timeout: Duration::from_secs(30),
+        },
+        ..ServiceOptions::default()
+    }
+}
+
+/// Runs git in `dir` with a private identity and no user config.
+pub fn git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=OdHive Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("run git");
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+}
 
 pub struct Env {
     _tmp: tempfile::TempDir,
@@ -64,6 +112,18 @@ impl Env {
             home,
             paths,
         }
+    }
+
+    /// A local git repository holding the fake Odoo tree on branch `19.0`;
+    /// returns its `file://` URL.
+    pub fn upstream(&self) -> String {
+        let repo = self.home.join("upstream");
+        fs::create_dir_all(&repo).expect("mkdir");
+        git(&repo, &["init", "-q", "-b", "19.0"]);
+        copy_tree(&self.source_dir(), &repo);
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-q", "-m", "init"]);
+        format!("file://{}", repo.display())
     }
 
     pub fn source_dir(&self) -> PathBuf {
@@ -208,6 +268,38 @@ impl Api {
             .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
         body
+    }
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    for e in fs::read_dir(from).expect("read_dir") {
+        let e = e.expect("entry");
+        let dest = to.join(e.file_name());
+        if e.file_type().expect("type").is_dir() {
+            fs::create_dir_all(&dest).expect("mkdir");
+            copy_tree(&e.path(), &dest);
+        } else {
+            fs::copy(e.path(), &dest).expect("copy");
+        }
+    }
+}
+
+impl Api {
+    /// Polls job `id` until it is no longer running; returns it.
+    pub async fn wait_job(&self, id: u64) -> Value {
+        let deadline = std::time::Instant::now() + JOB_WAIT;
+        loop {
+            let (status, job) = self.get(&format!("/api/v1/jobs/{id}")).await;
+            assert_eq!(status, StatusCode::OK, "{job}");
+            if job["state"] != "running" {
+                return job;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "job {id} still runs: {job}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 }
 

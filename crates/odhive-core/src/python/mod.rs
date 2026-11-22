@@ -135,7 +135,7 @@ impl Serialize for PyVersion {
 }
 
 /// How a Python version relates to what an Odoo source supports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Compat {
     /// Within `MIN_PY_VERSION ..= MAX_PY_VERSION`.
@@ -147,11 +147,13 @@ pub enum Compat {
 }
 
 /// The Python range (inclusive, by `major.minor`) an Odoo source supports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct PySupport {
     /// Oldest supported `(major, minor)`.
+    #[schema(value_type = Vec<u8>)]
     pub min: (u8, u8),
     /// Newest supported `(major, minor)`.
+    #[schema(value_type = Vec<u8>)]
     pub max: (u8, u8),
 }
 
