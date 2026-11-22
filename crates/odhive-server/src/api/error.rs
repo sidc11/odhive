@@ -147,6 +147,8 @@ impl From<SourceError> for ApiError {
             | SourceError::VersionMismatch { .. } => Self::invalid("bad_source", msg),
             SourceError::UnknownSource(_) => Self::not_found("unknown_source", msg),
             SourceError::AlreadyExists(_) => Self::conflict("exists", msg),
+            SourceError::GitNotFound(_) => Self::invalid("git_missing", msg),
+            SourceError::GitFailed { .. } => Self::new(StatusCode::BAD_GATEWAY, "git_failed", msg),
             _ => Self::internal(msg),
         }
     }
@@ -164,7 +166,17 @@ impl From<SetupError> for ApiError {
             SetupError::BadAddonsPath(_) => Self::invalid("bad_addons_path", msg),
             SetupError::Source(e) => e.into(),
             SetupError::Project(e) => e.into(),
-            _ => Self::internal(msg),
+            SetupError::Python(_) | SetupError::PythonTooOld { .. } | SetupError::Pick(_) => {
+                Self::invalid("python", msg)
+            }
+            SetupError::BrokenVenv(_) => Self::conflict("broken_venv", msg),
+            SetupError::Venv(_) => Self::new(StatusCode::INTERNAL_SERVER_ERROR, "venv_failed", msg),
+            SetupError::Requirements(_) => Self::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "requirements_failed",
+                msg,
+            ),
+            SetupError::Io { .. } => Self::internal(msg),
         }
     }
 }

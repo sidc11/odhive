@@ -9,7 +9,7 @@ use odhive_core::manager::InstanceInfo;
 use odhive_core::ports::PortOwner;
 use odhive_core::project::{AutofixMode, ReloadMode};
 use odhive_core::schema;
-use odhive_core::setup::{self, NewProject};
+use odhive_core::setup::{self, EnvOptions, NewProject};
 use odhive_core::venv::{VENV_DIR, venv_python};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -17,6 +17,7 @@ use utoipa::ToSchema;
 use super::error::{ApiError, ApiResult, ErrorBody};
 use super::sources::{SCHEMA_TIMEOUT, SchemaInfo, absolute};
 use super::{Body, Params};
+use crate::jobs::{Job, JobKind, JobResult, JobStep};
 use crate::service::Service;
 
 /// A project to create.
@@ -245,6 +246,76 @@ fn registered(cfg: &GlobalConfig, id: &str) -> ApiResult<String> {
         .ok_or_else(|| ApiError::not_found("unknown_source", format!("no source with id {id:?}")))
 }
 
+/// How to set up a project's Python environment.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetupRequest {
+    /// Build the venv with this interpreter (absolute path; remembered in
+    /// the project). Omitted = the project's setting, else the newest
+    /// suitable one found.
+    #[serde(default)]
+    pub python: Option<String>,
+    /// Replace an existing venv.
+    #[serde(default)]
+    pub recreate: bool,
+    /// Skip installing requirements.
+    #[serde(default)]
+    pub skip_requirements: bool,
+}
+
+/// Starts setting up the project's Python environment: creates `.venv`
+/// (kept when it exists, unless `recreate`) and installs the requirements
+/// of Odoo and of the project's modules. Follow it with `/jobs/{id}` or the
+/// WebSocket. Refused while an instance of the project runs.
+#[utoipa::path(operation_id = "setup_project", post, path = "/projects/{name}/setup", tag = "projects", request_body = SetupRequest,
+    params(("name" = String, Path, description = "Project name")),
+    responses(
+        (status = ACCEPTED, description = "Setup started", body = Job),
+        (status = BAD_REQUEST, description = "Invalid request", body = ErrorBody),
+        (status = NOT_FOUND, description = "Not found", body = ErrorBody),
+        (status = CONFLICT, description = "An instance runs or a setup runs", body = ErrorBody),
+        (status = UNPROCESSABLE_ENTITY, description = "Invalid project", body = ErrorBody),
+    ))]
+pub(super) async fn setup(
+    State(svc): State<Service>,
+    Params(name): Params<String>,
+    Body(req): Body<SetupRequest>,
+) -> ApiResult<(StatusCode, Json<Job>)> {
+    let python = req
+        .python
+        .as_deref()
+        .map(|p| absolute("python", p))
+        .transpose()?;
+    let (cfg, mut project) = svc.project(&name)?;
+    project.config.resolve_sources(&cfg)?;
+    let running = svc.running_instances(&name)?;
+    if !running.is_empty() {
+        return Err(ApiError::conflict(
+            "running",
+            format!("{} still running; stop it first", running.join(", ")),
+        ));
+    }
+    let opts = EnvOptions {
+        python,
+        discover: svc.discover_options().clone(),
+        recreate: req.recreate,
+        install: !req.skip_requirements,
+    };
+    let kind = JobKind::Setup {
+        project: name.clone(),
+    };
+    let job = svc.jobs().spawn(kind, move |report| {
+        Box::pin(async move {
+            let report = setup::setup_env(&cfg, &mut project, &opts, |e| {
+                report.step(JobStep::Setup(e));
+            })
+            .await?;
+            Ok(JobResult::Setup { report })
+        })
+    })?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
 /// Unregisters a project; its folder is kept. Refused while an instance
 /// runs.
 #[utoipa::path(operation_id = "remove_project", delete, path = "/projects/{name}", tag = "projects",
@@ -258,21 +329,8 @@ pub(super) async fn remove(
     State(svc): State<Service>,
     Params(name): Params<String>,
 ) -> ApiResult<StatusCode> {
-    let mut running: Vec<String> = svc
-        .manager()
-        .list_project(&name)
-        .into_iter()
-        .filter(|i| !i.is_done())
-        .map(|i| i.owner.to_string())
-        .collect();
-    running.extend(
-        launch::running_records(&svc.run_dir())?
-            .iter()
-            .filter(|r| r.project == name)
-            .map(|r| r.owner().to_string()),
-    );
-    running.sort();
-    running.dedup();
+    svc.ensure_not_setting_up(&name)?;
+    let running = svc.running_instances(&name)?;
     if !running.is_empty() {
         return Err(ApiError::conflict(
             "running",

@@ -285,14 +285,16 @@ impl EnvOptions {
 }
 
 /// Progress of [`setup_env`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "step")]
 pub enum SetupEvent {
     /// The interpreter for the venv.
     Python {
         /// Interpreter.
+        #[schema(value_type = String)]
         path: PathBuf,
         /// Its version.
+        #[schema(value_type = String)]
         version: python::PyVersion,
         /// How it relates to what Odoo supports.
         compat: Compat,
@@ -304,6 +306,7 @@ pub enum SetupEvent {
     /// An existing venv is kept.
     VenvKept {
         /// Venv folder.
+        #[schema(value_type = String)]
         dir: PathBuf,
     },
     /// Requirements were collected.
@@ -322,11 +325,13 @@ pub enum SetupEvent {
 }
 
 /// What [`setup_env`] did.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct EnvReport {
     /// Base interpreter (`None` when an existing venv was kept).
+    #[schema(value_type = Option<String>)]
     pub base: Option<PathBuf>,
     /// The venv's interpreter.
+    #[schema(value_type = String)]
     pub python: PathBuf,
     /// Requirements passed to the installer.
     pub installed: usize,

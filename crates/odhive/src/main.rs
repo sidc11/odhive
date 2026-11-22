@@ -42,6 +42,9 @@ async fn main() -> anyhow::Result<ExitCode> {
     }
 }
 
+/// How long running jobs get to clean up when the service ends.
+const JOB_CANCEL_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
 async fn serve(port: u16) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let boot = bootstrap(&paths).context("could not prepare the OdHive workspace")?;
@@ -88,11 +91,13 @@ async fn serve(port: u16) -> anyhow::Result<()> {
     }
     let service = Service::new(paths, boot.workspace, manager.clone());
 
-    let served = odhive_server::serve(listeners, service, async {
+    let served = odhive_server::serve(listeners, service.clone(), async {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("shutting down");
     })
     .await;
+    // A half-done clone or setup is undone rather than left behind.
+    service.cancel_jobs(JOB_CANCEL_WAIT).await;
     // Until the background service exists (5.5), instances end with the UI.
     for (owner, result) in manager.shutdown().await {
         if let Err(e) = result {

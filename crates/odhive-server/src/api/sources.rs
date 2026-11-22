@@ -16,6 +16,7 @@ use utoipa::ToSchema;
 
 use super::error::{ApiError, ApiResult, ErrorBody};
 use super::{Body, Params};
+use crate::jobs::{Job, JobKind, JobResult, JobStep};
 use crate::service::Service;
 
 /// Time allowed for reading Odoo's option list.
@@ -123,6 +124,68 @@ pub(super) async fn add(
         })
         .await?;
     Ok((StatusCode::CREATED, Json(entry)))
+}
+
+/// A Community series to clone.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CloneSource {
+    /// Odoo series, e.g. `19.0` or `saas~19.2`.
+    #[schema(example = "19.0")]
+    pub version: String,
+}
+
+/// Starts a shallow clone of Odoo Community `version` from the official
+/// repository into `<workspace>/sources/odoo-<branch>`, registered once it
+/// was verified. Follow it with `/jobs/{id}` or the WebSocket.
+#[utoipa::path(operation_id = "clone_source", post, path = "/sources/clone", tag = "sources", request_body = CloneSource,
+    responses(
+        (status = ACCEPTED, description = "Clone started", body = Job),
+        (status = BAD_REQUEST, description = "Invalid version", body = ErrorBody),
+        (status = CONFLICT, description = "The folder exists or a clone of it runs", body = ErrorBody),
+    ))]
+pub(super) async fn clone(
+    State(svc): State<Service>,
+    Body(req): Body<CloneSource>,
+) -> ApiResult<(StatusCode, Json<Job>)> {
+    let version: OdooVersion =
+        req.version
+            .parse()
+            .map_err(|e: odhive_core::version::VersionError| {
+                ApiError::bad_request("bad_version", e.to_string())
+            })?;
+    let ws = svc.workspace().clone();
+    let target = ws.sources_dir().join(format!("odoo-{}", version.branch()));
+    if std::fs::symlink_metadata(&target).is_ok() {
+        return Err(ApiError::conflict(
+            "exists",
+            format!(
+                "{} already exists; register it with POST /sources",
+                target.display()
+            ),
+        ));
+    }
+    let kind = JobKind::Clone {
+        version: version.to_string(),
+    };
+    let job_svc = svc.clone();
+    let job = svc.jobs().spawn(kind, move |report| {
+        Box::pin(async move {
+            // The clone registers into a scratch config; the real one is
+            // edited only at the end, so other edits are not held up.
+            let mut scratch = job_svc.config()?;
+            let opts = job_svc.clone_options().clone();
+            let cloned = sources::clone_community(&mut scratch, &ws, version, &opts, |e| {
+                report.step(JobStep::Clone(e));
+            })
+            .await?;
+            let source = job_svc
+                .edit_config(|cfg| Ok(sources::register_community(cfg, &cloned.path)?))
+                .await?;
+            Ok(JobResult::Clone { source })
+        })
+    })?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
 /// Unregisters a source tree; its files are kept. Refused while a project

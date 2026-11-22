@@ -58,6 +58,138 @@
         }
       }
     },
+    "/api/v1/jobs": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Running and recently ended jobs, oldest first.",
+        "operationId": "list_jobs",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Job"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "One job.",
+        "operationId": "get_job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{id}/cancel": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Cancels a running job: its tool is stopped and what it did is undone.\nAnswers once the job ended (or after 20 s); an ended job is returned as\nis.",
+        "operationId": "cancel_job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job after the cancel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects": {
       "get": {
         "tags": [
@@ -685,6 +817,88 @@
         }
       }
     },
+    "/api/v1/projects/{name}/setup": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Starts setting up the project's Python environment: creates `.venv`\n(kept when it exists, unless `recreate`) and installs the requirements\nof Odoo and of the project's modules. Follow it with `/jobs/{id}` or the\nWebSocket. Refused while an instance of the project runs.",
+        "operationId": "setup_project",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Setup started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An instance runs or a setup runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sources": {
       "get": {
         "tags": [
@@ -747,6 +961,57 @@
           },
           "422": {
             "description": "Not an Odoo 19/20 tree",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sources/clone": {
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Starts a shallow clone of Odoo Community `version` from the official\nrepository into `<workspace>/sources/odoo-<branch>`, registered once it\nwas verified. Follow it with `/jobs/{id}` or the WebSocket.",
+        "operationId": "clone_source",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloneSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Clone started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The folder exists or a clone of it runs",
             "content": {
               "application/json": {
                 "schema": {
@@ -1102,9 +1367,138 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Receive the progress of every background job. Answered with a\n[`ServerMessage::JobSnapshot`].",
+            "required": [
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "subscribe_jobs"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Stop receiving job progress.",
+            "required": [
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "unsubscribe_jobs"
+                ]
+              }
+            }
           }
         ],
         "description": "A message from the client."
+      },
+      "CloneEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "git was started.",
+            "required": [
+              "url",
+              "branch",
+              "target",
+              "event"
+            ],
+            "properties": {
+              "branch": {
+                "type": "string",
+                "description": "Branch being cloned."
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "started"
+                ]
+              },
+              "target": {
+                "type": "string",
+                "description": "Final destination."
+              },
+              "url": {
+                "type": "string",
+                "description": "Clone URL."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "git reported progress for a phase (`Receiving objects`, `Resolving deltas`, ...).",
+            "required": [
+              "phase",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "progress"
+                ]
+              },
+              "percent": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "Percentage, when git printed one.",
+                "minimum": 0
+              },
+              "phase": {
+                "type": "string",
+                "description": "Phase name as printed by git."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The clone was verified and moved into place.",
+            "required": [
+              "target",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "finished"
+                ]
+              },
+              "target": {
+                "type": "string",
+                "description": "Final destination."
+              }
+            }
+          }
+        ],
+        "description": "Progress events emitted while cloning."
+      },
+      "CloneSource": {
+        "type": "object",
+        "description": "A Community series to clone.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "Odoo series, e.g. `19.0` or `saas~19.2`.",
+            "example": "19.0"
+          }
+        },
+        "additionalProperties": false
       },
       "Command": {
         "type": "object",
@@ -1123,6 +1517,15 @@
             "description": "The package manager."
           }
         }
+      },
+      "Compat": {
+        "type": "string",
+        "description": "How a Python version relates to what an Odoo source supports.",
+        "enum": [
+          "supported",
+          "too_old",
+          "too_new"
+        ]
       },
       "CreateProject": {
         "type": "object",
@@ -1215,6 +1618,32 @@
           }
         ],
         "description": "One log record, possibly spanning several lines."
+      },
+      "EnvReport": {
+        "type": "object",
+        "description": "What [`setup_env`] did.",
+        "required": [
+          "python",
+          "installed"
+        ],
+        "properties": {
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Base interpreter (`None` when an existing venv was kept)."
+          },
+          "installed": {
+            "type": "integer",
+            "description": "Requirements passed to the installer.",
+            "minimum": 0
+          },
+          "python": {
+            "type": "string",
+            "description": "The venv's interpreter."
+          }
+        }
       },
       "ErrorBody": {
         "type": "object",
@@ -1675,6 +2104,83 @@
           }
         }
       },
+      "InstallEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The installer was started.",
+            "required": [
+              "tool",
+              "python",
+              "count",
+              "event"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "description": "Number of requirements passed.",
+                "minimum": 0
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "started"
+                ]
+              },
+              "python": {
+                "type": "string",
+                "description": "Target interpreter."
+              },
+              "tool": {
+                "type": "string",
+                "description": "Installer label (`uv pip install` / `pip install`)."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "One line of installer output.",
+            "required": [
+              "line",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "output"
+                ]
+              },
+              "line": {
+                "type": "string",
+                "description": "The line."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The installer succeeded.",
+            "required": [
+              "count",
+              "event"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "description": "Number of requirements passed.",
+                "minimum": 0
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "finished"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Progress of [`install`]."
+      },
       "InstanceEvent": {
         "oneOf": [
           {
@@ -1840,6 +2346,345 @@
             "minimum": 0
           }
         }
+      },
+      "Job": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/JobKind",
+            "description": "What it does."
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "state",
+              "started_at",
+              "steps",
+              "output",
+              "output_dropped"
+            ],
+            "properties": {
+              "error": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ErrorBody",
+                    "description": "Set when it failed."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "finished_at": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "End time, milliseconds since the Unix epoch.",
+                "minimum": 0
+              },
+              "id": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Id, unique while this service runs.",
+                "minimum": 0
+              },
+              "output": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The last lines of tool output."
+              },
+              "output_dropped": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Older output lines that are no longer kept.",
+                "minimum": 0
+              },
+              "result": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/JobResult",
+                    "description": "Set when it succeeded."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "started_at": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Start time, milliseconds since the Unix epoch.",
+                "minimum": 0
+              },
+              "state": {
+                "$ref": "#/components/schemas/JobState",
+                "description": "Where it stands."
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/JobStep"
+                },
+                "description": "Progress steps, oldest first (tool output is in `output`)."
+              }
+            }
+          }
+        ],
+        "description": "A background job."
+      },
+      "JobEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A job was started.",
+            "required": [
+              "job",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "started"
+                ]
+              },
+              "job": {
+                "$ref": "#/components/schemas/Job",
+                "description": "The job."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A job made progress.",
+            "required": [
+              "id",
+              "step",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step"
+                ]
+              },
+              "id": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Job id.",
+                "minimum": 0
+              },
+              "step": {
+                "$ref": "#/components/schemas/JobStep",
+                "description": "The step."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A job's tool printed a line.",
+            "required": [
+              "id",
+              "line",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "output"
+                ]
+              },
+              "id": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Job id.",
+                "minimum": 0
+              },
+              "line": {
+                "type": "string",
+                "description": "The line."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A job ended (any state but `running`).",
+            "required": [
+              "job",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "finished"
+                ]
+              },
+              "job": {
+                "$ref": "#/components/schemas/Job",
+                "description": "The job as it ended."
+              }
+            }
+          }
+        ],
+        "description": "A change to a job."
+      },
+      "JobKind": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Shallow-clones Odoo Community and registers it.",
+            "required": [
+              "version",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "clone"
+                ]
+              },
+              "version": {
+                "type": "string",
+                "description": "Odoo series, e.g. `19.0`."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Creates a project's venv and installs its requirements.",
+            "required": [
+              "project",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "setup"
+                ]
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              }
+            }
+          }
+        ],
+        "description": "What a job does."
+      },
+      "JobResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The cloned source, registered.",
+            "required": [
+              "source",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "clone"
+                ]
+              },
+              "source": {
+                "$ref": "#/components/schemas/SourceEntry",
+                "description": "The new source."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The project's environment.",
+            "required": [
+              "report",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "setup"
+                ]
+              },
+              "report": {
+                "$ref": "#/components/schemas/EnvReport",
+                "description": "What was set up."
+              }
+            }
+          }
+        ],
+        "description": "What a successful job produced."
+      },
+      "JobState": {
+        "type": "string",
+        "description": "Where a job stands.",
+        "enum": [
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "JobStep": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CloneEvent",
+                "description": "Progress of a clone."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "job"
+                ],
+                "properties": {
+                  "job": {
+                    "type": "string",
+                    "enum": [
+                      "clone"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Progress of a clone."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SetupEvent",
+                "description": "Progress of a project setup."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "job"
+                ],
+                "properties": {
+                  "job": {
+                    "type": "string",
+                    "enum": [
+                      "setup"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Progress of a project setup."
+          }
+        ],
+        "description": "One step of a job's progress."
       },
       "Level": {
         "type": "string",
@@ -2749,6 +3594,34 @@
           }
         }
       },
+      "PySupport": {
+        "type": "object",
+        "description": "The Python range (inclusive, by `major.minor`) an Odoo source supports.",
+        "required": [
+          "min",
+          "max"
+        ],
+        "properties": {
+          "max": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Newest supported `(major, minor)`."
+          },
+          "min": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Oldest supported `(major, minor)`."
+          }
+        }
+      },
       "Record": {
         "allOf": [
           {
@@ -3080,6 +3953,52 @@
             }
           },
           {
+            "type": "object",
+            "description": "Job events, oldest first.",
+            "required": [
+              "events",
+              "type"
+            ],
+            "properties": {
+              "events": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/JobEvent"
+                },
+                "description": "The events."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "job_events"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Every job as it is now. Sent on [`ClientMessage::SubscribeJobs`] and\nin place of job events the connection could not keep up with.",
+            "required": [
+              "jobs",
+              "type"
+            ],
+            "properties": {
+              "jobs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Job"
+                },
+                "description": "The jobs, oldest first."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "job_snapshot"
+                ]
+              }
+            }
+          },
+          {
             "allOf": [
               {
                 "$ref": "#/components/schemas/ErrorBody",
@@ -3104,6 +4023,200 @@
           }
         ],
         "description": "A message from the server."
+      },
+      "SetupEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The interpreter for the venv.",
+            "required": [
+              "path",
+              "version",
+              "compat",
+              "support",
+              "step"
+            ],
+            "properties": {
+              "compat": {
+                "$ref": "#/components/schemas/Compat",
+                "description": "How it relates to what Odoo supports."
+              },
+              "path": {
+                "type": "string",
+                "description": "Interpreter."
+              },
+              "step": {
+                "type": "string",
+                "enum": [
+                  "python"
+                ]
+              },
+              "support": {
+                "$ref": "#/components/schemas/PySupport",
+                "description": "What Odoo supports."
+              },
+              "version": {
+                "type": "string",
+                "description": "Its version."
+              }
+            }
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VenvEvent",
+                "description": "Venv creation progress."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "step"
+                ],
+                "properties": {
+                  "step": {
+                    "type": "string",
+                    "enum": [
+                      "venv"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Venv creation progress."
+          },
+          {
+            "type": "object",
+            "description": "An existing venv is kept.",
+            "required": [
+              "dir",
+              "step"
+            ],
+            "properties": {
+              "dir": {
+                "type": "string",
+                "description": "Venv folder."
+              },
+              "step": {
+                "type": "string",
+                "enum": [
+                  "venv_kept"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Requirements were collected.",
+            "required": [
+              "count",
+              "modules",
+              "skipped",
+              "warnings",
+              "step"
+            ],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "description": "Requirements to install.",
+                "minimum": 0
+              },
+              "modules": {
+                "type": "integer",
+                "description": "Modules whose manifests were read.",
+                "minimum": 0
+              },
+              "skipped": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Skipped"
+                },
+                "description": "Entries that are not installed."
+              },
+              "step": {
+                "type": "string",
+                "enum": [
+                  "collected"
+                ]
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Warning"
+                },
+                "description": "Problems while collecting."
+              }
+            }
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InstallEvent",
+                "description": "Requirements install progress."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "step"
+                ],
+                "properties": {
+                  "step": {
+                    "type": "string",
+                    "enum": [
+                      "install"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Requirements install progress."
+          }
+        ],
+        "description": "Progress of [`setup_env`]."
+      },
+      "SetupRequest": {
+        "type": "object",
+        "description": "How to set up a project's Python environment.",
+        "properties": {
+          "python": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Build the venv with this interpreter (absolute path; remembered in\nthe project). Omitted = the project's setting, else the newest\nsuitable one found."
+          },
+          "recreate": {
+            "type": "boolean",
+            "description": "Replace an existing venv."
+          },
+          "skip_requirements": {
+            "type": "boolean",
+            "description": "Skip installing requirements."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Skipped": {
+        "type": "object",
+        "description": "Something found but not installed.",
+        "required": [
+          "origin",
+          "text",
+          "reason"
+        ],
+        "properties": {
+          "origin": {
+            "$ref": "#/components/schemas/Origin",
+            "description": "Where it was found."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why it is not installed."
+          },
+          "text": {
+            "type": "string",
+            "description": "The text as written."
+          }
+        }
       },
       "SourceEntry": {
         "type": "object",
@@ -3396,6 +4509,164 @@
           }
         ],
         "description": "Why a port could not be used."
+      },
+      "VenvEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "An existing venv is being removed (`replace`).",
+            "required": [
+              "dir",
+              "event"
+            ],
+            "properties": {
+              "dir": {
+                "type": "string",
+                "description": "Venv directory."
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "removing"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The tool was started.",
+            "required": [
+              "tool",
+              "python",
+              "dir",
+              "event"
+            ],
+            "properties": {
+              "dir": {
+                "type": "string",
+                "description": "Venv directory."
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "started"
+                ]
+              },
+              "python": {
+                "type": "string",
+                "description": "Base interpreter."
+              },
+              "tool": {
+                "$ref": "#/components/schemas/VenvTool",
+                "description": "Tool used."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "One line of tool output (stdout or stderr).",
+            "required": [
+              "line",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "output"
+                ]
+              },
+              "line": {
+                "type": "string",
+                "description": "The line, without its terminator."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The venv exists and its interpreter answered.",
+            "required": [
+              "python",
+              "version",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "finished"
+                ]
+              },
+              "python": {
+                "type": "string",
+                "description": "Venv interpreter (`.venv/bin/python`)."
+              },
+              "version": {
+                "type": "string",
+                "description": "Its version."
+              }
+            }
+          }
+        ],
+        "description": "Progress of [`create`]."
+      },
+      "VenvTool": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "`uv venv`, with this uv executable.",
+            "required": [
+              "path",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "uv"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "description": "`uv venv`, with this uv executable."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`python -m venv`.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "stdlib"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Which tool creates the venv."
+      },
+      "Warning": {
+        "type": "object",
+        "description": "A problem that did not stop collection.",
+        "required": [
+          "path",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "What is wrong."
+          },
+          "path": {
+            "type": "string",
+            "description": "Path involved."
+          }
+        }
       }
     }
   },
@@ -3411,6 +4682,10 @@
     {
       "name": "instances",
       "description": "Running Odoo instances"
+    },
+    {
+      "name": "jobs",
+      "description": "Background work: source clones and project setups"
     },
     {
       "name": "service",

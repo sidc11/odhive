@@ -7,6 +7,7 @@
 
 pub mod error;
 mod instances;
+mod jobs;
 mod projects;
 mod sources;
 pub mod ws;
@@ -41,6 +42,7 @@ pub const MUTATION_HEADER: &str = "x-odhive";
         (name = "sources", description = "Registered Odoo source trees"),
         (name = "projects", description = "Projects and their instances"),
         (name = "instances", description = "Running Odoo instances"),
+        (name = "jobs", description = "Background work: source clones and project setups"),
         (name = "service", description = "The OdHive service itself"),
     ),
     components(schemas(ws::ClientMessage, ws::ServerMessage))
@@ -51,11 +53,16 @@ fn api_router() -> OpenApiRouter<Service> {
     OpenApiRouter::new()
         .routes(routes!(health))
         .routes(routes!(sources::list, sources::add))
+        .routes(routes!(sources::clone))
         .routes(routes!(sources::remove))
         .routes(routes!(sources::schema))
         .routes(routes!(projects::list, projects::create))
         .routes(routes!(projects::get, projects::remove))
         .routes(routes!(projects::schema))
+        .routes(routes!(projects::setup))
+        .routes(routes!(jobs::list))
+        .routes(routes!(jobs::get))
+        .routes(routes!(jobs::cancel))
         .routes(routes!(instances::list))
         .routes(routes!(instances::start))
         .routes(routes!(instances::stop))

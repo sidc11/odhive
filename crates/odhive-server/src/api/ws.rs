@@ -1,4 +1,4 @@
-//! WebSocket `/ws`: live instance logs and events.
+//! WebSocket `/ws`: live instance logs, instance events and job progress.
 //!
 //! The client sends JSON [`ClientMessage`]s to choose what it wants; the
 //! server answers with JSON [`ServerMessage`]s, batched: entries and events
@@ -12,7 +12,8 @@
 //! it read them. Instance events are queued per connection up to
 //! [`WsLimits::max_pending_events`]; beyond that, or when the connection
 //! lags on the event bus, the queue is replaced by a
-//! [`ServerMessage::Snapshot`] of every instance.
+//! [`ServerMessage::Snapshot`] of every instance. Job events work the same
+//! way, with [`ServerMessage::JobSnapshot`].
 //!
 //! A client that does not take a frame within [`WsLimits::send_timeout`] is
 //! dropped (with a best-effort close frame, code 1008).
@@ -35,6 +36,7 @@ use utoipa::ToSchema;
 
 use super::error::{ApiError, ErrorBody};
 use super::instances::MAX_LOG_LIMIT;
+use crate::jobs::{Job, JobEvent};
 use crate::service::Service;
 
 /// Limits of each WebSocket connection.
@@ -48,7 +50,8 @@ pub struct WsLimits {
     /// Log frames sent per instance before the connection looks at the
     /// client's messages again.
     pub frames_per_flush: usize,
-    /// Instance events queued before they are replaced by a snapshot.
+    /// Instance (or job) events queued before they are replaced by a
+    /// snapshot.
     pub max_pending_events: usize,
     /// Log subscriptions per connection.
     pub max_subscriptions: usize,
@@ -104,6 +107,11 @@ pub enum ClientMessage {
     SubscribeEvents,
     /// Stop receiving instance events.
     UnsubscribeEvents,
+    /// Receive the progress of every background job. Answered with a
+    /// [`ServerMessage::JobSnapshot`].
+    SubscribeJobs,
+    /// Stop receiving job progress.
+    UnsubscribeJobs,
 }
 
 /// A message from the server.
@@ -173,6 +181,17 @@ pub enum ServerMessage {
         /// The instances.
         instances: Vec<InstanceInfo>,
     },
+    /// Job events, oldest first.
+    JobEvents {
+        /// The events.
+        events: Vec<JobEvent>,
+    },
+    /// Every job as it is now. Sent on [`ClientMessage::SubscribeJobs`] and
+    /// in place of job events the connection could not keep up with.
+    JobSnapshot {
+        /// The jobs, oldest first.
+        jobs: Vec<Job>,
+    },
     /// A client message was refused; the connection stays open.
     Error(ErrorBody),
 }
@@ -214,6 +233,73 @@ struct Cursor {
 /// The connection is over.
 struct Closed;
 
+/// Events of one topic waiting to be sent, or a snapshot instead of them.
+struct Feed<T> {
+    sub: Option<Subscription<T>>,
+    pending: Vec<T>,
+    snapshot: bool,
+}
+
+impl<T: Clone> Feed<T> {
+    fn off() -> Self {
+        Self {
+            sub: None,
+            pending: Vec::new(),
+            snapshot: false,
+        }
+    }
+
+    fn start(&mut self, sub: Subscription<T>) {
+        self.sub = Some(sub);
+        self.pending.clear();
+        self.snapshot = false;
+    }
+
+    fn stop(&mut self) {
+        *self = Self::off();
+    }
+
+    /// Takes a delivery; returns whether something waits to be sent.
+    fn on(&mut self, d: Option<Delivery<T>>, max_pending: usize) -> bool {
+        match d {
+            Some(Delivery::Event(e)) if !self.snapshot => {
+                if self.pending.len() >= max_pending {
+                    self.pending.clear();
+                    self.snapshot = true;
+                } else {
+                    self.pending.push(e);
+                }
+            }
+            Some(Delivery::Event(_)) => {}
+            Some(Delivery::Lagged { .. }) => {
+                self.pending.clear();
+                self.snapshot = true;
+            }
+            None => {
+                self.sub = None;
+                return false;
+            }
+        }
+        true
+    }
+
+    /// What to send: `Err(())` = a snapshot, else the queued events.
+    fn take(&mut self) -> Result<Vec<T>, ()> {
+        if std::mem::take(&mut self.snapshot) {
+            Err(())
+        } else {
+            Ok(std::mem::take(&mut self.pending))
+        }
+    }
+
+    async fn recv(&mut self) -> Option<Delivery<T>> {
+        match self.sub.as_mut() {
+            Some(sub) => sub.recv().await,
+            None => std::future::pending().await,
+        }
+    }
+}
+
 struct Connection {
     svc: Service,
     limits: WsLimits,
@@ -225,9 +311,8 @@ struct Connection {
     cursors: BTreeMap<PortOwner, Cursor>,
     /// Log events seen since the last flush for subscribed instances.
     unread: usize,
-    events: Option<Subscription<ManagerEvent>>,
-    pending: Vec<ManagerEvent>,
-    snapshot: bool,
+    events: Feed<ManagerEvent>,
+    jobs: Feed<JobEvent>,
     flush_at: Option<Instant>,
 }
 
@@ -242,9 +327,8 @@ impl Connection {
             socket,
             cursors: BTreeMap::new(),
             unread: 0,
-            events: None,
-            pending: Vec::new(),
-            snapshot: false,
+            events: Feed::off(),
+            jobs: Feed::off(),
             flush_at: None,
         }
     }
@@ -299,8 +383,15 @@ impl Connection {
                 d = self.logs.recv(), if self.logs_open => {
                     self.on_log(d);
                 }
-                d = next_event(self.events.as_mut()) => {
-                    self.on_event(d);
+                d = self.events.recv() => {
+                    if self.events.on(d, self.limits.max_pending_events) {
+                        self.schedule();
+                    }
+                }
+                d = self.jobs.recv() => {
+                    if self.jobs.on(d, self.limits.max_pending_events) {
+                        self.schedule();
+                    }
                 }
             }
             if self.unread >= self.limits.batch_entries {
@@ -328,29 +419,6 @@ impl Connection {
             // The manager is gone; nothing more will be logged.
             None => self.logs_open = false,
         }
-    }
-
-    fn on_event(&mut self, d: Option<Delivery<ManagerEvent>>) {
-        match d {
-            Some(Delivery::Event(e)) if !self.snapshot => {
-                if self.pending.len() >= self.limits.max_pending_events {
-                    self.pending.clear();
-                    self.snapshot = true;
-                } else {
-                    self.pending.push(e);
-                }
-            }
-            Some(Delivery::Event(_)) => {}
-            Some(Delivery::Lagged { .. }) => {
-                self.pending.clear();
-                self.snapshot = true;
-            }
-            None => {
-                self.events = None;
-                return;
-            }
-        }
-        self.schedule();
     }
 
     fn schedule(&mut self) {
@@ -388,16 +456,21 @@ impl Connection {
             }
             ClientMessage::SubscribeEvents => {
                 // Subscribe first: events after the snapshot are not missed.
-                self.events = Some(self.svc.manager().subscribe());
-                self.pending.clear();
-                self.snapshot = false;
+                self.events.start(self.svc.manager().subscribe());
                 let instances = self.svc.manager().list();
                 self.send(&ServerMessage::Snapshot { instances }).await
             }
             ClientMessage::UnsubscribeEvents => {
-                self.events = None;
-                self.pending.clear();
-                self.snapshot = false;
+                self.events.stop();
+                Ok(())
+            }
+            ClientMessage::SubscribeJobs => {
+                self.jobs.start(self.svc.jobs().subscribe());
+                let jobs = self.svc.jobs().list();
+                self.send(&ServerMessage::JobSnapshot { jobs }).await
+            }
+            ClientMessage::UnsubscribeJobs => {
+                self.jobs.stop();
                 Ok(())
             }
         }
@@ -459,13 +532,25 @@ impl Connection {
     /// subscribed log from its cursor.
     async fn flush(&mut self) -> Result<(), Closed> {
         self.unread = 0;
-        if self.snapshot {
-            self.snapshot = false;
-            let instances = self.svc.manager().list();
-            self.send(&ServerMessage::Snapshot { instances }).await?;
-        } else if !self.pending.is_empty() {
-            let events = std::mem::take(&mut self.pending);
-            self.send(&ServerMessage::Events { events }).await?;
+        match self.events.take() {
+            Err(()) => {
+                let instances = self.svc.manager().list();
+                self.send(&ServerMessage::Snapshot { instances }).await?;
+            }
+            Ok(events) if !events.is_empty() => {
+                self.send(&ServerMessage::Events { events }).await?;
+            }
+            Ok(_) => {}
+        }
+        match self.jobs.take() {
+            Err(()) => {
+                let jobs = self.svc.jobs().list();
+                self.send(&ServerMessage::JobSnapshot { jobs }).await?;
+            }
+            Ok(events) if !events.is_empty() => {
+                self.send(&ServerMessage::JobEvents { events }).await?;
+            }
+            Ok(_) => {}
         }
         let dirty: Vec<PortOwner> = self
             .cursors
@@ -589,15 +674,6 @@ fn error(code: &str, message: impl Into<String>) -> ServerMessage {
 async fn wait_until(at: Option<Instant>) {
     match at {
         Some(at) => sleep_until(at).await,
-        None => std::future::pending().await,
-    }
-}
-
-async fn next_event(
-    sub: Option<&mut Subscription<ManagerEvent>>,
-) -> Option<Delivery<ManagerEvent>> {
-    match sub {
-        Some(sub) => sub.recv().await,
         None => std::future::pending().await,
     }
 }
