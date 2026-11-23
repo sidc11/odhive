@@ -4,6 +4,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use odhive_core::config::{GlobalConfig, ProjectEntry};
+use odhive_core::git::{self, GitHead};
 use odhive_core::launch::{self, LoadedProject, SCHEMA_CACHE_DIR};
 use odhive_core::manager::InstanceInfo;
 use odhive_core::ports::PortOwner;
@@ -98,6 +99,9 @@ pub struct Project {
     pub enterprise: Option<String>,
     /// Custom addons folders, as configured.
     pub addons_paths: Vec<String>,
+    /// Git checkouts holding the custom addons folders, in addons-path order
+    /// (each repository once).
+    pub git: Vec<GitHead>,
     /// The project's Python environment exists.
     pub has_venv: bool,
     /// Instances, in project order.
@@ -113,6 +117,7 @@ fn broken(entry: &ProjectEntry, error: String) -> Project {
         community: None,
         enterprise: None,
         addons_paths: Vec::new(),
+        git: Vec::new(),
         has_venv: false,
         instances: Vec::new(),
     }
@@ -155,9 +160,21 @@ fn view(svc: &Service, cfg: &GlobalConfig, p: &LoadedProject) -> ApiResult<Proje
             .iter()
             .map(|a| a.display().to_string())
             .collect(),
+        git: git_heads(&c.resolved_addons_paths(p.dir())),
         has_venv: venv_python(&p.dir().join(VENV_DIR)).is_file(),
         instances,
     })
+}
+
+/// The repositories `dirs` are in, each once.
+fn git_heads(dirs: &[std::path::PathBuf]) -> Vec<GitHead> {
+    let mut out: Vec<GitHead> = Vec::new();
+    for head in dirs.iter().filter_map(|d| git::head(d)) {
+        if !out.iter().any(|h| h.repo == head.repo) {
+            out.push(head);
+        }
+    }
+    out
 }
 
 /// Registered projects. A project whose files cannot be read is listed with

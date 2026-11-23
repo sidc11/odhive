@@ -68,6 +68,7 @@ fn api_router() -> OpenApiRouter<Service> {
         .routes(routes!(jobs::get))
         .routes(routes!(jobs::cancel))
         .routes(routes!(instances::list))
+        .routes(routes!(instances::usage))
         .routes(routes!(instances::start))
         .routes(routes!(instances::stop))
         .routes(routes!(instances::restart))

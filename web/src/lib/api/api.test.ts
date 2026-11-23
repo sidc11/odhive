@@ -36,6 +36,7 @@ const running: InstanceInfo = {
   db: 'shop_main',
   supervised: true,
   port_retried: false,
+  port_changes: [],
   status: { state: 'running', pid: 4242 },
 }
 
@@ -46,6 +47,7 @@ const project: Project = {
   community: 'odoo-19.0',
   enterprise: null,
   addons_paths: [],
+  git: [{ repo: '/home/dev/OdHive/projects/shop', branch: 'main', commit: null }],
   has_venv: true,
   instances: [
     {

@@ -89,6 +89,30 @@
         }
       }
     },
+    "/api/v1/instances/usage": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "CPU and memory use of every running instance, including those run\noutside this service. CPU use is measured since the previous call (0 on\nthe first); calls less than a second apart get the same sample.",
+        "operationId": "instance_usage",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InstanceUsage"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/jobs": {
       "get": {
         "tags": [
@@ -1984,6 +2008,33 @@
           }
         }
       },
+      "GitHead": {
+        "type": "object",
+        "description": "The checked-out state of one repository.",
+        "required": [
+          "repo"
+        ],
+        "properties": {
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Checked-out branch; `None` when the head is detached."
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Abbreviated commit, when the head is detached."
+          },
+          "repo": {
+            "type": "string",
+            "description": "Working tree folder."
+          }
+        }
+      },
       "GiveUp": {
         "oneOf": [
           {
@@ -2260,6 +2311,7 @@
             "required": [
               "supervised",
               "port_retried",
+              "port_changes",
               "status"
             ],
             "properties": {
@@ -2299,6 +2351,13 @@
                 "description": "HTTP port, while ports are held.",
                 "minimum": 0
               },
+              "port_changes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PortChange"
+                },
+                "description": "Automatic ports that moved away from their starting point when the\nports were allocated (\"8069 busy → 8070\")."
+              },
               "port_retried": {
                 "type": "boolean",
                 "description": "The ports were allocated again after a port race."
@@ -2326,6 +2385,33 @@
           }
         ],
         "description": "What is known about one instance."
+      },
+      "InstanceUsage": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PortOwner",
+            "description": "The instance."
+          },
+          {
+            "$ref": "#/components/schemas/Usage",
+            "description": "Its use."
+          },
+          {
+            "type": "object",
+            "required": [
+              "pid"
+            ],
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Process id of `odoo-bin`.",
+                "minimum": 0
+              }
+            }
+          }
+        ],
+        "description": "CPU and memory use of one running instance: its `odoo-bin` process and\nthe processes below it."
       },
       "InstanceView": {
         "type": "object",
@@ -3616,6 +3702,7 @@
           "name",
           "path",
           "addons_paths",
+          "git",
           "has_venv",
           "instances"
         ],
@@ -3647,6 +3734,13 @@
               "null"
             ],
             "description": "Why the project could not be read; the fields below are empty then."
+          },
+          "git": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GitHead"
+            },
+            "description": "Git checkouts holding the custom addons folders, in addons-path order\n(each repository once)."
           },
           "has_venv": {
             "type": "boolean",
@@ -4591,6 +4685,41 @@
           }
         ],
         "description": "Why a port could not be used."
+      },
+      "Usage": {
+        "type": "object",
+        "description": "Resource use of one process tree.",
+        "required": [
+          "cpu_percent",
+          "memory_bytes",
+          "processes",
+          "started_at"
+        ],
+        "properties": {
+          "cpu_percent": {
+            "type": "number",
+            "format": "float",
+            "description": "CPU use since the previous sample, in percent of one core (can exceed\n100 on several cores)."
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Resident memory, in bytes.",
+            "minimum": 0
+          },
+          "processes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Processes in the tree.",
+            "minimum": 0
+          },
+          "started_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the root process started, in seconds since the Unix epoch.",
+            "minimum": 0
+          }
+        }
       },
       "VenvEvent": {
         "oneOf": [

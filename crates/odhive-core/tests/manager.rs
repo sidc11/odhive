@@ -18,7 +18,7 @@ use odhive_core::manager::{
     Recovery, StopOutcome,
 };
 use odhive_core::pidfile::{PidRecord, ProcessId, RECORD_VERSION, RunDir};
-use odhive_core::ports::{AllocOptions, PortOwner};
+use odhive_core::ports::{AllocOptions, PortOwner, Unavailable};
 use odhive_core::project::{Instance, ProjectConfig};
 use odhive_core::python::find_executable;
 use odhive_core::supervisor::{Event, Status};
@@ -191,6 +191,20 @@ async fn instances_of_a_project_run_with_their_own_ports_db_and_args() {
     ports.dedup();
     assert_eq!(ports.len(), 4);
     assert!(accepts(main.http_port.expect("port")) && accepts(test.http_port.expect("port")));
+    // `main` got the starting ports; `test` moved past them, which it shows
+    // for as long as it holds its ports.
+    assert!(main.port_changes.is_empty(), "{:?}", main.port_changes);
+    assert!(
+        test.port_changes.iter().any(|c| c.requested == 27_000
+            && c.assigned == test.http_port.expect("port")
+            && c.reason == Unavailable::ReservedBy(owner("main"))),
+        "{:?}",
+        test.port_changes
+    );
+    assert_eq!(
+        m.get(&owner("test")).expect("test").port_changes,
+        test.port_changes
+    );
 
     let list = m.list();
     assert_eq!(list.len(), 2);

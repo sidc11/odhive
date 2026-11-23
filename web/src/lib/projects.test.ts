@@ -103,6 +103,22 @@ describe('ProjectsStore', () => {
     expect(stale).not.toHaveBeenCalled()
   })
 
+  it('keeps port moves from the first spawn across restarts', async () => {
+    const { projects } = store({ 'GET /projects': [200, [SHOP]] })
+    await projects.load()
+    const moved = { kind: 'http', requested: 8069, assigned: 8070, reason: { reason: 'in_use' } } as const
+    const spawned = (changes: (typeof moved)[]) => ({
+      type: 'events' as const,
+      events: [
+        { project: 'shop', instance: 'main', event: 'spawned' as const, pid: 9, http_port: 8070, gevent_port: 8072, changes },
+      ],
+    })
+    projects.apply(spawned([moved]))
+    expect(liveOf(projects, 'shop', 'main')?.port_changes).toEqual([moved])
+    projects.apply(spawned([]))
+    expect(liveOf(projects, 'shop', 'main')?.port_changes).toEqual([moved])
+  })
+
   it('shows an unknown instance at once and asks for a snapshot', async () => {
     const { projects } = store({ 'GET /projects': [200, [SHOP]] })
     await projects.load()

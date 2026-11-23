@@ -110,6 +110,8 @@ export class ProjectsStore {
           ...info,
           http_port: event.http_port,
           gevent_port: event.gevent_port,
+          // Only a first start reports moves; a restart keeps its ports.
+          port_changes: event.changes.length > 0 ? event.changes : info.port_changes,
           status: { state: 'starting', pid: event.pid },
         }
         return !known
@@ -140,6 +142,7 @@ export class ProjectsStore {
       db: view?.db ?? null,
       supervised: true,
       port_retried: false,
+      port_changes: [],
       status: { state: 'starting', pid: 0 },
     }
   }

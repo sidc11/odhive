@@ -61,6 +61,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * CPU and memory use of every running instance, including those run
+         *     outside this service. CPU use is measured since the previous call (0 on
+         *     the first); calls less than a second apart get the same sample.
+         */
+        get: operations["instance_usage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs": {
         parameters: {
             query?: never;
@@ -732,6 +753,15 @@ export interface components {
             mode: components["schemas"]["AutofixMode"];
             pending?: components["schemas"]["Candidate"] | null;
         };
+        /** @description The checked-out state of one repository. */
+        GitHead: {
+            /** @description Checked-out branch; `None` when the head is detached. */
+            branch?: string | null;
+            /** @description Abbreviated commit, when the head is detached. */
+            commit?: string | null;
+            /** @description Working tree folder. */
+            repo: string;
+        };
         /** @description Why the auto-fix stops for this start. */
         GiveUp: {
             /**
@@ -835,6 +865,11 @@ export interface components {
              * @description HTTP port, while ports are held.
              */
             http_port?: number | null;
+            /**
+             * @description Automatic ports that moved away from their starting point when the
+             *     ports were allocated ("8069 busy → 8070").
+             */
+            port_changes: components["schemas"]["PortChange"][];
             /** @description The ports were allocated again after a port race. */
             port_retried: boolean;
             reload?: components["schemas"]["ReloadInfo"] | null;
@@ -842,6 +877,17 @@ export interface components {
             status: components["schemas"]["Status"];
             /** @description Started by this OdHive (output is captured). `false` = re-attached. */
             supervised: boolean;
+        };
+        /**
+         * @description CPU and memory use of one running instance: its `odoo-bin` process and
+         *     the processes below it.
+         */
+        InstanceUsage: components["schemas"]["PortOwner"] & components["schemas"]["Usage"] & {
+            /**
+             * Format: int32
+             * @description Process id of `odoo-bin`.
+             */
+            pid: number;
         };
         /** @description One instance of a project: its settings and, while it runs, its state. */
         InstanceView: {
@@ -1276,6 +1322,11 @@ export interface components {
             enterprise?: string | null;
             /** @description Why the project could not be read; the fields below are empty then. */
             error?: string | null;
+            /**
+             * @description Git checkouts holding the custom addons folders, in addons-path order
+             *     (each repository once).
+             */
+            git: components["schemas"]["GitHead"][];
             /** @description The project's Python environment exists. */
             has_venv: boolean;
             /** @description Instances, in project order. */
@@ -1570,6 +1621,30 @@ export interface components {
             /** @enum {string} */
             reason: "other_port";
         };
+        /** @description Resource use of one process tree. */
+        Usage: {
+            /**
+             * Format: float
+             * @description CPU use since the previous sample, in percent of one core (can exceed
+             *     100 on several cores).
+             */
+            cpu_percent: number;
+            /**
+             * Format: int64
+             * @description Resident memory, in bytes.
+             */
+            memory_bytes: number;
+            /**
+             * Format: int32
+             * @description Processes in the tree.
+             */
+            processes: number;
+            /**
+             * Format: int64
+             * @description When the root process started, in seconds since the Unix epoch.
+             */
+            started_at: number;
+        };
         /** @description Progress of [`create`]. */
         VenvEvent: {
             /** @description Venv directory. */
@@ -1689,6 +1764,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstanceInfo"][];
+                };
+            };
+        };
+    };
+    instance_usage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceUsage"][];
                 };
             };
         };

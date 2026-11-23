@@ -3,6 +3,7 @@
 //! made by the CLI are seen; changes made through the API are serialized by
 //! a lock and written back at once.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use odhive_core::config::{AppPaths, GlobalConfig};
@@ -13,6 +14,7 @@ use odhive_core::ports::PortOwner;
 use odhive_core::python::DiscoverOptions;
 use odhive_core::sources::CloneOptions;
 use odhive_core::supervisor::DEFAULT_STOP_TIMEOUT;
+use odhive_core::usage::{Usage, UsageMonitor};
 use odhive_core::workspace::Workspace;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, watch};
 
@@ -45,6 +47,8 @@ struct Inner {
     shutdown: watch::Sender<bool>,
     /// Turns `true` when a client asked the service to quit.
     quit: watch::Sender<bool>,
+    /// CPU and memory samples of running instances.
+    usage: Arc<std::sync::Mutex<UsageMonitor>>,
 }
 
 /// Tunables of a [`Service`].
@@ -125,6 +129,7 @@ impl Service {
                 ws_limits: opts.ws,
                 shutdown: watch::Sender::new(false),
                 quit: watch::Sender::new(false),
+                usage: Arc::default(),
             }),
         }
     }
@@ -265,6 +270,40 @@ impl Service {
         let cfg = self.config()?;
         let project = launch::load_project(&cfg, name)?;
         Ok((cfg, project))
+    }
+
+    /// The root process of every running instance this service knows of:
+    /// its own and, through their PID files, those run elsewhere.
+    pub(crate) fn running_pids(&self) -> ApiResult<Vec<(PortOwner, u32)>> {
+        let mut out: Vec<(PortOwner, u32)> = self
+            .inner
+            .manager
+            .list()
+            .into_iter()
+            .filter_map(|i| i.status.pid().filter(|&p| p != 0).map(|p| (i.owner, p)))
+            .collect();
+        for listed in self.run_dir().list()? {
+            let Ok(record) = listed.record else { continue };
+            let owner = record.owner();
+            if out.iter().any(|(o, _)| *o == owner) || self.inner.manager.get(&owner).is_some() {
+                continue;
+            }
+            if let RecordState::Running { pid, .. } = record.state() {
+                out.push((owner, pid));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Samples the CPU and memory use of `pids`' process trees (blocking:
+    /// reads the whole process table).
+    pub(crate) fn sample_usage(&self, pids: &[u32]) -> HashMap<u32, Usage> {
+        let mut monitor = self
+            .inner
+            .usage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        monitor.sample(pids)
     }
 
     /// The running process of `owner` if another OdHive (or none) runs it.

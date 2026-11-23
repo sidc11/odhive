@@ -164,6 +164,7 @@ fn info_and_recovery_serialize() {
         db: Some("shop_main".into()),
         supervised: false,
         port_retried: false,
+        port_changes: Vec::new(),
         status: Status::Running { pid: 7 },
         autofix: None,
         reload: None,
@@ -211,6 +212,7 @@ fn a_crash_while_reload_watches_is_not_done() {
         db: None,
         supervised: true,
         port_retried: false,
+        port_changes: Vec::new(),
         status: Status::Crashed { exit: exit.clone() },
         autofix: None,
         reload: Some(ReloadInfo {
