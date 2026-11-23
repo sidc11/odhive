@@ -1,6 +1,85 @@
 @import 'tailwindcss';
 
-@theme {
+/* `dark:` follows the resolved theme on <html data-theme>, not only the OS. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/*
+ * Design tokens. Components use the Tailwind names below (bg-surface,
+ * text-fg-muted, border-line, bg-state-running, ...), never raw colours, so
+ * both themes stay in one place.
+ */
+:root {
+  color-scheme: light;
+  --odh-surface: #f8f7f8;
+  --odh-surface-raised: #ffffff;
+  --odh-surface-sunken: #efedef;
+  --odh-fg: #1f1a1e;
+  --odh-fg-muted: #635b61;
+  --odh-line: #dcd7db;
+  --odh-accent: #714b67;
+  --odh-accent-fg: #ffffff;
+  --odh-accent-soft: #f1e9ef;
+  --odh-focus: #714b67;
+  --odh-backdrop: rgb(20 14 19 / 0.45);
+
+  --odh-state-running: #15803d;
+  --odh-state-starting: #b45309;
+  --odh-state-stopped: #8a8389;
+  --odh-state-crashed: #c2261d;
+  --odh-state-external: #2563eb;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --odh-surface: #141114;
+  --odh-surface-raised: #1d191c;
+  --odh-surface-sunken: #0e0c0e;
+  --odh-fg: #f2eef1;
+  --odh-fg-muted: #a69ea4;
+  --odh-line: #342e33;
+  --odh-accent: #f5a524;
+  --odh-accent-fg: #1f1a1e;
+  --odh-accent-soft: #2e2519;
+  --odh-focus: #f5a524;
+  --odh-backdrop: rgb(0 0 0 / 0.6);
+
+  --odh-state-running: #4ade80;
+  --odh-state-starting: #fbbf24;
+  --odh-state-stopped: #7d757b;
+  --odh-state-crashed: #f87171;
+  --odh-state-external: #60a5fa;
+}
+
+@theme inline {
   --color-hive-purple: #714b67;
   --color-hive-amber: #f5a524;
+
+  --color-surface: var(--odh-surface);
+  --color-surface-raised: var(--odh-surface-raised);
+  --color-surface-sunken: var(--odh-surface-sunken);
+  --color-fg: var(--odh-fg);
+  --color-fg-muted: var(--odh-fg-muted);
+  --color-line: var(--odh-line);
+  --color-accent: var(--odh-accent);
+  --color-accent-fg: var(--odh-accent-fg);
+  --color-accent-soft: var(--odh-accent-soft);
+  --color-focus: var(--odh-focus);
+  --color-backdrop: var(--odh-backdrop);
+
+  --color-state-running: var(--odh-state-running);
+  --color-state-starting: var(--odh-state-starting);
+  --color-state-stopped: var(--odh-state-stopped);
+  --color-state-crashed: var(--odh-state-crashed);
+  --color-state-external: var(--odh-state-external);
+}
+
+@layer base {
+  body {
+    @apply bg-surface text-fg antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--odh-focus);
+    outline-offset: 2px;
+  }
 }
