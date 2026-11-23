@@ -925,11 +925,15 @@ fn service_install_hands_the_service_to_the_service_manager() {
     assert!(out.status.success());
     assert!(port_free(18_971));
 
-    // Reinstalling while it runs leaves it running.
+    // Reinstalling while it runs leaves it running; on macOS the bootout
+    // stops it and the new agent starts it again.
     let err = run(&["--port", "18970", "service", "install"]);
     assert!(err.contains("Updated the OdHive service"), "{err}");
-    assert!(err.contains("already running"), "{err}");
-    if !cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos") {
+        assert!(err.contains("running at http://localhost:18970"), "{err}");
+        assert_ne!(service_state(&env).expect("state").0, pid);
+    } else {
+        assert!(err.contains("already running"), "{err}");
         assert_eq!(service_state(&env), Some((pid, port)));
     }
 
