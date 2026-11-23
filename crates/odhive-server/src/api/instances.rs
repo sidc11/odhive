@@ -165,7 +165,8 @@ pub(super) async fn restart(
 }
 
 /// Installs the missing Python package awaiting confirmation, then restarts
-/// the instance. Returns when the restart is issued.
+/// the instance. Returns once the install has started; the outcome comes as
+/// instance events.
 #[utoipa::path(operation_id = "confirm_fix", post, path = "/projects/{name}/instances/{id}/fix/confirm", tag = "instances",
     params(
         ("name" = String, Path, description = "Project name"),

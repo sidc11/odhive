@@ -172,7 +172,8 @@ export interface paths {
         put?: never;
         /**
          * Installs the missing Python package awaiting confirmation, then restarts
-         *     the instance. Returns when the restart is issued.
+         *     the instance. Returns once the install has started; the outcome comes as
+         *     instance events.
          */
         post: operations["confirm_fix"];
         delete?: never;

@@ -911,8 +911,10 @@ impl Manager {
 
     /// Installs the missing dependency awaiting confirmation (see
     /// [`FixAction::Confirm`]) and restarts the instance, like the automatic
-    /// path. Returns when the restart was issued; the outcome is reported as
-    /// notices. Confirming is what makes an untrusted package installable.
+    /// path. Returns once the install is under way (it runs in the
+    /// background, so a long install does not hold up an API request); the
+    /// outcome is reported as notices. Confirming is what makes an untrusted
+    /// package installable.
     ///
     /// # Errors
     /// [`ManagerError::NotRunning`], [`ManagerError::NoPendingFix`], or
@@ -929,14 +931,11 @@ impl Manager {
             }
             Some(Ok(c)) => c,
         };
-        fix::apply(
-            &Arc::downgrade(&self.inner),
-            owner,
-            &fix,
-            &candidate,
-            attempt,
-        )
-        .await;
+        let inner = Arc::downgrade(&self.inner);
+        let (owner, task_candidate) = (owner.clone(), candidate.clone());
+        tokio::spawn(async move {
+            fix::apply(&inner, &owner, &fix, &task_candidate, attempt).await;
+        });
         Ok(candidate)
     }
 
