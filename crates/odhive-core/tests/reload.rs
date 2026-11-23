@@ -285,8 +285,31 @@ async fn a_crashed_instance_waits_for_a_fix_and_restarts_on_it() {
     assert!(info.status.is_terminal() && !info.is_done(), "{info:?}");
 
     fs::write(dir.path().join("addons/m1/models.py"), "fixed = True\n").expect("write");
-    let events = events_until(&mut rx, |ev| spawns(ev) == 1).await;
-    assert_eq!(reload_action(&events), Some(&Action::Restart));
+    // Judge the reload this write caused: a late setup write may still come
+    // first on macOS and restart (with `-u`) on its own.
+    let fix_reload = |ev: &[ManagerEvent]| {
+        ev.iter().position(|e| {
+            matches!(&e.event, InstanceEvent::Manager(Notice::Reload { files, .. })
+                if files.iter().any(|f| f.ends_with("models.py")))
+        })
+    };
+    let events = events_until(&mut rx, |ev| {
+        fix_reload(ev).is_some_and(|at| spawns(&ev[at..]) >= 1)
+    })
+    .await;
+    let at = fix_reload(&events).expect("reload of the fix");
+    let InstanceEvent::Manager(Notice::Reload { action, files, .. }) = &events[at].event else {
+        unreachable!("fix_reload finds reload notices");
+    };
+    if files.len() == 1 {
+        assert_eq!(action, &Action::Restart);
+    } else {
+        // Batched with a late setup write: still a restart (maybe with `-u`).
+        assert!(
+            !matches!(action, Action::RefreshBrowser { .. }),
+            "{action:?}"
+        );
+    }
     m.stop(&owner()).await.expect("stop");
 }
 
