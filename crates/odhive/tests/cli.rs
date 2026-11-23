@@ -794,6 +794,31 @@ fn serve_starts_the_service_without_a_browser_and_quit_stops_its_instances() {
 }
 
 #[test]
+fn quit_waits_for_a_service_that_is_starting_up() {
+    let env = Env::new();
+    // Holding the lock without a state file is what a starting service
+    // looks like.
+    let dir = data_dir(&env);
+    fs::create_dir_all(&dir).expect("mkdir");
+    let lock = fs::File::create(dir.join("service.lock")).expect("lock file");
+    lock.lock().expect("flock");
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(700));
+        drop(lock);
+    });
+    let begun = Instant::now();
+    let out = env.run(&["quit"]);
+    release.join().expect("thread");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(err.contains("not running"), "{err}");
+    assert!(
+        begun.elapsed() >= Duration::from_millis(600),
+        "did not wait"
+    );
+}
+
+#[test]
 fn sigterm_ends_a_foreground_service_cleanly() {
     let env = Env::new();
     let mut run = env.start(&["--port", "18955", "serve", "--foreground"]);
@@ -900,11 +925,15 @@ fn service_install_hands_the_service_to_the_service_manager() {
     assert!(out.status.success());
     assert!(port_free(18_971));
 
-    // Reinstalling while it runs leaves it running.
+    // Reinstalling while it runs leaves it running; on macOS the bootout
+    // stops it and the new agent starts it again.
     let err = run(&["--port", "18970", "service", "install"]);
     assert!(err.contains("Updated the OdHive service"), "{err}");
-    assert!(err.contains("already running"), "{err}");
-    if !cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos") {
+        assert!(err.contains("running at http://localhost:18970"), "{err}");
+        assert_ne!(service_state(&env).expect("state").0, pid);
+    } else {
+        assert!(err.contains("already running"), "{err}");
         assert_eq!(service_state(&env), Some((pid, port)));
     }
 

@@ -372,13 +372,15 @@ pub async fn install(port: u16) -> anyhow::Result<ExitCode> {
     let spec = Spec::for_current(&paths, port)?;
     let file = manager.file(&paths);
     let reinstall = file.is_file();
-    let running = service_lock::probe(&paths.data_dir)?.is_some();
 
     if manager == Manager::Launchd && reinstall {
-        // A loaded agent keeps its old definition until it is booted out.
+        // A loaded agent keeps its old definition until it is booted out,
+        // which also stops the service it runs; `bootstrap` starts it again.
         let target = format!("{}/{LAUNCHD_LABEL}", gui_domain());
         let _ = manage(manager, &["bootout", &target]).await?;
     }
+    // After the bootout: only a service that keeps running is reported so.
+    let running = service_lock::probe(&paths.data_dir)?.is_some();
     odhive_core::fsutil::write_private_atomic(&file, render(manager, &spec).as_bytes())
         .map_err(|e| anyhow::anyhow!("could not write {}: {}", e.path.display(), e.source))?;
 
