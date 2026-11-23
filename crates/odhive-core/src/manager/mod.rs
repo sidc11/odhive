@@ -57,7 +57,7 @@ use crate::events::{BusOptions, EventBus, LogEvent, Subscription};
 use crate::logs::store::{Page, Record};
 use crate::logs::{LOGS_DIR, LogSettings};
 use crate::pidfile::{self, Attached, AttachedStop, PidFileError, PidRecord, Recovered, RunDir};
-use crate::ports::{AllocError, AllocOptions, PortOwner, PortRegistry};
+use crate::ports::{AllocError, AllocOptions, PortChange, PortOwner, PortRegistry};
 use crate::project::{ProjectConfig, ProjectError};
 use crate::reload::Action;
 use crate::requirements::Requirement;
@@ -401,6 +401,9 @@ pub struct InstanceInfo {
     pub supervised: bool,
     /// The ports were allocated again after a port race.
     pub port_retried: bool,
+    /// Automatic ports that moved away from their starting point when the
+    /// ports were allocated ("8069 busy → 8070").
+    pub port_changes: Vec<PortChange>,
     /// Current status.
     pub status: Status,
     /// Dependency auto-fix, when enabled.
@@ -519,6 +522,7 @@ struct Entry {
     gevent_port: Option<u16>,
     db: Option<String>,
     port_retried: bool,
+    port_changes: Vec<PortChange>,
     /// `None` for attached instances.
     log: Option<Arc<LogSlot>>,
     /// `None` when auto-fix is off or the instance is attached.
@@ -546,6 +550,7 @@ impl Entry {
             db: self.db.clone(),
             supervised: !matches!(self.slot, Slot::Attached(_)),
             port_retried: self.port_retried,
+            port_changes: self.port_changes.clone(),
             status: self.status.borrow().clone(),
             autofix: self.fix.as_ref().map(|f| f.info()),
             reload: self.reload.as_ref().map(|r| r.info()),
@@ -730,6 +735,7 @@ impl Manager {
                         gevent_port: Some(record.gevent_port),
                         db: record.db.clone(),
                         port_retried: false,
+                        port_changes: Vec::new(),
                         log: None,
                         fix: None,
                         reload: None,
@@ -1106,6 +1112,7 @@ impl Inner {
             plan.gevent_port,
             &self.opts.alloc,
         )?;
+        let port_changes = ports.changes().to_vec();
         let generation = self.next_generation();
         let status =
             status.unwrap_or_else(|| Arc::new(watch::channel(Status::Starting { pid: 0 }).0));
@@ -1159,6 +1166,7 @@ impl Inner {
             plan: Some(plan),
             status,
             port_retried,
+            port_changes,
             log: Some(log),
             fix,
             reload,
@@ -1337,6 +1345,7 @@ async fn retry_ports(inner: Arc<Inner>, owner: PortOwner, generation: u64, exit:
                 http_port: None,
                 gevent_port: None,
                 port_retried: true,
+                port_changes: Vec::new(),
                 log,
                 fix,
                 reload,

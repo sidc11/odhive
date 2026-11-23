@@ -11,6 +11,7 @@ use odhive_core::logs::store::Record;
 use odhive_core::manager::{InstanceInfo, StopOutcome};
 use odhive_core::ports::PortOwner;
 use odhive_core::supervisor::Status;
+use odhive_core::usage::Usage;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -61,6 +62,20 @@ pub struct LogPage {
     pub next: u64,
 }
 
+/// CPU and memory use of one running instance: its `odoo-bin` process and
+/// the processes below it.
+#[derive(Debug, Clone, Serialize, serde::Deserialize, ToSchema)]
+pub struct InstanceUsage {
+    /// The instance.
+    #[serde(flatten)]
+    pub owner: PortOwner,
+    /// Process id of `odoo-bin`.
+    pub pid: u32,
+    /// Its use.
+    #[serde(flatten)]
+    pub usage: Usage,
+}
+
 /// A project's instance, checked to exist.
 pub(super) fn instance(svc: &Service, name: &str, id: &str) -> ApiResult<PortOwner> {
     let (_, project) = svc.project(name)?;
@@ -77,6 +92,31 @@ pub(super) fn instance(svc: &Service, name: &str, id: &str) -> ApiResult<PortOwn
     responses((status = OK, description = "Success", body = Vec<InstanceInfo>)))]
 pub(super) async fn list(State(svc): State<Service>) -> Json<Vec<InstanceInfo>> {
     Json(svc.manager().list())
+}
+
+/// CPU and memory use of every running instance, including those run
+/// outside this service. CPU use is measured since the previous call (0 on
+/// the first); calls less than a second apart get the same sample.
+#[utoipa::path(operation_id = "instance_usage", get, path = "/instances/usage", tag = "instances",
+    responses((status = OK, description = "Success", body = Vec<InstanceUsage>)))]
+pub(super) async fn usage(State(svc): State<Service>) -> ApiResult<Json<Vec<InstanceUsage>>> {
+    let running = svc.running_pids()?;
+    let pids: Vec<u32> = running.iter().map(|(_, pid)| *pid).collect();
+    let sampler = svc.clone();
+    let sampled = tokio::task::spawn_blocking(move || sampler.sample_usage(&pids))
+        .await
+        .map_err(|e| ApiError::internal(format!("usage sample failed: {e}")))?;
+    let out = running
+        .into_iter()
+        .filter_map(|(owner, pid)| {
+            sampled.get(&pid).map(|usage| InstanceUsage {
+                owner,
+                pid,
+                usage: *usage,
+            })
+        })
+        .collect();
+    Ok(Json(out))
 }
 
 /// Starts an instance with the project's current settings. Returns once the

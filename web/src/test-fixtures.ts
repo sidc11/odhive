@@ -15,6 +15,7 @@ export function live(project: string, instance: string, status: Status): Instanc
     db: `db_${instance}`,
     supervised: true,
     port_retried: false,
+    port_changes: [],
     status,
   }
 }
@@ -24,6 +25,7 @@ export function project(name: string, instances: InstanceView[] = [], extra: Par
     name,
     path: `/home/dev/OdHive/projects/${name}`,
     addons_paths: [],
+    git: [],
     has_venv: true,
     odoo_version: '19.0',
     instances,

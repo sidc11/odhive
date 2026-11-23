@@ -38,6 +38,14 @@ describe('ApiClient', () => {
     ])
   })
 
+  it('reads instance usage', async () => {
+    const usage = [
+      { project: 'shop', instance: 'main', pid: 7, cpu_percent: 1.5, memory_bytes: 1024, processes: 2, started_at: 100 },
+    ]
+    const { fetcher } = routedFetch({ 'GET /instances/usage': [200, usage] })
+    expect(await new ApiClient(fetcher).instanceUsage()).toEqual(usage)
+  })
+
   it('accepts empty answers (204, 202)', async () => {
     const { fetcher } = routedFetch({ 'DELETE /projects/shop': [204], 'POST /service/quit': [202] })
     const api = new ApiClient(fetcher)

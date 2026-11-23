@@ -1,17 +1,21 @@
 // The app's shared state, and the wiring between the WebSocket and the
 // stores.
+import { InstanceActions } from './actions.svelte'
 import { ApiClient } from './api/client'
 import { JobsStore } from './jobs.svelte'
 import { LiveConnection } from './live.svelte'
 import { Notifier } from './notices'
 import { ProjectsStore } from './projects.svelte'
 import { ToastStore } from './toasts.svelte'
+import { UsageStore } from './usage.svelte'
 
 export const api = new ApiClient()
 export const toasts = new ToastStore()
 export const projects = new ProjectsStore(api)
 export const jobs = new JobsStore()
 export const connection = new LiveConnection()
+export const usage = new UsageStore(api)
+export const actions = new InstanceActions(api, projects, toasts)
 
 /** Wait after a stale event before asking for a snapshot (events come in bursts). */
 export const RESYNC_DELAY_MS = 200

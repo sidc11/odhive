@@ -182,6 +182,10 @@ export class ApiClient {
     return this.get('/instances')
   }
 
+  instanceUsage(): Promise<Ok<'instance_usage', 200>> {
+    return this.get('/instances/usage')
+  }
+
   startInstance(project: string, instance: string): Promise<Ok<'start_instance', 200>> {
     return this.post(`${this.instancePath(project, instance)}/start`)
   }

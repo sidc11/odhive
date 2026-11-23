@@ -59,6 +59,17 @@ describe('App shell', () => {
     expect(screen.getByText(/1 of 2 instances running/)).toBeInTheDocument()
   })
 
+  it('shows a card per instance on the dashboard', async () => {
+    renderApp()
+    const main = await screen.findByRole('article', { name: 'shop / main' })
+    expect(main).toHaveAttribute('data-state', 'running')
+    expect(within(main).getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+    const test = screen.getByRole('article', { name: 'shop / test' })
+    expect(within(test).getByRole('button', { name: 'Start' })).toBeEnabled()
+    // crm has no instances, so no card.
+    expect(screen.getAllByRole('article')).toHaveLength(2)
+  })
+
   it('navigates in-app and marks the current page', async () => {
     renderApp()
     const link = await sidebar().findByRole('link', { name: 'Running main' })

@@ -461,8 +461,22 @@ async fn instance_starts_logs_restarts_and_stops() {
     assert_eq!(info["http_port"], 19_100);
     assert_eq!(info["db"], "shop_main");
     assert_eq!(info["supervised"], true);
+    assert_eq!(info["port_changes"], json!([]));
     let main = wait_main(&api, "shop", "running", |m| state(m) == "running").await;
     assert_eq!(main["external"], Value::Null);
+
+    // CPU and memory of the running process.
+    let (status, usage) = api.get("/api/v1/instances/usage").await;
+    assert_eq!(status, StatusCode::OK, "{usage}");
+    let usage = usage.as_array().expect("array");
+    assert_eq!(usage.len(), 1, "{usage:?}");
+    assert_eq!(usage[0]["project"], "shop");
+    assert_eq!(usage[0]["instance"], "main");
+    assert_eq!(usage[0]["pid"], main["live"]["status"]["pid"]);
+    assert!(usage[0]["memory_bytes"].as_u64().is_some_and(|m| m > 0));
+    assert!(usage[0]["processes"].as_u64().is_some_and(|n| n >= 1));
+    assert!(usage[0]["started_at"].as_u64().is_some_and(|t| t > 0));
+    assert!(usage[0]["cpu_percent"].as_f64().is_some());
 
     let (status, body) = api
         .post("/api/v1/projects/shop/instances/main/start", None)
@@ -531,6 +545,28 @@ async fn instance_starts_logs_restarts_and_stops() {
     assert_eq!(main["external"], Value::Null);
     let (_, list) = api.get("/api/v1/instances").await;
     assert_eq!(list, json!([]));
+    let (_, usage) = api.get("/api/v1/instances/usage").await;
+    assert_eq!(usage, json!([]));
+}
+
+#[tokio::test]
+async fn projects_show_the_git_branch_of_their_addons() {
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    let project = api.create_project("shop", &source).await;
+    assert_eq!(project["git"], json!([]));
+
+    // The project's own addons/ folder sits in a checkout of the project.
+    let dir = env.project_dir("shop");
+    std::fs::create_dir_all(dir.join(".git")).expect("mkdir");
+    std::fs::write(dir.join(".git/HEAD"), "ref: refs/heads/feature/pos\n").expect("write");
+    let (status, project) = api.get("/api/v1/projects/shop").await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    assert_eq!(
+        project["git"],
+        json!([{ "repo": dir.display().to_string(), "branch": "feature/pos", "commit": null }])
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -553,6 +589,9 @@ async fn instance_run_elsewhere_is_shown_and_can_be_stopped() {
     let main = wait_main(&ours, "shop", "external", |m| !m["external"].is_null()).await;
     assert_eq!(main["live"], Value::Null);
     assert_eq!(main["external"]["http_port"], 19_110);
+    let (_, usage) = ours.get("/api/v1/instances/usage").await;
+    assert_eq!(usage[0]["instance"], "main", "{usage}");
+    assert_eq!(usage[0]["pid"], main["external"]["pid"]);
     assert_eq!(main["external"]["supervisor"], std::process::id());
     for action in ["start", "restart"] {
         let (status, body) = ours
