@@ -24,6 +24,7 @@ export type InstanceView = Schemas['InstanceView']
 export type InstanceInfo = Schemas['InstanceInfo']
 export type Status = Schemas['Status']
 export type StopResult = Schemas['StopResult']
+export type ExitInfo = Schemas['ExitInfo']
 export type Candidate = Schemas['Candidate']
 export type LogPage = Schemas['LogPage']
 export type LogRecord = Schemas['Record']
@@ -36,6 +37,8 @@ export type ClientMessage = Schemas['ClientMessage']
 /** What the server sends over the WebSocket. */
 export type ServerMessage = Schemas['ServerMessage']
 export type ManagerEvent = Schemas['ManagerEvent']
+/** What to install for a missing system library, as text. */
+export type Hint = Schemas['Hint']
 
 /** Background work (source clones, project setups) and its progress. */
 export type Job = Schemas['Job']

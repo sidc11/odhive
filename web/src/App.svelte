@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { projects } from './lib/projects.svelte'
   import { router } from './lib/router.svelte'
   import AppShell from './lib/shell/AppShell.svelte'
+  import Toaster from './lib/shell/Toaster.svelte'
+  import { connectStores, toasts } from './lib/stores'
   import Dashboard from './pages/Dashboard.svelte'
   import InstancePage from './pages/InstancePage.svelte'
   import NotFound from './pages/NotFound.svelte'
@@ -23,9 +24,7 @@
     }
   })
 
-  onMount(() => {
-    void projects.load()
-  })
+  onMount(() => connectStores())
 </script>
 
 <svelte:head>
@@ -43,3 +42,5 @@
     <NotFound path={route.path} />
   {/if}
 </AppShell>
+
+<Toaster {toasts} />

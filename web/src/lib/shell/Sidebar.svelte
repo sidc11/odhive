@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { projects } from '../projects.svelte'
+  import { projects } from '../stores'
   import { routeHref, router } from '../router.svelte'
   import { instanceState, upCount } from '../status'
   import StatusDot from './StatusDot.svelte'

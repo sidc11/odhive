@@ -2,7 +2,8 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App.svelte'
 import { router } from './lib/router.svelte'
-import { instanceView, live, project, projectsFetch } from './test-fixtures'
+import { connection, toasts } from './lib/stores'
+import { FakeSocket, instanceView, live, project, projectsFetch } from './test-fixtures'
 
 const PROJECTS = [
   project('shop', [
@@ -12,16 +13,37 @@ const PROJECTS = [
   project('crm'),
 ]
 
+let sockets: FakeSocket[] = []
+
 function renderApp(body: unknown = PROJECTS, status = 200) {
   vi.stubGlobal('fetch', vi.fn(projectsFetch(body, status)))
+  sockets = []
+  vi.stubGlobal(
+    'WebSocket',
+    class extends FakeSocket {
+      constructor(url: string) {
+        super(url)
+        sockets.push(this)
+      }
+    },
+  )
   return render(App)
+}
+
+function socket(): FakeSocket {
+  const last = sockets.at(-1)
+  if (!last) throw new Error('no WebSocket opened')
+  return last
 }
 
 const sidebar = () => within(screen.getByTestId('sidebar'))
 
 describe('App shell', () => {
   beforeEach(() => router.navigate('/', { replace: true }))
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    toasts.clear()
+    vi.unstubAllGlobals()
+  })
 
   it('lists projects with their instances and status', async () => {
     renderApp()
@@ -105,5 +127,32 @@ describe('App shell', () => {
     expect(document.documentElement.dataset.theme).toBe('dark')
     expect(toggle).toHaveAccessibleName('Dark theme (change theme)')
     await fireEvent.click(toggle) // back to system
+  })
+
+  it('keeps status live over the WebSocket and shows toasts', async () => {
+    renderApp()
+    const nav = sidebar()
+    await nav.findByRole('link', { name: 'Stopped test' })
+    expect(socket().url).toBe(`ws://${window.location.host}/api/v1/ws`)
+    socket().open()
+    expect(socket().sent).toEqual([{ op: 'subscribe_events' }, { op: 'subscribe_jobs' }])
+
+    socket().receive({
+      type: 'events',
+      events: [
+        { project: 'shop', instance: 'main', event: 'status', status: { state: 'crashed', exit: { code: 3, port_in_use: false, tail: '' } } },
+      ],
+    })
+    expect(await nav.findByRole('link', { name: 'Crashed main' })).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent('shop/main crashed')
+    expect(nav.getByRole('link', { name: /shop/ })).toHaveTextContent('0/2')
+  })
+
+  it('shows when the live connection is lost', async () => {
+    renderApp()
+    socket().open()
+    socket().drop()
+    expect(await screen.findByText('Reconnecting…')).toBeInTheDocument()
+    connection.stop()
   })
 })
