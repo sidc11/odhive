@@ -2,6 +2,7 @@
 // stores.
 import { InstanceActions } from './actions.svelte'
 import { ApiClient } from './api/client'
+import { EnvironmentStore } from './environment.svelte'
 import { JobsStore } from './jobs.svelte'
 import { LiveConnection } from './live.svelte'
 import { Notifier } from './notices'
@@ -16,6 +17,7 @@ export const jobs = new JobsStore()
 export const connection = new LiveConnection()
 export const usage = new UsageStore(api)
 export const actions = new InstanceActions(api, projects, toasts)
+export const environment = new EnvironmentStore(api)
 
 /** Wait after a stale event before asking for a snapshot (events come in bursts). */
 export const RESYNC_DELAY_MS = 200

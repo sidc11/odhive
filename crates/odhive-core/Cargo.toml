@@ -22,6 +22,7 @@ sysinfo = { version = "0.40.4", default-features = false, features = ["system"] 
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["net", "process", "io-util", "time", "rt", "sync", "macros"] }
+tokio-postgres = { version = "0.7.18", default-features = false, features = ["runtime"] }
 toml = "1.2.1"
 tracing = "0.1.44"
 utoipa = { version = "6.0.0", default-features = false, features = ["macros"] }

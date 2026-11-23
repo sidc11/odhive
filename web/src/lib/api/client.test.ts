@@ -55,6 +55,13 @@ describe('ApiClient', () => {
     expect(calls.map((c) => c.path)).toEqual(['/pythons', '/pythons?source=odoo-19.0'])
   })
 
+  it('runs the environment check', async () => {
+    const report = { package_manager: null, checks: [] }
+    const { fetcher, calls } = routedFetch({ 'GET /environment': [200, report] })
+    expect(await new ApiClient(fetcher).checkEnvironment()).toEqual(report)
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /environment'])
+  })
+
   it('accepts empty answers (204, 202)', async () => {
     const { fetcher } = routedFetch({ 'DELETE /projects/shop': [204], 'POST /service/quit': [202] })
     const api = new ApiClient(fetcher)

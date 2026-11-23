@@ -5,6 +5,7 @@
   import Toaster from './lib/shell/Toaster.svelte'
   import { connectStores, toasts } from './lib/stores'
   import Dashboard from './pages/Dashboard.svelte'
+  import Environment from './pages/Environment.svelte'
   import InstancePage from './pages/InstancePage.svelte'
   import NewProject from './pages/NewProject.svelte'
   import NotFound from './pages/NotFound.svelte'
@@ -18,6 +19,8 @@
         return 'OdHive'
       case 'new_project':
         return 'New project · OdHive'
+      case 'environment':
+        return 'Environment · OdHive'
       case 'project':
         return `${route.project} · OdHive`
       case 'instance':
@@ -39,6 +42,8 @@
     <Dashboard />
   {:else if route.name === 'new_project'}
     <NewProject />
+  {:else if route.name === 'environment'}
+    <Environment />
   {:else if route.name === 'project'}
     <ProjectPage name={route.project} />
   {:else if route.name === 'instance'}

@@ -24,6 +24,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/environment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Checks PostgreSQL (reachable over the default connection, server
+         *     version, role may create databases), Python for each registered
+         *     Community source (Odoo 19 and 20 when none is registered), wkhtmltopdf,
+         *     git and uv. Each check carries a fix when something is off; install
+         *     commands are text for the user and are never run.
+         */
+        get: operations["check_environment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -651,6 +674,42 @@ export interface components {
             /** @description Whether lines were dropped because the entry hit its size cap. */
             truncated: boolean;
         };
+        /** @description The result of one check. */
+        EnvCheck: {
+            /** @description Further findings, one per line. */
+            details: string[];
+            fix?: components["schemas"]["EnvFix"] | null;
+            /** @description What was checked. */
+            id: components["schemas"]["EnvCheckId"];
+            /** @description Program found, or where PostgreSQL was reached. */
+            location?: string | null;
+            /** @description How it came out. */
+            status: components["schemas"]["EnvStatus"];
+            /** @description One line describing the result. */
+            summary: string;
+            /** @description Version found, e.g. `16.4` or `2.47.1`. */
+            version?: string | null;
+        };
+        /**
+         * @description What a check looked at.
+         * @enum {string}
+         */
+        EnvCheckId: "postgresql" | "python" | "wkhtmltopdf" | "git" | "uv";
+        /** @description Every check, in display order. */
+        EnvCheckReport: {
+            /** @description The checks: PostgreSQL, Python, wkhtmltopdf, git, uv. */
+            checks: components["schemas"]["EnvCheck"][];
+            package_manager?: components["schemas"]["PackageManager"] | null;
+        };
+        /** @description How to fix a check: advice and commands for the user to run. */
+        EnvFix: {
+            /** @description Commands to run, in order (text only; OdHive never runs them). */
+            commands: string[];
+            /** @description What to do, as a sentence. */
+            text: string;
+            /** @description Where to read more or download from. */
+            url?: string | null;
+        };
         /** @description What [`setup_env`] did. */
         EnvReport: {
             /** @description Base interpreter (`None` when an existing venv was kept). */
@@ -660,6 +719,11 @@ export interface components {
             /** @description The venv's interpreter. */
             python: string;
         };
+        /**
+         * @description How a check came out, from best to worst.
+         * @enum {string}
+         */
+        EnvStatus: "ok" | "info" | "warning" | "error";
         /** @description Body of every error response. */
         ErrorBody: {
             /**
@@ -1785,6 +1849,35 @@ export interface operations {
                 };
             };
             /** @description No random numbers */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    check_environment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvCheckReport"];
+                };
+            };
+            /** @description Config unreadable */
             500: {
                 headers: {
                     [name: string]: unknown;

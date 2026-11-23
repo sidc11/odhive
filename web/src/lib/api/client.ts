@@ -156,6 +156,12 @@ export class ApiClient {
     return this.get('/pythons', { source })
   }
 
+  // Environment
+
+  checkEnvironment(): Promise<Ok<'check_environment', 200>> {
+    return this.get('/environment')
+  }
+
   // Projects
 
   listProjects(): Promise<Ok<'list_projects', 200>> {

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use odhive_core::config::{AppPaths, GlobalConfig};
+use odhive_core::envcheck::CheckOptions;
 use odhive_core::launch::{self, LoadedProject, Target};
 use odhive_core::manager::{InstanceInfo, Manager, StopOutcome};
 use odhive_core::pidfile::{self, PidRecord, RecordState, RunDir};
@@ -38,6 +39,7 @@ struct Inner {
     jobs: Jobs,
     clone: CloneOptions,
     discover: DiscoverOptions,
+    env: CheckOptions,
     /// Serializes read-modify-write cycles of the global config.
     config_lock: Mutex<()>,
     ws_limits: WsLimits,
@@ -60,6 +62,10 @@ pub struct ServiceOptions {
     pub clone: CloneOptions,
     /// Where project setups look for Python interpreters and uv.
     pub discover: DiscoverOptions,
+    /// What the environment check looks at. Its `discover` and
+    /// `requirements` are replaced per check (by [`Self::discover`] and the
+    /// registered sources).
+    pub env: CheckOptions,
 }
 
 impl Default for ServiceOptions {
@@ -70,6 +76,7 @@ impl Default for ServiceOptions {
             ws: WsLimits::default(),
             clone: CloneOptions::default(),
             discover: DiscoverOptions::from_env(),
+            env: CheckOptions::from_env(DiscoverOptions::from_env()),
         }
     }
 }
@@ -124,6 +131,7 @@ impl Service {
                 jobs: Jobs::new(),
                 clone: opts.clone,
                 discover: opts.discover,
+                env: opts.env,
                 config_lock: Mutex::new(()),
                 ws_slots: Arc::new(Semaphore::new(opts.ws.max_connections)),
                 ws_limits: opts.ws,
@@ -171,6 +179,10 @@ impl Service {
 
     pub(crate) fn discover_options(&self) -> &DiscoverOptions {
         &self.inner.discover
+    }
+
+    pub(crate) fn env_options(&self) -> &CheckOptions {
+        &self.inner.env
     }
 
     /// Instances of project `name` that run here or elsewhere.

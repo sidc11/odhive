@@ -1,5 +1,14 @@
 // Shapes the API sends, for component and store tests.
-import type { ClientMessage, InstanceInfo, InstanceView, Project, ServerMessage, Status } from './lib/api'
+import type {
+  ClientMessage,
+  EnvCheck,
+  EnvCheckReport,
+  InstanceInfo,
+  InstanceView,
+  Project,
+  ServerMessage,
+  Status,
+} from './lib/api'
 import type { SocketLike } from './lib/live.svelte'
 
 export function instanceView(id: string, extra: Partial<InstanceView> = {}): InstanceView {
@@ -115,5 +124,23 @@ export function fakeSockets() {
       if (!socket) throw new Error('no socket created')
       return socket
     },
+  }
+}
+
+/** An environment check report; `overrides` replace checks by id. */
+export function envReport(overrides: Partial<Record<EnvCheck['id'], Partial<EnvCheck>>> = {}): EnvCheckReport {
+  const ids: EnvCheck['id'][] = ['postgresql', 'python', 'wkhtmltopdf', 'git', 'uv']
+  return {
+    package_manager: 'apt',
+    checks: ids.map((id) => ({
+      id,
+      status: 'ok',
+      summary: 'Found',
+      version: null,
+      location: null,
+      details: [],
+      fix: null,
+      ...overrides[id],
+    })),
   }
 }

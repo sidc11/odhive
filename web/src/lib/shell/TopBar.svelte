@@ -18,6 +18,8 @@
         return [{ label: 'Dashboard' }]
       case 'new_project':
         return [{ label: 'New project' }]
+      case 'environment':
+        return [{ label: 'Environment' }]
       case 'project':
         return [{ label: route.project }]
       case 'instance':
