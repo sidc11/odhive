@@ -354,6 +354,12 @@ async fn an_update_not_yet_loaded_goes_along_with_the_next_restart() {
     );
     assert!(!running(&events));
     events_until(&mut rx, running).await;
+    // Readiness is the HTTP port accepting; the fake binds it before it
+    // logs the module loading, so the line may still be on its way.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !log_text(&m).contains("Loading module m1 ") && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     assert_eq!(log_text(&m).matches("Loading module m1 ").count(), 1);
 
     // Once a process with it runs, the next restart is plain.
