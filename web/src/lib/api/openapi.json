@@ -404,7 +404,7 @@
         "tags": [
           "instances"
         ],
-        "summary": "Installs the missing Python package awaiting confirmation, then restarts\nthe instance. Returns when the restart is issued.",
+        "summary": "Installs the missing Python package awaiting confirmation, then restarts\nthe instance. Returns once the install has started; the outcome comes as\ninstance events.",
         "operationId": "confirm_fix",
         "parameters": [
           {

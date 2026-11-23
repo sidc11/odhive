@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { projects } from '../lib/projects.svelte'
+  import { projects } from '../lib/stores'
   import { instanceState, isUp } from '../lib/status'
 
   const totals = $derived.by(() => {

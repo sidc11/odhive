@@ -329,6 +329,49 @@ async fn untrusted_package_waits_for_confirmation() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn confirm_returns_while_the_install_still_runs() {
+    // The fake installer waits for a `go` file next to it.
+    let s = setup(
+        r#"while [ ! -e "$(dirname "$0")/go" ]; do sleep 0.05; done"#,
+        true,
+    );
+    let m = Manager::new(options(30_700));
+    let mut rx = m.subscribe();
+    let p = plan(
+        &s,
+        AutofixMode::Ask,
+        Trusted::builtin(),
+        &["--simulate-missing", "requests"],
+    );
+    m.start(p).await.expect("start");
+    events_until(&mut rx, |ev| {
+        has(ev, |n| matches!(n, Notice::DependencyMissing { .. }))
+    })
+    .await;
+    wait_done(&m).await;
+
+    let c = tokio::time::timeout(Duration::from_secs(5), m.confirm_fix(&owner()))
+        .await
+        .expect("confirm does not wait for the install")
+        .expect("confirm");
+    assert_eq!(c.package, "requests");
+    events_until(&mut rx, |ev| {
+        has(ev, |n| matches!(n, Notice::DependencyInstalling { .. }))
+    })
+    .await;
+    let fix = m.get(&owner()).and_then(|i| i.autofix).expect("autofix");
+    assert!(fix.active, "the install is under way");
+
+    fs::write(s.dir.path().join("go"), "").expect("open the gate");
+    let events = events_until(&mut rx, running).await;
+    assert!(has(
+        &events,
+        |n| matches!(n, Notice::DependencyInstalled { package } if package == "requests")
+    ));
+    m.stop(&owner()).await.expect("stop");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ask_mode_asks_even_for_trusted_packages_and_decline_drops_it() {
     let s = setup("", true);
     let m = Manager::new(options(30_300));

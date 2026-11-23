@@ -1,5 +1,7 @@
 <script lang="ts">
   import { routeHref, router, type Route } from '../router.svelte'
+  import { connection } from '../stores'
+  import ConnectionStatus from './ConnectionStatus.svelte'
   import ThemeToggle from './ThemeToggle.svelte'
 
   let {
@@ -61,5 +63,6 @@
     </ol>
   </nav>
 
+  <ConnectionStatus {connection} />
   <ThemeToggle />
 </header>
