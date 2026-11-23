@@ -19,7 +19,7 @@ use crate::fsutil::DIR_MODE;
 use crate::launch::{LoadedProject, has_modules};
 use crate::logs::LOGS_DIR;
 use crate::names::{self, NameError};
-use crate::project::{DEFAULT_ADDONS_DIR, ProjectConfig, ProjectError};
+use crate::project::{DEFAULT_ADDONS_DIR, Instance, ProjectConfig, ProjectError};
 use crate::python::{
     self, Compat, DiscoverOptions, Interpreter, PickError, PySupport, PythonError,
 };
@@ -171,6 +171,8 @@ pub struct NewProject {
     pub addons_paths: Vec<PathBuf>,
     /// Interpreter to build the venv with; `None` = detect.
     pub python: Option<PathBuf>,
+    /// The project's first instance.
+    pub instance: Instance,
 }
 
 /// Creates `<workspace>/projects/<name>/` with `addons/`, `data/`, `logs/`,
@@ -191,6 +193,7 @@ pub fn create_project(
     let mut config = ProjectConfig::new(&new.name, &new.community);
     config.sources.enterprise.clone_from(&new.enterprise);
     config.python.clone_from(&new.python);
+    config.instances = vec![new.instance.clone()];
     for p in &new.addons_paths {
         let real = fs::canonicalize(p)
             .ok()

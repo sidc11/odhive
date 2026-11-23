@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, bail};
 use odhive_core::launch::{self, Target};
+use odhive_core::project::{DEFAULT_INSTANCE, Instance};
 use odhive_core::python::Compat;
 use odhive_core::requirements::{InstallEvent, Origin};
 use odhive_core::setup::{self, EnvOptions, NewProject, SetupEvent};
@@ -32,6 +33,7 @@ pub async fn add(ctx: &mut Ctx, args: ProjectAddArgs) -> anyhow::Result<ExitCode
         enterprise: enterprise.map(|e| e.id),
         addons_paths: args.addons,
         python: python.clone(),
+        instance: Instance::new(DEFAULT_INSTANCE),
     };
     let mut project = setup::create_project(&mut ctx.cfg, &ctx.ws, &new)?;
     ctx.save()?;

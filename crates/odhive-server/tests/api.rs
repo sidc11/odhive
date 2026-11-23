@@ -307,6 +307,26 @@ async fn projects_are_created_listed_and_removed() {
             StatusCode::BAD_REQUEST,
             "bad_path",
         ),
+        (
+            json!({ "name": "shop", "community": source, "instance": { "id": "Main" } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_project",
+        ),
+        (
+            json!({ "name": "shop", "community": source, "instance": { "db": "a b" } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_project",
+        ),
+        (
+            json!({ "name": "shop", "community": source, "instance": { "http_port": 80 } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_project",
+        ),
+        (
+            json!({ "name": "shop", "community": source, "instance": { "gevent_port": 8072 } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_body",
+        ),
     ] {
         let (status, body) = api.post("/api/v1/projects", Some(req.clone())).await;
         assert_eq!(status, code, "{req}: {body}");
@@ -332,6 +352,28 @@ async fn projects_are_created_listed_and_removed() {
     assert_eq!(created["instances"][0]["live"], Value::Null);
     assert_eq!(created["instances"][0]["external"], Value::Null);
     assert!(created.get("error").is_none());
+
+    // The first instance can be named, given a database and a pinned port.
+    let (status, custom) = api
+        .post(
+            "/api/v1/projects",
+            Some(json!({
+                "name": "custom",
+                "community": source,
+                "instance": { "id": "dev", "db": "custom_db", "http_port": 8070 },
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{custom}");
+    assert_eq!(custom["instances"].as_array().map(Vec::len), Some(1));
+    assert_eq!(custom["instances"][0]["id"], "dev");
+    assert_eq!(custom["instances"][0]["db"], "custom_db");
+    assert_eq!(custom["instances"][0]["http_port"], 8070);
+    assert_eq!(custom["instances"][0]["gevent_port"], Value::Null);
+    assert_eq!(
+        api.delete("/api/v1/projects/custom").await.0,
+        StatusCode::NO_CONTENT
+    );
 
     let (status, body) = api
         .post(

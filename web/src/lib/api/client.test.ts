@@ -46,6 +46,15 @@ describe('ApiClient', () => {
     expect(await new ApiClient(fetcher).instanceUsage()).toEqual(usage)
   })
 
+  it('lists Pythons, judged against a source when one is given', async () => {
+    const list = { support: null, recommended: null, problem: null, interpreters: [], uv_error: null }
+    const { fetcher, calls } = routedFetch({ 'GET /pythons': [200, list], 'GET /pythons?source=odoo-19.0': [200, list] })
+    const api = new ApiClient(fetcher)
+    expect(await api.listPythons()).toEqual(list)
+    await api.listPythons('odoo-19.0')
+    expect(calls.map((c) => c.path)).toEqual(['/pythons', '/pythons?source=odoo-19.0'])
+  })
+
   it('accepts empty answers (204, 202)', async () => {
     const { fetcher } = routedFetch({ 'DELETE /projects/shop': [204], 'POST /service/quit': [202] })
     const api = new ApiClient(fetcher)

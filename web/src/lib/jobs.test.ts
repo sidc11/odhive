@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Job } from './api'
-import { JobsStore, MAX_OUTPUT_LINES } from './jobs.svelte'
+import { JobLostError, JobsStore, MAX_OUTPUT_LINES } from './jobs.svelte'
 
 function job(id: number, extra: Partial<Job> = {}): Job {
   return {
@@ -51,5 +51,28 @@ describe('JobsStore', () => {
     expect(kept?.output).toHaveLength(MAX_OUTPUT_LINES)
     expect(kept?.output[0]).toBe('line 3')
     expect(kept?.output_dropped).toBe(3)
+  })
+
+  it('resolves finished() once the job ends, also when it already has', async () => {
+    const jobs = new JobsStore()
+    jobs.upsert(job(1))
+    const waiting = jobs.finished(1)
+    jobs.apply({ type: 'job_events', events: [{ event: 'finished', job: job(1, { state: 'failed' }) }] })
+    await expect(waiting).resolves.toMatchObject({ id: 1, state: 'failed' })
+    await expect(jobs.finished(1)).resolves.toMatchObject({ state: 'failed' })
+
+    // A job not seen yet (its 202 answer still on the way) is waited for.
+    const later = jobs.finished(2)
+    jobs.upsert(job(2, { state: 'succeeded' }))
+    await expect(later).resolves.toMatchObject({ id: 2, state: 'succeeded' })
+  })
+
+  it('rejects finished() when a snapshot no longer lists the job', async () => {
+    const jobs = new JobsStore()
+    jobs.upsert(job(1))
+    const waiting = jobs.finished(1)
+    jobs.apply({ type: 'job_snapshot', jobs: [job(1)] })
+    jobs.apply({ type: 'job_snapshot', jobs: [] })
+    await expect(waiting).rejects.toBeInstanceOf(JobLostError)
   })
 })

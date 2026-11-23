@@ -30,9 +30,23 @@
     </a>
 
     <section aria-labelledby="nav-projects" class="flex flex-col gap-1">
-      <h2 id="nav-projects" class="px-2 text-xs font-semibold tracking-wide text-fg-muted uppercase">
-        Projects
-      </h2>
+      <div class="flex items-center justify-between gap-2">
+        <h2 id="nav-projects" class="px-2 text-xs font-semibold tracking-wide text-fg-muted uppercase">
+          Projects
+        </h2>
+        <a
+          href={routeHref({ name: 'new_project' })}
+          class="inline-flex size-8 items-center justify-center rounded-md text-fg-muted hover:bg-surface-sunken hover:text-fg aria-[current=page]:bg-accent-soft aria-[current=page]:text-fg"
+          aria-current={route.name === 'new_project' ? 'page' : undefined}
+          title="New project"
+          onclick={follow}
+        >
+          <svg viewBox="0 0 24 24" class="size-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"
+            ><path d="M12 5v14M5 12h14" /></svg
+          >
+          <span class="sr-only">New project</span>
+        </a>
+      </div>
 
       {#if projects.state.status === 'loading'}
         <p class="px-2 text-sm text-fg-muted">Loading…</p>

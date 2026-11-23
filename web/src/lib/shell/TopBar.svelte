@@ -16,6 +16,8 @@
     switch (route.name) {
       case 'dashboard':
         return [{ label: 'Dashboard' }]
+      case 'new_project':
+        return [{ label: 'New project' }]
       case 'project':
         return [{ label: route.project }]
       case 'instance':

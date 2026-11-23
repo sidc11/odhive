@@ -5,6 +5,9 @@ describe('parseRoute', () => {
   it('maps the known paths', () => {
     expect(parseRoute('/')).toEqual({ name: 'dashboard' })
     expect(parseRoute('')).toEqual({ name: 'dashboard' })
+    expect(parseRoute('/new')).toEqual({ name: 'new_project' })
+    // A project may be called "new".
+    expect(parseRoute('/projects/new')).toEqual({ name: 'project', project: 'new' })
     expect(parseRoute('/projects/shop')).toEqual({ name: 'project', project: 'shop' })
     expect(parseRoute('/projects/shop/')).toEqual({ name: 'project', project: 'shop' })
     expect(parseRoute('/projects/shop/instances/main')).toEqual({
@@ -21,6 +24,7 @@ describe('parseRoute', () => {
   it('rejects unknown, malformed and smuggled paths', () => {
     for (const path of [
       '/nope',
+      '/new/x',
       '/projects',
       '/projects/shop/instances',
       '/projects/shop/other/main',
@@ -35,6 +39,7 @@ describe('parseRoute', () => {
   it('round-trips through routeHref', () => {
     const routes = [
       { name: 'dashboard' },
+      { name: 'new_project' },
       { name: 'project', project: 'a b?#' },
       { name: 'instance', project: 'shop', instance: 'main/x' },
     ] as const
