@@ -252,7 +252,7 @@ async fn a_crashed_instance_waits_for_a_fix_and_restarts_on_it() {
     m.start(plan(dir.path(), ReloadMode::Auto, &["--simulate", "crash"]))
         .await
         .expect("start");
-    events_until(&mut rx, |ev| {
+    let crashed = |ev: &[ManagerEvent]| {
         ev.iter().any(|e| {
             matches!(
                 e.event,
@@ -261,8 +261,8 @@ async fn a_crashed_instance_waits_for_a_fix_and_restarts_on_it() {
                 })
             )
         })
-    })
-    .await;
+    };
+    events_until(&mut rx, crashed).await;
     // Wait for the watcher before judging `is_done`.
     let deadline = tokio::time::Instant::now() + WAIT;
     while !m
@@ -272,6 +272,14 @@ async fn a_crashed_instance_waits_for_a_fix_and_restarts_on_it() {
     {
         assert!(tokio::time::Instant::now() < deadline);
         tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // As in `start_watched`: FSEvents (macOS) may still deliver the writes
+    // that set the project up, which count as a fix. Let that restart crash
+    // again, so only the write below is judged.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let late = rx.drain();
+    if spawns(&late) > 0 && !crashed(&late) {
+        events_until(&mut rx, crashed).await;
     }
     let info = m.get(&owner()).expect("info");
     assert!(info.status.is_terminal() && !info.is_done(), "{info:?}");

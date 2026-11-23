@@ -12,15 +12,16 @@ export HOME
 unset XDG_CONFIG_HOME XDG_DATA_HOME
 
 "$bin" --version
-"$bin" --port 7069 >"$log" 2>&1 &
+# In the foreground: plain `odhive` would start it detached and exit.
+"$bin" --port 7069 serve --foreground >"$log" 2>&1 &
 pid=$!
 trap 'kill "$pid" 2>/dev/null || true' EXIT
 
 for _ in $(seq 1 50); do
-  grep -q 'OdHive is running at' "$log" && break
+  grep -q 'Open OdHive' "$log" && break
   sleep 0.1
 done
-grep -q 'OdHive is running at http://localhost:7069' "$log" || { cat "$log"; exit 1; }
+grep -q 'Open OdHive (link valid for 60 s, once): http://localhost:7069/login?t=' "$log" || { cat "$log"; exit 1; }
 
 status_for_host() {
   exec 3<>/dev/tcp/127.0.0.1/7069

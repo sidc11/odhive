@@ -247,12 +247,21 @@ pub async fn open(port: u16, browser: bool) -> anyhow::Result<ExitCode> {
 /// waits until it has.
 pub async fn quit() -> anyhow::Result<ExitCode> {
     let paths = AppPaths::discover()?;
-    let Some(state) = service_lock::probe(&paths.data_dir)? else {
-        eprintln!("OdHive is not running");
-        return Ok(ExitCode::SUCCESS);
-    };
-    let Some(state) = state else {
-        bail!("OdHive is starting up; try again in a moment");
+    // A service that is starting up is waited for, then asked to quit.
+    let deadline = Instant::now() + START_WAIT;
+    let state = loop {
+        match service_lock::probe(&paths.data_dir)? {
+            None => {
+                eprintln!("OdHive is not running");
+                return Ok(ExitCode::SUCCESS);
+            }
+            Some(Some(state)) => break state,
+            Some(None) if Instant::now() >= deadline => bail!(
+                "OdHive is still starting up after {} s",
+                START_WAIT.as_secs()
+            ),
+            Some(None) => tokio::time::sleep(POLL).await,
+        }
     };
     let client = Client::new(state.port, &read_token(&paths)?);
     let reply = client.post("/api/v1/service/quit").await?;
