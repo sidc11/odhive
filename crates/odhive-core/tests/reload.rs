@@ -301,15 +301,14 @@ async fn a_crashed_instance_waits_for_a_fix_and_restarts_on_it() {
     let InstanceEvent::Manager(Notice::Reload { action, files, .. }) = &events[at].event else {
         unreachable!("fix_reload finds reload notices");
     };
-    if files.len() == 1 {
-        assert_eq!(action, &Action::Restart);
-    } else {
-        // Batched with a late setup write: still a restart (maybe with `-u`).
-        assert!(
-            !matches!(action, Action::RefreshBrowser { .. }),
-            "{action:?}"
-        );
-    }
+    // The fix restarts the instance. On macOS a late setup write may have
+    // left a pending `-u` (or be batched with this one), which rides along
+    // with the restart, so `Update` counts too; only a browser refresh
+    // would be wrong.
+    assert!(
+        matches!(action, Action::Restart | Action::Update { .. }),
+        "{files:?} {action:?}"
+    );
     m.stop(&owner()).await.expect("stop");
 }
 
