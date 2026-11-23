@@ -43,7 +43,7 @@ pub struct ReloadInfo {
     /// The addons folders are being watched.
     pub watching: bool,
     /// Modules to update that no running process has loaded yet.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_update: Vec<String>,
 }
 

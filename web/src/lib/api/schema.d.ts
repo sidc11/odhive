@@ -151,7 +151,8 @@ export interface paths {
         get: operations["list_projects"];
         put?: never;
         /**
-         * Creates a project folder in the workspace with one `main` instance. Its
+         * Creates a project folder in the workspace with one instance (`main`
+         *     unless `instance` names it). Its
          *     Python environment is not set up yet (`has_venv` is false).
          */
         post: operations["create_project"];
@@ -334,6 +335,26 @@ export interface paths {
          *     WebSocket. Refused while an instance of the project runs.
          */
         post: operations["setup_project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pythons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Finds and probes the Python 3 interpreters on `PATH` and those uv
+         *     installed. With `source`, each is judged against that Odoo's range.
+         */
+        get: operations["list_pythons"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -596,6 +617,7 @@ export interface components {
             community: string;
             /** @description Registered Enterprise source id of the same series. */
             enterprise?: string | null;
+            instance?: components["schemas"]["NewInstance"] | null;
             /**
              * @description Project name (`^[a-z0-9][a-z0-9_-]{0,63}$`).
              * @example shop
@@ -1073,6 +1095,22 @@ export interface components {
         };
         /** @description An event, with the instance it belongs to. */
         ManagerEvent: components["schemas"]["PortOwner"] & components["schemas"]["InstanceEvent"];
+        /** @description Settings of a project's first instance. */
+        NewInstance: {
+            /** @description Database; omitted = `<project>_<instance>`. */
+            db?: string | null;
+            /**
+             * Format: int32
+             * @description Pinned HTTP port (never moved; the start fails while it is taken);
+             *     omitted = the first free port from 8069 at each start.
+             */
+            http_port?: number | null;
+            /**
+             * @description Instance id (same rules as a project name); omitted = `main`.
+             * @example main
+             */
+            id?: string | null;
+        };
         /** @description A source tree to register. */
         NewSource: {
             /**
@@ -1344,6 +1382,35 @@ export interface components {
             max: number[];
             /** @description Oldest supported `(major, minor)`. */
             min: number[];
+        };
+        /** @description A working Python interpreter. */
+        PythonInfo: {
+            compat?: components["schemas"]["Compat"] | null;
+            /** @description Built without the GIL. */
+            free_threaded: boolean;
+            /** @description `sys.implementation.name`, e.g. `cpython`. */
+            implementation: string;
+            /** @description Interpreter executable (symlinks resolved). */
+            path: string;
+            /** @description A standard CPython build, the kind Odoo's dependencies are built for. */
+            standard: boolean;
+            /** @description Version, e.g. `3.12.4`. */
+            version: string;
+        };
+        /** @description The interpreters found, and the one a project setup would pick. */
+        PythonList: {
+            /** @description Working interpreters, in discovery order (`PATH`, then uv). */
+            interpreters: components["schemas"]["PythonInfo"][];
+            /** @description Why nothing fits, when `source` was given and nothing does. */
+            problem?: string | null;
+            /**
+             * @description Path of the interpreter a setup picks by default (newest supported
+             *     standard CPython); `None` when none fits or without `source`.
+             */
+            recommended?: string | null;
+            support?: components["schemas"]["PySupport"] | null;
+            /** @description Why uv's interpreters could not be listed. */
+            uv_error?: string | null;
         };
         /** @description An entry with its sequence number. */
         Record: components["schemas"]["Entry"] & {
@@ -2410,6 +2477,56 @@ export interface operations {
                 };
             };
             /** @description Invalid project */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_pythons: {
+        parameters: {
+            query?: {
+                /** @description Registered Community source id; omitted = no `compat` judgement. */
+                source?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PythonList"];
+                };
+            };
+            /** @description Invalid query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unknown source */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a Community source */
             422: {
                 headers: {
                     [name: string]: unknown;

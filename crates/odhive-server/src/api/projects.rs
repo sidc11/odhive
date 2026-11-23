@@ -8,7 +8,7 @@ use odhive_core::git::{self, GitHead};
 use odhive_core::launch::{self, LoadedProject, SCHEMA_CACHE_DIR};
 use odhive_core::manager::InstanceInfo;
 use odhive_core::ports::PortOwner;
-use odhive_core::project::{AutofixMode, ReloadMode};
+use odhive_core::project::{AutofixMode, DEFAULT_INSTANCE, Instance, ReloadMode};
 use odhive_core::schema;
 use odhive_core::setup::{self, EnvOptions, NewProject};
 use odhive_core::venv::{VENV_DIR, venv_python};
@@ -42,6 +42,36 @@ pub struct CreateProject {
     /// detected at setup.
     #[serde(default)]
     pub python: Option<String>,
+    /// The first instance; omitted = `main` with automatic ports and the
+    /// database `<project>_main`.
+    #[serde(default)]
+    pub instance: Option<NewInstance>,
+}
+
+/// Settings of a project's first instance.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NewInstance {
+    /// Instance id (same rules as a project name); omitted = `main`.
+    #[serde(default)]
+    #[schema(example = "main")]
+    pub id: Option<String>,
+    /// Database; omitted = `<project>_<instance>`.
+    #[serde(default)]
+    pub db: Option<String>,
+    /// Pinned HTTP port (never moved; the start fails while it is taken);
+    /// omitted = the first free port from 8069 at each start.
+    #[serde(default)]
+    pub http_port: Option<u16>,
+}
+
+impl NewInstance {
+    fn into_instance(self) -> Instance {
+        let mut instance = Instance::new(self.id.unwrap_or_else(|| DEFAULT_INSTANCE.to_owned()));
+        instance.db = self.db;
+        instance.http_port = self.http_port;
+        instance
+    }
 }
 
 /// An instance that runs outside this OdHive service, e.g. one started by
@@ -208,7 +238,8 @@ pub(super) async fn get(
     Ok(Json(view(&svc, &cfg, &project)?))
 }
 
-/// Creates a project folder in the workspace with one `main` instance. Its
+/// Creates a project folder in the workspace with one instance (`main`
+/// unless `instance` names it). Its
 /// Python environment is not set up yet (`has_venv` is false).
 #[utoipa::path(operation_id = "create_project", post, path = "/projects", tag = "projects", request_body = CreateProject,
     responses(
@@ -245,6 +276,7 @@ pub(super) async fn create(
                 enterprise: req.enterprise.clone(),
                 addons_paths,
                 python,
+                instance: req.instance.clone().unwrap_or_default().into_instance(),
             };
             let project = setup::create_project(cfg, &ws, &new)?;
             Ok((cfg.clone(), project))

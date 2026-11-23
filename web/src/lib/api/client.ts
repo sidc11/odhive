@@ -150,6 +150,12 @@ export class ApiClient {
     return this.get(`/sources/${segment(id)}/schema`)
   }
 
+  // Python
+
+  listPythons(source?: string): Promise<Ok<'list_pythons', 200>> {
+    return this.get('/pythons', { source })
+  }
+
   // Projects
 
   listProjects(): Promise<Ok<'list_projects', 200>> {

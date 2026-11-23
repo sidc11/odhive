@@ -2,6 +2,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 use super::*;
+use crate::project::DEFAULT_INSTANCE;
 use crate::python::find_executable;
 use crate::version::RELEASE_PY;
 
@@ -47,6 +48,7 @@ fn new_project(name: &str) -> NewProject {
         enterprise: None,
         addons_paths: Vec::new(),
         python: None,
+        instance: Instance::new(DEFAULT_INSTANCE),
     }
 }
 
@@ -98,6 +100,18 @@ fn create_project_makes_private_folders_and_registers_it() {
 }
 
 #[test]
+fn create_project_uses_the_given_first_instance() {
+    let mut f = fixture();
+    let mut new = new_project("shop");
+    new.instance = Instance::new("dev");
+    new.instance.http_port = Some(8070);
+    new.instance.db = Some("shop_dev_db".into());
+    let p = create_project(&mut f.cfg, &f.ws, &new).expect("create");
+    let saved = ProjectConfig::load(&p.entry.path).expect("load");
+    assert_eq!(saved.instances, vec![new.instance]);
+}
+
+#[test]
 fn create_project_refuses_and_leaves_nothing_behind() {
     let mut f = fixture();
     create_project(&mut f.cfg, &f.ws, &new_project("shop")).expect("create");
@@ -128,6 +142,18 @@ fn create_project_refuses_and_leaves_nothing_behind() {
     assert!(matches!(
         create_project(&mut f.cfg, &f.ws, &bad),
         Err(SetupError::Project(ProjectError::UnknownSource(_)))
+    ));
+    let mut bad = new_project("other");
+    bad.instance.db = Some("bad db; drop".into());
+    assert!(matches!(
+        create_project(&mut f.cfg, &f.ws, &bad),
+        Err(SetupError::Project(_))
+    ));
+    let mut bad = new_project("other");
+    bad.instance.http_port = Some(80);
+    assert!(matches!(
+        create_project(&mut f.cfg, &f.ws, &bad),
+        Err(SetupError::Project(_))
     ));
     assert!(!f.ws.projects_dir().join("other").exists());
     assert_eq!(f.cfg.projects.len(), 1);

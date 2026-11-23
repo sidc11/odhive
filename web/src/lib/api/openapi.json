@@ -272,7 +272,7 @@
         "tags": [
           "projects"
         ],
-        "summary": "Creates a project folder in the workspace with one `main` instance. Its\nPython environment is not set up yet (`has_venv` is false).",
+        "summary": "Creates a project folder in the workspace with one instance (`main`\nunless `instance` names it). Its\nPython environment is not set up yet (`has_venv` is false).",
         "operationId": "create_project",
         "requestBody": {
           "content": {
@@ -943,6 +943,68 @@
           },
           "422": {
             "description": "Invalid project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pythons": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Finds and probes the Python 3 interpreters on `PATH` and those uv\ninstalled. With `source`, each is judged against that Odoo's range.",
+        "operationId": "list_pythons",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "description": "Registered Community source id; omitted = no `compat` judgement.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a Community source",
             "content": {
               "application/json": {
                 "schema": {
@@ -1632,6 +1694,17 @@
               "null"
             ],
             "description": "Registered Enterprise source id of the same series."
+          },
+          "instance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NewInstance",
+                "description": "The first instance; omitted = `main` with automatic ports and the\ndatabase `<project>_main`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "name": {
             "type": "string",
@@ -2952,6 +3025,37 @@
         ],
         "description": "An event, with the instance it belongs to."
       },
+      "NewInstance": {
+        "type": "object",
+        "description": "Settings of a project's first instance.",
+        "properties": {
+          "db": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Database; omitted = `<project>_<instance>`."
+          },
+          "http_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Pinned HTTP port (never moved; the start fails while it is taken);\nomitted = the first free port from 8069 at each start.",
+            "minimum": 0
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Instance id (same rules as a project name); omitted = `main`.",
+            "example": "main"
+          }
+        },
+        "additionalProperties": false
+      },
       "NewSource": {
         "type": "object",
         "description": "A source tree to register.",
@@ -3795,6 +3899,98 @@
               "minimum": 0
             },
             "description": "Oldest supported `(major, minor)`."
+          }
+        }
+      },
+      "PythonInfo": {
+        "type": "object",
+        "description": "A working Python interpreter.",
+        "required": [
+          "path",
+          "version",
+          "implementation",
+          "free_threaded",
+          "standard"
+        ],
+        "properties": {
+          "compat": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Compat",
+                "description": "How its version fits the source's range; `None` without `source`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "free_threaded": {
+            "type": "boolean",
+            "description": "Built without the GIL."
+          },
+          "implementation": {
+            "type": "string",
+            "description": "`sys.implementation.name`, e.g. `cpython`."
+          },
+          "path": {
+            "type": "string",
+            "description": "Interpreter executable (symlinks resolved)."
+          },
+          "standard": {
+            "type": "boolean",
+            "description": "A standard CPython build, the kind Odoo's dependencies are built for."
+          },
+          "version": {
+            "type": "string",
+            "description": "Version, e.g. `3.12.4`."
+          }
+        }
+      },
+      "PythonList": {
+        "type": "object",
+        "description": "The interpreters found, and the one a project setup would pick.",
+        "required": [
+          "interpreters"
+        ],
+        "properties": {
+          "interpreters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PythonInfo"
+            },
+            "description": "Working interpreters, in discovery order (`PATH`, then uv)."
+          },
+          "problem": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why nothing fits, when `source` was given and nothing does."
+          },
+          "recommended": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Path of the interpreter a setup picks by default (newest supported\nstandard CPython); `None` when none fits or without `source`."
+          },
+          "support": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PySupport",
+                "description": "Python range the source supports; `None` without `source`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uv_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why uv's interpreters could not be listed."
           }
         }
       },

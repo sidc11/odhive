@@ -3,6 +3,7 @@
 
 export type Route =
   | { name: 'dashboard' }
+  | { name: 'new_project' }
   | { name: 'project'; project: string }
   | { name: 'instance'; project: string; instance: string }
   | { name: 'not_found'; path: string }
@@ -20,6 +21,8 @@ export function parseRoute(path: string): Route {
   const parts = path.split('/').filter((part) => part !== '')
   const notFound: Route = { name: 'not_found', path }
   if (parts.length === 0) return { name: 'dashboard' }
+  // Not below /projects/: "new" is a valid project name.
+  if (parts.length === 1 && parts[0] === 'new') return { name: 'new_project' }
   if (parts[0] !== 'projects') return notFound
 
   const project = parts[1] === undefined ? null : segment(parts[1])
@@ -37,6 +40,8 @@ export function routeHref(route: Exclude<Route, { name: 'not_found' }>): string 
   switch (route.name) {
     case 'dashboard':
       return '/'
+    case 'new_project':
+      return '/new'
     case 'project':
       return `/projects/${encodeURIComponent(route.project)}`
     case 'instance':

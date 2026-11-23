@@ -57,6 +57,7 @@ fn fixture() -> Fixture {
         enterprise: None,
         addons_paths: vec![extra],
         python: None,
+        instance: crate::project::Instance::new(crate::project::DEFAULT_INSTANCE),
     };
     let project = create_project(&mut cfg, &ws, &new).expect("create");
     let paths = AppPaths {

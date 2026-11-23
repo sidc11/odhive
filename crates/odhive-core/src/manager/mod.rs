@@ -331,7 +331,7 @@ pub enum Notice {
         modules: usize,
         /// Module folders that link out of their addons folder; changes in
         /// them are not seen.
-        #[serde(skip_serializing_if = "Vec::is_empty")]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         #[schema(value_type = Vec<String>)]
         unwatched: Vec<PathBuf>,
     },

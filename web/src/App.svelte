@@ -6,6 +6,7 @@
   import { connectStores, toasts } from './lib/stores'
   import Dashboard from './pages/Dashboard.svelte'
   import InstancePage from './pages/InstancePage.svelte'
+  import NewProject from './pages/NewProject.svelte'
   import NotFound from './pages/NotFound.svelte'
   import ProjectPage from './pages/ProjectPage.svelte'
 
@@ -15,6 +16,8 @@
     switch (route.name) {
       case 'dashboard':
         return 'OdHive'
+      case 'new_project':
+        return 'New project · OdHive'
       case 'project':
         return `${route.project} · OdHive`
       case 'instance':
@@ -34,6 +37,8 @@
 <AppShell>
   {#if route.name === 'dashboard'}
     <Dashboard />
+  {:else if route.name === 'new_project'}
+    <NewProject />
   {:else if route.name === 'project'}
     <ProjectPage name={route.project} />
   {:else if route.name === 'instance'}

@@ -293,3 +293,31 @@ async fn unknown_instances_are_reported() {
     assert!(m.recover().expect("no run dir").is_empty());
     assert!(m.shutdown().await.is_empty());
 }
+
+#[test]
+fn empty_lists_left_out_of_json_read_back() {
+    // API clients (the CLI) read what the service sends.
+    let info = ReloadInfo {
+        mode: crate::project::ReloadMode::Auto,
+        watching: true,
+        pending_update: Vec::new(),
+    };
+    let json = serde_json::to_string(&info).expect("serialize");
+    assert!(!json.contains("pending_update"), "{json}");
+    assert_eq!(
+        serde_json::from_str::<ReloadInfo>(&json).expect("read back"),
+        info
+    );
+
+    let notice = Notice::ReloadWatching {
+        roots: vec![PathBuf::from("/addons")],
+        modules: 1,
+        unwatched: Vec::new(),
+    };
+    let json = serde_json::to_string(&notice).expect("serialize");
+    assert!(!json.contains("unwatched"), "{json}");
+    assert_eq!(
+        serde_json::from_str::<Notice>(&json).expect("read back"),
+        notice
+    );
+}

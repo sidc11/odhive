@@ -1,6 +1,7 @@
 <script lang="ts">
   import InstanceCard from '../lib/dashboard/InstanceCard.svelte'
   import { actions, projects, usage } from '../lib/stores'
+  import { routeHref, router } from '../lib/router.svelte'
   import { instanceState, isUp } from '../lib/status'
 
   const totals = $derived.by(() => {
@@ -23,16 +24,26 @@
   {#if totals.projects === 0}
     <div class="mt-6 rounded-lg border border-dashed border-line bg-surface-raised p-6 text-center">
       <p class="font-medium">No projects yet</p>
-      <p class="mt-1 text-sm text-fg-muted">
-        Add one with <code class="rounded bg-surface-sunken px-1">odhive project add</code> for now.
-      </p>
+      <p class="mt-1 text-sm text-fg-muted">Create one to set up Odoo, its Python environment and a first instance.</p>
+      <a
+        href={routeHref({ name: 'new_project' })}
+        class="mt-4 inline-flex min-h-9 items-center rounded-md bg-accent px-3 text-sm font-medium text-accent-fg hover:opacity-90"
+        onclick={router.link}>New project</a
+      >
     </div>
   {:else}
-    <p class="mt-2 text-sm text-fg-muted">
-      {totals.projects}
-      {totals.projects === 1 ? 'project' : 'projects'} · {totals.up} of {totals.instances}
-      {totals.instances === 1 ? 'instance' : 'instances'} running
-    </p>
+    <div class="mt-2 flex flex-wrap items-center gap-2">
+      <p class="flex-1 text-sm text-fg-muted">
+        {totals.projects}
+        {totals.projects === 1 ? 'project' : 'projects'} · {totals.up} of {totals.instances}
+        {totals.instances === 1 ? 'instance' : 'instances'} running
+      </p>
+      <a
+        href={routeHref({ name: 'new_project' })}
+        class="inline-flex min-h-9 items-center rounded-md border border-line px-3 text-sm font-medium hover:bg-surface-sunken"
+        onclick={router.link}>New project</a
+      >
+    </div>
     <h2 class="sr-only">Instances</h2>
     <ul class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
       {#each projects.state.projects as project (project.name)}
