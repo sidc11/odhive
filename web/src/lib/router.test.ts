@@ -58,6 +58,35 @@ describe('parseRoute', () => {
   })
 })
 
+describe('log split view routes', () => {
+  it('maps /logs and up to four project/instance pairs', () => {
+    expect(parseRoute('/logs')).toEqual({ name: 'logs', panes: [] })
+    expect(parseRoute('/logs/shop/main/')).toEqual({ name: 'logs', panes: [{ project: 'shop', instance: 'main' }] })
+    expect(parseRoute('/logs/shop/main/crm/test/shop/main/a/b')).toEqual({
+      name: 'logs',
+      panes: [
+        { project: 'shop', instance: 'main' },
+        { project: 'crm', instance: 'test' },
+        { project: 'shop', instance: 'main' },
+        { project: 'a', instance: 'b' },
+      ],
+    })
+  })
+
+  it('rejects odd, too many and malformed segments', () => {
+    for (const path of ['/logs/shop', '/logs/shop/main/crm', '/logs/a/1/b/2/c/3/d/4/e/5', '/logs/a%2Fb/main', '/logs/%E0/x']) {
+      expect(parseRoute(path)).toEqual({ name: 'not_found', path })
+    }
+  })
+
+  it('round-trips through routeHref', () => {
+    for (const panes of [[], [{ project: 'shop', instance: 'main' }], [{ project: 'a b', instance: 'x' }, { project: 'c', instance: 'd' }]]) {
+      expect(parseRoute(routeHref({ name: 'logs', panes }))).toEqual({ name: 'logs', panes })
+    }
+    expect(routeHref({ name: 'logs', panes: [] })).toBe('/logs')
+  })
+})
+
 describe('Router', () => {
   afterEach(() => window.history.replaceState(null, '', '/'))
 

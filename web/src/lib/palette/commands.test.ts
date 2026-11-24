@@ -23,7 +23,7 @@ const ids = (commands: { id: string }[]): string[] => commands.map((command) => 
 describe('buildCommands', () => {
   it('always offers the pages and the wizard', () => {
     const commands = buildCommands({ status: 'loading' }, deps())
-    expect(ids(commands)).toEqual(['page-dashboard', 'page-environment', 'new-project'])
+    expect(ids(commands)).toEqual(['page-dashboard', 'page-environment', 'page-logs', 'new-project'])
   })
 
   it('lists projects, instances and the actions each instance allows', () => {
@@ -31,6 +31,7 @@ describe('buildCommands', () => {
     expect(ids(commands)).toEqual([
       'page-dashboard',
       'page-environment',
+      'page-logs',
       'project:shop',
       'project:crm',
       'instance:shop/main',
@@ -41,9 +42,12 @@ describe('buildCommands', () => {
       // nothing to run. Settings: always.
       'stop:shop/main',
       'restart:shop/main',
+      'logs:shop/main',
       'settings:shop/main',
       'start:shop/test',
+      'logs:shop/test',
       'settings:shop/test',
+      'logs:crm/main',
       'settings:crm/main',
     ])
     const main = commands.find((command) => command.id === 'instance:shop/main')
@@ -73,7 +77,15 @@ describe('buildCommands', () => {
     byId('start:shop/test').run()
     byId('restart:shop/main').run()
     byId('settings:crm/main').run()
-    expect(d.navigate.mock.calls).toEqual([['/new'], ['/projects/shop'], ['/projects/shop/instances/test']])
+    byId('page-logs').run()
+    byId('logs:shop/test').run()
+    expect(d.navigate.mock.calls).toEqual([
+      ['/new'],
+      ['/projects/shop'],
+      ['/projects/shop/instances/test'],
+      ['/logs'],
+      ['/logs/shop/test'],
+    ])
     expect(d.act.mock.calls).toEqual([
       ['start', 'shop', 'test'],
       ['restart', 'shop', 'main'],

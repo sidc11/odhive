@@ -28,6 +28,8 @@
           { label: route.project, href: routeHref({ name: 'project', project: route.project }) },
           { label: route.instance },
         ]
+      case 'logs':
+        return [{ label: 'Logs' }]
       case 'not_found':
         return [{ label: 'Not found' }]
     }

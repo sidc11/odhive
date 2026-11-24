@@ -48,6 +48,14 @@ export function buildCommands(state: ProjectsState, deps: CommandDeps): Command[
       keywords: ['check', 'postgresql', 'python', 'wkhtmltopdf', 'git', 'uv'],
       run: () => navigate(routeHref({ name: 'environment' })),
     },
+    {
+      id: 'page-logs',
+      group: 'Pages',
+      title: 'Logs',
+      hint: 'Up to 4 instance logs side by side',
+      keywords: ['split', 'log', 'compare', 'side'],
+      run: () => navigate(routeHref({ name: 'logs', panes: [] })),
+    },
   ]
   // Groups stay together: pages, projects, instances, then actions.
   const actionCommands: Command[] = [
@@ -94,6 +102,14 @@ export function buildCommands(state: ProjectsState, deps: CommandDeps): Command[
           run: () => act(action, project.name, view.id),
         })
       }
+      actionCommands.push({
+        id: `logs:${name}`,
+        group: 'Actions',
+        title: `Split log view with ${name}`,
+        hint: 'Follow this log next to others',
+        keywords: ['split', 'logs', 'side'],
+        run: () => navigate(routeHref({ name: 'logs', panes: [{ project: project.name, instance: view.id }] })),
+      })
       actionCommands.push({
         id: `settings:${name}`,
         group: 'Actions',

@@ -9,6 +9,7 @@
   import Dashboard from './pages/Dashboard.svelte'
   import Environment from './pages/Environment.svelte'
   import InstancePage from './pages/InstancePage.svelte'
+  import LogsPage from './pages/LogsPage.svelte'
   import NewProject from './pages/NewProject.svelte'
   import NotFound from './pages/NotFound.svelte'
   import ProjectPage from './pages/ProjectPage.svelte'
@@ -27,6 +28,8 @@
         return `${route.project} · OdHive`
       case 'instance':
         return `${route.project}/${route.instance} · OdHive`
+      case 'logs':
+        return 'Logs · OdHive'
       case 'not_found':
         return 'Not found · OdHive'
     }
@@ -50,6 +53,8 @@
     <ProjectPage name={route.project} />
   {:else if route.name === 'instance'}
     <InstancePage project={route.project} instance={route.instance} />
+  {:else if route.name === 'logs'}
+    <LogsPage panes={route.panes} />
   {:else}
     <NotFound path={route.path} />
   {/if}

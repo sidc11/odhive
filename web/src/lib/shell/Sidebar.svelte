@@ -33,6 +33,14 @@
       Dashboard
     </a>
     <a
+      href={routeHref({ name: 'logs', panes: [] })}
+      class={item}
+      aria-current={route.name === 'logs' ? 'page' : undefined}
+      onclick={follow}
+    >
+      Logs
+    </a>
+    <a
       href={routeHref({ name: 'environment' })}
       class={item}
       aria-current={route.name === 'environment' ? 'page' : undefined}

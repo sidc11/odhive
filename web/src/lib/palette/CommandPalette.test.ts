@@ -161,6 +161,7 @@ describe('CommandPalette', () => {
     expect(optionNames()).toEqual([
       'Dashboard',
       'Environment, PostgreSQL, Python, wkhtmltopdf, git, uv',
+      'Logs, Up to 4 instance logs side by side',
       'New project, Open the project wizard',
     ])
   })
