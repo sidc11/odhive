@@ -2,6 +2,7 @@
 // their layout, updated incrementally as the stream grows.
 import { RowLayout } from './layout'
 import type { LogRow } from './rows'
+import { foldable, shownLines } from './traceback'
 
 /** The part of `LogStream` a view reads. */
 export interface RowSource {
@@ -26,6 +27,8 @@ export class LogLines {
   /** Ids of shown rows matching the search, ascending. */
   matches: number[] = []
   private search: ((row: LogRow) => boolean) | null = null
+  /** Ids of unfolded tracebacks (all others are folded). */
+  private readonly expanded = new Set<number>()
   private readonly source: RowSource
 
   constructor(source: RowSource) {
@@ -70,6 +73,24 @@ export class LogLines {
     return matches[low - 1] ?? matches.at(-1) ?? null
   }
 
+  /** Whether row `id` shows all its lines. */
+  isExpanded(id: number): boolean {
+    return this.expanded.has(id)
+  }
+
+  /**
+   * Folds or unfolds the traceback of row `id`; returns the change in
+   * lines (0 if it isn't a shown, foldable row or already in that state).
+   */
+  setExpanded(id: number, expanded: boolean): number {
+    const index = this.indexOfId(id)
+    const row = this.items[index]
+    if (!row || row.id !== id || !foldable(row) || this.expanded.has(id) === expanded) return 0
+    if (expanded) this.expanded.add(id)
+    else this.expanded.delete(id)
+    return this.layout.resize(index, shownLines(row, expanded))
+  }
+
   /** Index of the first shown row with an id at or after `id`. */
   indexOfId(id: number): number {
     let low = 0
@@ -96,6 +117,7 @@ export class LogLines {
       let gone = 0
       while (gone < this.matches.length && (this.matches[gone] ?? 0) < first) gone += 1
       if (gone > 0) this.matches.splice(0, gone)
+      for (const id of this.expanded) if (id < firstId) this.expanded.delete(id)
     }
     // Rows it added: ids are consecutive from `firstId`.
     const from = Math.max(this.seen + 1 - firstId, 0)
@@ -106,7 +128,7 @@ export class LogLines {
     }
     this.seen = rows.at(-1)?.id ?? this.seen
     for (const row of added) this.items.push(row)
-    this.layout.append(added.map((row) => row.lines))
+    this.layout.append(added.map((row) => shownLines(row, this.expanded.has(row.id))))
     const search = this.search
     if (search) for (const row of added) if (search(row)) this.matches.push(row.id)
     return { added: added.length, removedLines }

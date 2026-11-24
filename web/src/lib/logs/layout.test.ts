@@ -50,4 +50,17 @@ describe('RowLayout', () => {
     expect(layout.length).toBe(180_000)
     expect(performance.now() - started).toBeLessThan(1000)
   })
+
+  it('resizes a row in place', () => {
+    const layout = new RowLayout()
+    layout.append([1, 5, 2])
+    expect(layout.resize(1, 1)).toBe(-4)
+    expect([0, 1, 2, 3].map((i) => layout.offsetOf(i))).toEqual([0, 1, 2, 4])
+    expect(layout.resize(1, 5)).toBe(4)
+    expect(layout.total).toBe(8)
+    expect(layout.resize(1, 0)).toBe(-4)
+    expect(layout.resize(7, 3)).toBe(0)
+    expect(layout.resize(-1, 3)).toBe(0)
+    expect(layout.total).toBe(4)
+  })
 })

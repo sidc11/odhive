@@ -991,6 +991,81 @@
         }
       }
     },
+    "/api/v1/projects/{name}/open-file": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Opens a file of the project at a line in the configured editor\n(`editor` in config.toml, else `$VISUAL`/`$EDITOR` when they name a\ngraphical editor, else `code`). Returns once the editor has started.",
+        "operationId": "open_file",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenFile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The editor was started"
+          },
+          "403": {
+            "description": "The path is outside the project and its sources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown project, or no such file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No editor is configured or found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not an absolute path, or a bad line number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{name}/schema": {
       "get": {
         "tags": [
@@ -3889,6 +3964,29 @@
           }
         ],
         "description": "One option, merged across all flags that share a config key."
+      },
+      "OpenFile": {
+        "type": "object",
+        "description": "A source location to open.",
+        "required": [
+          "path",
+          "line"
+        ],
+        "properties": {
+          "line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Line number, from 1.",
+            "example": 42,
+            "minimum": 1
+          },
+          "path": {
+            "type": "string",
+            "description": "Absolute path, as logged. It must be a file inside the project\nfolder, its addons folders or its Odoo sources (after resolving\nsymlinks).",
+            "example": "/home/me/OdHive/projects/shop/addons/sale_x/models/order.py"
+          }
+        },
+        "additionalProperties": false
       },
       "OptionKind": {
         "oneOf": [

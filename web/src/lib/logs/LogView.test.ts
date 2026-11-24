@@ -1,15 +1,15 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
-import { tick } from 'svelte'
-import { describe, expect, it } from 'vitest'
+import { tick, type ComponentProps } from 'svelte'
+import { describe, expect, it, vi } from 'vitest'
 import LogView from './LogView.svelte'
 import { LogStream } from './stream.svelte'
 import { FakeConnection, msg, record, records } from './test-fixtures'
 
-function setup() {
+function setup(props: Partial<ComponentProps<typeof LogView>> = {}) {
   const connection = new FakeConnection()
   const stream = new LogStream(connection, 'shop', 'main')
   stream.start()
-  render(LogView, { stream, label: 'Log of shop/main' })
+  render(LogView, { stream, label: 'Log of shop/main', ...props })
   const scroller = screen.getByRole('region', { name: 'Log of shop/main' })
   return { connection, stream, scroller }
 }
@@ -214,5 +214,86 @@ describe('LogView', () => {
     await fireEvent.input(screen.getByRole('searchbox', { name: 'Search the log' }), { target: { value: 'img' } })
     await waitFor(() => expect(scroller.querySelectorAll('mark')).toHaveLength(2))
     expect(scroller.querySelector('img')).toBeNull()
+  })
+
+  describe('tracebacks', () => {
+    const TRACE = [
+      'Failed to load registry',
+      'Traceback (most recent call last):',
+      '  File "/home/me/shop/addons/sale_x/models/order.py", line 12, in <module>',
+      '    import ldap',
+      "ModuleNotFoundError: No module named 'ldap'",
+    ].join('\n')
+    const trace = (seq: number) => record(seq, TRACE, { level: 'error', exceptions: ["ModuleNotFoundError: No module named 'ldap'"] })
+
+    it('are folded to one line until unfolded', async () => {
+      const { connection, scroller } = setup()
+      connection.receive(msg.subscribed(1))
+      connection.receive(msg.logs([trace(1)]))
+      await tick()
+      const row = () => scroller.querySelector('[data-seq="1"]') as HTMLElement
+      expect(row()).toHaveAttribute('data-folded')
+      expect(row().textContent).toContain("Failed to load registry · ModuleNotFoundError: No module named 'ldap' · 4 more lines")
+      expect(row().textContent).not.toContain('import ldap')
+      const unfold = screen.getByRole('button', { name: 'Unfold traceback' })
+      expect(unfold).toHaveAttribute('aria-expanded', 'false')
+      await fireEvent.click(unfold)
+      expect(row()).not.toHaveAttribute('data-folded')
+      expect(row().textContent).toContain('    import ldap\n')
+      expect(row().style.height).toBe('100px')
+      const fold = screen.getByRole('button', { name: 'Fold traceback' })
+      expect(fold).toHaveAttribute('aria-expanded', 'true')
+      await fireEvent.click(fold)
+      expect(row()).toHaveAttribute('data-folded')
+      expect(row().style.height).toBe('20px')
+    })
+
+    it('copy the traceback exactly as logged', async () => {
+      const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+      const { connection } = setup()
+      connection.receive(msg.subscribed(1))
+      connection.receive(msg.logs([trace(1)]))
+      const copy = await screen.findByRole('button', { name: 'Copy traceback' })
+      await fireEvent.click(copy)
+      expect(writeText).toHaveBeenCalledWith(TRACE.slice(TRACE.indexOf('Traceback')))
+      await waitFor(() => expect(copy).toHaveTextContent('Copied'))
+      writeText.mockRejectedValueOnce(new Error('denied'))
+      await fireEvent.click(copy)
+      await waitFor(() => expect(copy).toHaveTextContent('Copy failed'))
+    })
+
+    it('link file:line to the editor when unfolded', async () => {
+      const onopen = vi.fn()
+      const { connection } = setup({ onopen })
+      connection.receive(msg.subscribed(1))
+      connection.receive(msg.logs([trace(1)]))
+      await fireEvent.click(await screen.findByRole('button', { name: 'Unfold traceback' }))
+      const link = screen.getByRole('button', { name: '/home/me/shop/addons/sale_x/models/order.py' })
+      expect(link).toHaveAttribute('title', 'Open /home/me/shop/addons/sale_x/models/order.py:12 in the editor')
+      await fireEvent.click(link)
+      expect(onopen).toHaveBeenCalledWith(expect.objectContaining({ path: '/home/me/shop/addons/sale_x/models/order.py', line: 12 }))
+    })
+
+    it('have no links without an opener', async () => {
+      const { connection } = setup()
+      connection.receive(msg.subscribed(1))
+      connection.receive(msg.logs([trace(1)]))
+      await fireEvent.click(await screen.findByRole('button', { name: 'Unfold traceback' }))
+      expect(screen.queryByRole('button', { name: /order\.py/ })).toBeNull()
+    })
+
+    it('unfold when a search match in them is shown', async () => {
+      const { connection, scroller } = setup()
+      connection.receive(msg.subscribed(1))
+      connection.receive(msg.logs([trace(1)]))
+      await tick()
+      const search = screen.getByRole('searchbox', { name: 'Search the log' })
+      await fireEvent.input(search, { target: { value: 'import ldap' } })
+      await waitFor(() => expect(screen.getByTestId('log-search-status')).toHaveTextContent('1 match'))
+      await fireEvent.keyDown(search, { key: 'Enter' })
+      await waitFor(() => expect(scroller.querySelector('[data-seq="1"]')).not.toHaveAttribute('data-folded'))
+      expect(scroller.querySelector('mark')?.textContent).toBe('import ldap')
+    })
   })
 })

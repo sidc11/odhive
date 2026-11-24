@@ -823,3 +823,150 @@ async fn instance_run_elsewhere_is_shown_and_can_be_stopped() {
     let main = wait_main(&ours, "shop", "gone", |m| m["external"].is_null()).await;
     assert_eq!(main["live"], Value::Null);
 }
+
+/// Waits for the fake editor to record its arguments.
+async fn editor_args(out: &std::path::Path) -> String {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let text = std::fs::read_to_string(out).unwrap_or_default();
+        if text.ends_with("END\n") {
+            return text;
+        }
+        assert!(Instant::now() < deadline, "editor never ran");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn open_file_starts_the_editor_only_inside_allowed_roots() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    let url = "/api/v1/projects/shop/open-file";
+    let project = env.project_dir("shop");
+    let module = project.join("addons/sale_x/models");
+    std::fs::create_dir_all(&module).expect("mkdir");
+    let file = module.join("order.py");
+    std::fs::write(&file, "x = 1\n").expect("write");
+    let outside = env.home.join("secret.py");
+    std::fs::write(&outside, "token = 1\n").expect("write");
+    symlink(&outside, module.join("link.py")).expect("symlink");
+    let p = |path: &std::path::Path| path.to_str().expect("utf8").to_owned();
+
+    // Without a usable editor (an empty PATH is not in our hands here,
+    // so configure one that does not exist).
+    let mut cfg = odhive_core::config::GlobalConfig::load(&env.paths.config_file())
+        .expect("load")
+        .expect("exists");
+    cfg.editor = Some(vec![p(&env.home.join("no-such-editor"))]);
+    cfg.save(&env.paths.config_file()).expect("save");
+    let (status, body) = api
+        .post(url, Some(json!({ "path": p(&file), "line": 3 })))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "no_editor");
+
+    // A fake editor that records its argv.
+    let out = env.home.join("editor-args.txt");
+    let editor = env.home.join("fake-editor");
+    std::fs::write(
+        &editor,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" END > '{}'\n",
+            out.display()
+        ),
+    )
+    .expect("write");
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    cfg.editor = Some(vec![p(&editor), "--goto".into(), "{file}:{line}".into()]);
+    cfg.save(&env.paths.config_file()).expect("save");
+
+    // Refused: outside the roots, escapes, relative, missing, bad lines.
+    for (path, line, code, error) in [
+        (p(&outside), 1, StatusCode::FORBIDDEN, "path_not_allowed"),
+        (
+            p(&module.join("link.py")),
+            1,
+            StatusCode::FORBIDDEN,
+            "path_not_allowed",
+        ),
+        (
+            format!("{}/../../../../secret.py", module.display()),
+            1,
+            StatusCode::FORBIDDEN,
+            "path_not_allowed",
+        ),
+        (
+            "/etc/passwd".into(),
+            1,
+            StatusCode::FORBIDDEN,
+            "path_not_allowed",
+        ),
+        (
+            "addons/sale_x/models/order.py".into(),
+            1,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_location",
+        ),
+        (
+            p(&module.join("nope.py")),
+            1,
+            StatusCode::NOT_FOUND,
+            "file_not_found",
+        ),
+        (p(&module), 1, StatusCode::NOT_FOUND, "file_not_found"),
+        (
+            p(&file),
+            0,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_location",
+        ),
+    ] {
+        let (status, body) = api
+            .post(url, Some(json!({ "path": path, "line": line })))
+            .await;
+        assert_eq!(
+            (status, body["error"].as_str()),
+            (code, Some(error)),
+            "{path}:{line} → {body}"
+        );
+    }
+    let (status, body) = api
+        .post(
+            "/api/v1/projects/nope/open-file",
+            Some(json!({ "path": p(&file), "line": 1 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (status, _) = api
+        .post(
+            url,
+            Some(json!({ "path": p(&file), "line": 1, "shell": "rm -rf /" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!out.exists(), "nothing refused may start the editor");
+
+    // Allowed: a project file and an Odoo source file.
+    let (status, body) = api
+        .post(url, Some(json!({ "path": p(&file), "line": 42 })))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(
+        editor_args(&out).await,
+        format!("--goto\n{}:42\nEND\n", file.display())
+    );
+    std::fs::remove_file(&out).expect("rm");
+    let odoo_file = env.source_dir().join("odoo/release.py");
+    let (status, body) = api
+        .post(url, Some(json!({ "path": p(&odoo_file), "line": 1 })))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(
+        editor_args(&out).await,
+        format!("--goto\n{}:1\nEND\n", odoo_file.display())
+    );
+}

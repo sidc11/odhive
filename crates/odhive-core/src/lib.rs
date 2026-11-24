@@ -4,6 +4,7 @@
 pub mod autofix;
 pub mod conf;
 pub mod config;
+pub mod editor;
 pub mod envcheck;
 pub mod events;
 pub mod fsutil;

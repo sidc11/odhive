@@ -71,6 +71,20 @@ odhive stop shop
 Instances listen on `127.0.0.1` unless the project sets `http_interface`.
 Output is also written to `projects/<name>/logs/<instance>.log`.
 
+## Opening files from tracebacks
+
+`file:line` links in the log viewer open in your editor: `$VISUAL` or
+`$EDITOR` when it names a graphical editor (VS Code and its forks, Sublime
+Text, Zed, JetBrains IDEs, Kate, gedit), otherwise `code`. Only files inside
+the project, its addons folders and its Odoo sources open. To pick another
+editor, or a terminal editor in a terminal window, set `editor` at the top of
+OdHive's `config.toml` (`~/.config/odhive/` on Linux,
+`~/Library/Application Support/odhive/` on macOS):
+
+```toml
+editor = ["kitty", "-e", "nvim", "+{line}", "{file}"]
+```
+
 ## Contributing
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the

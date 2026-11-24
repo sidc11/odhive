@@ -4,9 +4,20 @@
   import { LogLines } from './lines'
   import LogRowView from './LogRowView.svelte'
   import LogToolbar from './LogToolbar.svelte'
+  import type { LogRow } from './rows'
   import type { LogStream } from './stream.svelte'
+  import { foldable, tracebackText, type FileLink } from './traceback'
 
-  let { stream, label }: { stream: LogStream; label: string } = $props()
+  let {
+    stream,
+    label,
+    onopen,
+  }: {
+    stream: LogStream
+    label: string
+    /** Opens a `file:line` of a traceback (no links without it). */
+    onopen?: (link: FileLink) => void
+  } = $props()
 
   /** Lines rendered beyond the viewport, above and below. */
   const OVERSCAN = 30
@@ -135,10 +146,36 @@
     reveal(target)
   }
 
-  /** Scrolls row `id` to the middle of the viewport (pausing follow). */
+  /** Whether row `id` is unfolded (reactive through `revision`). */
+  function isExpanded(id: number): boolean {
+    void revision
+    return lines.isExpanded(id)
+  }
+
+  /** Folds or unfolds a traceback. */
+  function toggle(id: number): void {
+    if (lines.setExpanded(id, !lines.isExpanded(id)) === 0) return
+    revision += 1
+    if (following) void tick().then(scrollToEnd)
+  }
+
+  /** Puts the traceback of `row` on the clipboard, exactly as logged. */
+  async function copyTraceback(row: LogRow): Promise<boolean> {
+    if (row.kind !== 'entry') return false
+    try {
+      await navigator.clipboard.writeText(tracebackText(row.record.message))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** Scrolls row `id` to the middle of the viewport (pausing follow), unfolding it. */
   function reveal(id: number): void {
     if (!scroller) return
     following = false
+    const shown = lines.items[lines.indexOfId(id)]
+    if (shown && foldable(shown) && lines.setExpanded(id, true) !== 0) revision += 1
     const index = lines.indexOfId(id)
     const rowHeight = lines.layout.linesOf(index) * lineHeight
     const top = lines.layout.offsetOf(index) * lineHeight - Math.max((viewport - rowHeight) / 2, 0)
@@ -280,7 +317,16 @@
     <div class="relative w-max min-w-full" style:height={`${totalHeight}px`}>
       <div style:transform={`translateY(${offsetTop}px)`}>
         {#each visible as row (row.id)}
-          <LogRowView {row} {lineHeight} search={pattern} current={row.id === current} />
+          <LogRowView
+            {row}
+            {lineHeight}
+            search={pattern}
+            current={row.id === current}
+            expanded={isExpanded(row.id)}
+            ontoggle={toggle}
+            oncopy={copyTraceback}
+            {onopen}
+          />
         {/each}
       </div>
     </div>

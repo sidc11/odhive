@@ -184,6 +184,11 @@ export class ApiClient {
     return this.post(`/projects/${segment(name)}/setup`, body)
   }
 
+  /** Opens a project file at a line in the user's editor. */
+  openFile(project: string, body: Body<'open_file'>): Promise<void> {
+    return this.post(`/projects/${segment(project)}/open-file`, body)
+  }
+
   projectSchema(name: string): Promise<Ok<'project_schema', 200>> {
     return this.get(`/projects/${segment(name)}/schema`)
   }
