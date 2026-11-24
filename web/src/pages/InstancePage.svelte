@@ -1,5 +1,6 @@
 <script lang="ts">
   import LogPanel from '../lib/logs/LogPanel.svelte'
+  import { routeHref, router } from '../lib/router.svelte'
   import { projects, settingsDrawer } from '../lib/stores'
   import { instanceState, STATE_LABELS } from '../lib/status'
   import StatusDot from '../lib/shell/StatusDot.svelte'
@@ -14,6 +15,12 @@
   <div class="flex flex-wrap items-center gap-3">
     <h1 class="min-w-0 flex-1 truncate text-2xl font-semibold">{instance}</h1>
     {#if view}
+      <a
+        href={routeHref({ name: 'logs', panes: [{ project, instance }] })}
+        class="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-line px-3 text-sm font-medium hover:bg-surface-sunken"
+        title="Follow this log next to others"
+        onclick={router.link}>Split view</a
+      >
       <button
         type="button"
         class="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-line px-3 text-sm font-medium hover:bg-surface-sunken"

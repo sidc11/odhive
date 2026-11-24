@@ -1,15 +1,15 @@
 <script lang="ts">
   import { untrack } from 'svelte'
-  import { api, connection, toasts } from '../stores'
+  import { api, logStreams, toasts } from '../stores'
   import LogView from './LogView.svelte'
-  import { LogStream, type LogConnection } from './stream.svelte'
+  import type { StreamPool } from './pool'
   import type { FileLink } from './traceback'
 
   let {
     project,
     instance,
-    live = connection,
-  }: { project: string; instance: string; live?: LogConnection } = $props()
+    pool = logStreams,
+  }: { project: string; instance: string; pool?: StreamPool } = $props()
 
   async function open(link: FileLink): Promise<void> {
     try {
@@ -25,12 +25,9 @@
   }
 
   // The parent keys this component by instance, so the props never change.
-  const stream = untrack(() => new LogStream(live, project, instance))
+  const stream = untrack(() => pool.acquire(project, instance))
 
-  $effect(() => {
-    stream.start()
-    return () => stream.stop()
-  })
+  $effect(() => () => pool.release(stream))
 </script>
 
 <LogView {stream} label={`Log of ${project}/${instance}`} onopen={(link) => void open(link)} />

@@ -5,6 +5,7 @@ import { ApiClient } from './api/client'
 import { EnvironmentStore } from './environment.svelte'
 import { JobsStore } from './jobs.svelte'
 import { LiveConnection } from './live.svelte'
+import { StreamPool } from './logs/pool'
 import { Notifier } from './notices'
 import { PaletteStore } from './palette/palette.svelte'
 import { ProjectsStore } from './projects.svelte'
@@ -17,6 +18,8 @@ export const toasts = new ToastStore()
 export const projects = new ProjectsStore(api)
 export const jobs = new JobsStore()
 export const connection = new LiveConnection()
+/** Live logs, one stream per instance shared by every view of it. */
+export const logStreams = new StreamPool(connection)
 export const usage = new UsageStore(api)
 export const actions = new InstanceActions(api, projects, toasts)
 export const environment = new EnvironmentStore(api)

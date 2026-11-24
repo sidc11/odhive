@@ -233,3 +233,72 @@ test('log text selects and copies natively, and as whole entries', async ({ page
     await client.put(SETTINGS, saved.settings)
   }
 })
+
+test('the split view follows logs side by side on one subscription', async ({ page, signIn, request, e2e }) => {
+  const client = api(request, e2e)
+  const saved = (await (await client.get(SETTINGS)).json()) as { settings: Record<string, unknown> }
+  const put = await client.put(SETTINGS, { ...saved.settings, extra_args: ['--flood', '500'] })
+  expect(put.status(), await put.text()).toBe(200)
+
+  const subscribes: string[] = []
+  page.on('websocket', (socket) => {
+    socket.on('framesent', ({ payload }) => {
+      if (typeof payload === 'string' && payload.includes('"subscribe_logs"')) subscribes.push(payload)
+    })
+  })
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await signIn()
+    const start = await client.post('/api/v1/projects/shop/instances/main/start')
+    expect(start.status(), await start.text()).toBe(200)
+
+    await page.goto('/projects/shop/instances/main')
+    await expect(page.getByRole('region', { name: 'Log of shop/main' }).getByText(/flood line 500\b/)).toBeVisible({
+      timeout: 30_000,
+    })
+    await page.getByRole('link', { name: 'Split view' }).click()
+    await expect(page).toHaveURL(/\/logs\/shop\/main$/)
+    await expect(page.getByRole('heading', { level: 1, name: 'Logs' })).toBeVisible()
+
+    // A second pane of the same instance shares the stream: its rows are
+    // there at once and nothing is subscribed again.
+    await page.getByRole('combobox', { name: 'Instance to add' }).selectOption('shop/main')
+    await page.getByRole('button', { name: 'Add log' }).click()
+    await expect(page).toHaveURL(/\/logs\/shop\/main\/shop\/main$/)
+    const panes = page.getByRole('region', { name: 'shop/main', exact: true })
+    await expect(panes).toHaveCount(2)
+    const [left, right] = [panes.nth(0), panes.nth(1)]
+    await expect(left.getByText(/flood line 500\b/)).toBeVisible()
+    await expect(right.getByText(/flood line 500\b/)).toBeVisible()
+    expect(subscribes).toHaveLength(1)
+
+    // Side by side at 1440 px, each with its own filters.
+    const [a, b] = [await left.boundingBox(), await right.boundingBox()]
+    expect(a && b && b.x > a.x + a.width - 1 && Math.abs(a.y - b.y) < 1).toBe(true)
+    await right.getByRole('button', { name: 'INFO', exact: true }).click()
+    await expect(right.getByText(/flood line/)).toHaveCount(0)
+    await expect(left.getByText(/flood line 500\b/)).toBeVisible()
+
+    for (const scheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: scheme })
+      expect(await seriousViolations(page), scheme).toEqual([])
+    }
+
+    // Stacked on a phone.
+    await page.setViewportSize({ width: 360, height: 740 })
+    const [c, d] = [await left.boundingBox(), await right.boundingBox()]
+    expect(c && d && d.y >= c.y + c.height).toBe(true)
+    await page.setViewportSize({ width: 1440, height: 900 })
+
+    // An unknown instance gets a note; closing a pane drops it from the URL.
+    await page.goto('/logs/shop/main/shop/ghost')
+    await expect(page.getByText('No instance “ghost” in project “shop”.')).toBeVisible()
+    await page.getByRole('button', { name: 'Close log of shop/ghost' }).click()
+    await expect(page).toHaveURL(/\/logs\/shop\/main$/)
+    await expect(page.getByRole('region', { name: 'shop/main', exact: true })).toHaveCount(1)
+  } finally {
+    await client.post('/api/v1/projects/shop/instances/main/stop')
+    await client.put(SETTINGS, saved.settings)
+  }
+})

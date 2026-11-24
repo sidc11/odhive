@@ -7,7 +7,17 @@ export type Route =
   | { name: 'environment' }
   | { name: 'project'; project: string }
   | { name: 'instance'; project: string; instance: string }
+  | { name: 'logs'; panes: LogPane[] }
   | { name: 'not_found'; path: string }
+
+/** One log of the split view. */
+export interface LogPane {
+  project: string
+  instance: string
+}
+
+/** Most logs the split view shows side by side. */
+export const MAX_PANES = 4
 
 function segment(raw: string): string | null {
   try {
@@ -25,6 +35,19 @@ export function parseRoute(path: string): Route {
   // Not below /projects/: "new" is a valid project name.
   if (parts.length === 1 && parts[0] === 'new') return { name: 'new_project' }
   if (parts.length === 1 && parts[0] === 'environment') return { name: 'environment' }
+  // /logs/<project>/<instance>/<project>/<instance>…
+  if (parts[0] === 'logs') {
+    const rest = parts.slice(1).map(segment)
+    if (rest.length % 2 !== 0 || rest.length > MAX_PANES * 2) return notFound
+    const panes: LogPane[] = []
+    for (let i = 0; i < rest.length; i += 2) {
+      const project = rest[i]
+      const instance = rest[i + 1]
+      if (project == null || instance == null) return notFound
+      panes.push({ project, instance })
+    }
+    return { name: 'logs', panes }
+  }
   if (parts[0] !== 'projects') return notFound
 
   const project = parts[1] === undefined ? null : segment(parts[1])
@@ -50,6 +73,10 @@ export function routeHref(route: Exclude<Route, { name: 'not_found' }>): string 
       return `/projects/${encodeURIComponent(route.project)}`
     case 'instance':
       return `/projects/${encodeURIComponent(route.project)}/instances/${encodeURIComponent(route.instance)}`
+    case 'logs':
+      return ['/logs', ...route.panes.flatMap((pane) => [pane.project, pane.instance].map(encodeURIComponent))].join(
+        '/',
+      )
   }
 }
 
