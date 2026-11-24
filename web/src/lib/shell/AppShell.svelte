@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick, type Snippet } from 'svelte'
+  import { trapTab } from '../focus'
   import { router } from '../router.svelte'
   import Sidebar from './Sidebar.svelte'
   import TopBar from './TopBar.svelte'
@@ -27,20 +28,9 @@
     if (event.key === 'Escape') {
       event.preventDefault()
       closeDrawer()
-    } else if (event.key === 'Tab') {
+    } else {
       // Modal drawer: keep keyboard focus inside it.
-      const focusable = [...drawer.querySelectorAll<HTMLElement>('a[href], button:not([disabled])')]
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (!first || !last) return
-      const active = document.activeElement
-      if (event.shiftKey && (active === first || !drawer.contains(active))) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && (active === last || !drawer.contains(active))) {
-        event.preventDefault()
-        first.focus()
-      }
+      trapTab(event, drawer)
     }
   }
 

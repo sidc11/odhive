@@ -18,8 +18,9 @@ const USAGE: InstanceUsage = {
 function show(view: InstanceView, extra: { project?: Project; usage?: InstanceUsage; busy?: 'start' | 'stop' | 'restart' } = {}) {
   const onaction = vi.fn()
   const p = extra.project ?? project('shop', [view], { git: [{ repo: '/p/shop', branch: 'feature/pos', commit: null }] })
-  render(InstanceCard, { project: p, view, usage: extra.usage, now: NOW, busy: extra.busy, onaction })
-  return { onaction, card: screen.getByRole('article', { name: `shop / ${view.id}` }) }
+  const onsettings = vi.fn()
+  render(InstanceCard, { project: p, view, usage: extra.usage, now: NOW, busy: extra.busy, onaction, onsettings })
+  return { onaction, onsettings, card: screen.getByRole('article', { name: `shop / ${view.id}` }) }
 }
 
 function field(card: HTMLElement, name: string): string {
@@ -28,6 +29,13 @@ function field(card: HTMLElement, name: string): string {
 }
 
 describe('InstanceCard', () => {
+  it('opens the settings of its instance', async () => {
+    const { card, onsettings, onaction } = show(instanceView('main'))
+    await fireEvent.click(within(card).getByRole('button', { name: 'Settings of shop / main' }))
+    expect(onsettings).toHaveBeenCalledOnce()
+    expect(onaction).not.toHaveBeenCalled()
+  })
+
   it('shows a running instance with its details, usage and actions', async () => {
     const running = {
       ...live('shop', 'main', { state: 'running', pid: 7 }),

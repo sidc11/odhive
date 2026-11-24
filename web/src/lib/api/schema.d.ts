@@ -282,6 +282,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{name}/instances/{id}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The settings of an instance. */
+        get: operations["get_instance_settings"];
+        /**
+         * Replaces the settings of an instance. A running instance keeps its old
+         *     settings until it is restarted. Refused while the project is being set
+         *     up.
+         */
+        put: operations["put_instance_settings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{name}/instances/{id}/start": {
         parameters: {
             query?: never;
@@ -963,6 +985,44 @@ export interface components {
             status: components["schemas"]["Status"];
             /** @description Started by this OdHive (output is captured). `false` = re-attached. */
             supervised: boolean;
+        };
+        /** @description Settings of one instance. */
+        InstanceSettings: {
+            /** @description What happens when Odoo misses a Python package. */
+            autofix_mode: components["schemas"]["AutofixMode"];
+            /**
+             * @description Environment variables for this instance only; they override the
+             *     project's variables of the same name.
+             */
+            env: {
+                [key: string]: string;
+            };
+            /**
+             * @description Extra `odoo-bin` arguments, one argv entry each (never split or
+             *     passed through a shell). Options OdHive sets itself are refused.
+             * @example [
+             *       "--dev=xml",
+             *       "--log-level=debug"
+             *     ]
+             */
+            extra_args: string[];
+            /** @description What happens when files of the project's modules change. */
+            reload_mode: components["schemas"]["ReloadMode"];
+        };
+        /** @description An instance's settings and what they are checked against. */
+        InstanceSettingsInfo: {
+            /**
+             * @description `odoo-bin` options OdHive sets itself, which `extra_args` cannot
+             *     contain (also not as `--opt=value` or `-ovalue`).
+             */
+            managed_options: string[];
+            /**
+             * @description Names of the variables every instance of the project gets (its
+             *     `[env]`; values are not shown here).
+             */
+            project_env: string[];
+            /** @description The saved settings. */
+            settings: components["schemas"]["InstanceSettings"];
         };
         /**
          * @description CPU and memory use of one running instance: its `odoo-bin` process and
@@ -2381,6 +2441,105 @@ export interface operations {
             };
             /** @description Conflict with the current state */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_instance_settings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+                /** @description Instance id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceSettingsInfo"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    put_instance_settings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+                /** @description Instance id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstanceSettings"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceSettingsInfo"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A setup of the project runs */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Invalid settings, e.g. a managed option or a bad variable name */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

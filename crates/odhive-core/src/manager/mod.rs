@@ -167,8 +167,8 @@ pub struct InstancePlan {
 impl InstancePlan {
     /// The plan for instance `instance_id` of `project`, run from
     /// `project_dir` by `python odoo_bin -c conf`. Ports, database, workers
-    /// and extra arguments come from the instance, env and log settings from
-    /// the project. The log file goes to `<project_dir>/logs/`.
+    /// and extra arguments come from the instance, log settings from the
+    /// project, env from both (the instance's own variables win). The log file goes to `<project_dir>/logs/`.
     ///
     /// # Errors
     /// [`ManagerError::Project`] if the project is invalid, or
@@ -195,7 +195,7 @@ impl InstancePlan {
         spec.db = Some(instance.db_name(&project.name));
         spec.workers = instance.workers;
         spec.extra_args.clone_from(&instance.extra_args);
-        spec.env = project.env.clone();
+        spec.env = instance.merged_env(&project.env);
         Ok(Self {
             owner: PortOwner::new(&project.name, &instance.id),
             http_port: instance.http_port,

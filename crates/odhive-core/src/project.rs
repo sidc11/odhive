@@ -24,6 +24,9 @@
 //! extra_args = ["--dev=xml"]
 //! reload_mode = "auto"      # auto | restart | off
 //! autofix_mode = "auto"     # auto | ask | off
+//!
+//! [instances.env]           # on top of [env], for this instance only
+//! ODOO_STAGE = "dev"
 //! ```
 
 use std::collections::{BTreeMap, HashSet};
@@ -274,6 +277,10 @@ pub struct Instance {
     /// Missing-dependency behavior.
     #[serde(default)]
     pub autofix_mode: AutofixMode,
+    /// Environment variables for this instance only; they override the
+    /// project's `[env]` key by key.
+    #[serde(default, skip_serializing_if = "EnvVars::is_empty")]
+    pub env: EnvVars,
 }
 
 impl Instance {
@@ -289,7 +296,18 @@ impl Instance {
             extra_args: Vec::new(),
             reload_mode: ReloadMode::default(),
             autofix_mode: AutofixMode::default(),
+            env: EnvVars::default(),
         }
+    }
+
+    /// The environment of this instance's `odoo-bin`: `project` (the
+    /// project's `[env]`) overridden by the instance's own variables.
+    #[must_use]
+    pub fn merged_env(&self, project: &EnvVars) -> EnvVars {
+        let mut env = project.clone();
+        env.0
+            .extend(self.env.0.iter().map(|(k, v)| (k.clone(), v.clone())));
+        env
     }
 
     /// Database this instance uses: `db`, or `<project>_<instance>`.
@@ -370,12 +388,7 @@ impl ProjectConfig {
         for p in &self.addons_paths {
             check_addons_path(p)?;
         }
-        for (k, v) in &self.env.0 {
-            validate_env_key(k)?;
-            if v.contains('\0') {
-                return Err(ProjectError::InvalidValue(format!("env {k}")));
-            }
-        }
+        validate_env(&self.env, "env")?;
         conf::validate_model(&self.odoo_options, &self.odoo_sections)?;
         self.logs.validate().map_err(ProjectError::LogSettings)?;
         self.validate_instances()
@@ -418,6 +431,7 @@ impl ProjectConfig {
                     workers: inst.workers,
                 });
             }
+            validate_env(&inst.env, &format!("instance {:?} env", inst.id))?;
             for arg in &inst.extra_args {
                 if arg.is_empty() || arg.contains('\0') {
                     return Err(ProjectError::InvalidValue(format!(
@@ -534,15 +548,19 @@ impl ProjectConfig {
     /// Atomically writes `<project_dir>/odhive.toml` with mode `0600`.
     ///
     /// # Errors
-    /// Returns validation, serialization or I/O errors.
+    /// Returns validation, serialization or I/O errors, and
+    /// [`ProjectError::TooLarge`] for a file [`ProjectConfig::load`] would
+    /// refuse.
     pub fn save(&self, project_dir: &Path) -> Result<(), ProjectError> {
         let text = self.to_toml()?;
-        fsutil::write_private_atomic(&project_dir.join(PROJECT_FILE), text.as_bytes()).map_err(
-            |e| ProjectError::Io {
-                path: e.path,
-                source: e.source,
-            },
-        )
+        let path = project_dir.join(PROJECT_FILE);
+        if text.len() as u64 > MAX_PROJECT_BYTES {
+            return Err(ProjectError::TooLarge(path));
+        }
+        fsutil::write_private_atomic(&path, text.as_bytes()).map_err(|e| ProjectError::Io {
+            path: e.path,
+            source: e.source,
+        })
     }
 }
 
@@ -559,6 +577,16 @@ pub fn is_managed_option(arg: &str) -> bool {
             !arg.starts_with("--") && arg.starts_with(opt)
         }
     })
+}
+
+fn validate_env(env: &EnvVars, what: &str) -> Result<(), ProjectError> {
+    for (k, v) in &env.0 {
+        validate_env_key(k)?;
+        if v.contains('\0') {
+            return Err(ProjectError::InvalidValue(format!("{what} {k}")));
+        }
+    }
+    Ok(())
 }
 
 fn check_addons_path(p: &Path) -> Result<(), ProjectError> {
@@ -609,6 +637,8 @@ mod tests {
         test.workers = 2;
         test.reload_mode = ReloadMode::Restart;
         test.autofix_mode = AutofixMode::Ask;
+        test.env.0.insert("PGHOST".into(), "/run/pg-test".into());
+        test.env.0.insert("STAGE_TOKEN".into(), "s3cret".into());
         p.instances.push(test);
         p
     }
@@ -649,6 +679,19 @@ mod tests {
         assert!(text.contains("[odoo_options]"));
         assert!(text.contains("[logs]") && text.contains("file_keep = 9"));
         assert!(text.contains("[odoo_sections.queue_job]"));
+        assert!(text.contains("[instances.env]"));
+    }
+
+    #[test]
+    fn instance_env_overrides_project_env() {
+        let p = sample();
+        let main = p.instances[0].merged_env(&p.env);
+        assert_eq!(main, p.env);
+        let test = p.instances[1].merged_env(&p.env);
+        assert_eq!(test.0.len(), 3);
+        assert_eq!(test.0["PGHOST"], "/run/pg-test");
+        assert_eq!(test.0["SECRET_TOKEN"], "hunter2");
+        assert_eq!(test.0["STAGE_TOKEN"], "s3cret");
     }
 
     #[test]
@@ -727,6 +770,18 @@ mod tests {
     }
 
     #[test]
+    fn a_file_too_large_to_load_is_never_written() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut p = sample();
+        p.instances[0]
+            .env
+            .0
+            .insert("BIG".into(), "x".repeat(MAX_PROJECT_BYTES as usize));
+        assert!(matches!(p.save(dir.path()), Err(ProjectError::TooLarge(_))));
+        assert!(!dir.path().join(PROJECT_FILE).exists());
+    }
+
+    #[test]
     fn invalid_project_is_never_written() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut p = sample();
@@ -740,6 +795,9 @@ mod tests {
         let shown = format!("{:?}", sample());
         assert!(shown.contains("SECRET_TOKEN"));
         assert!(!shown.contains("hunter2"));
+        assert!(shown.contains("STAGE_TOKEN"));
+        assert!(!shown.contains("s3cret"));
+        assert!(!shown.contains("/run/pg-test"));
         assert!(!shown.contains("localhost"));
         assert!(!shown.contains("master-pw"));
         assert!(shown.contains("debug"));
@@ -773,6 +831,14 @@ mod tests {
         let mut p = sample();
         p.env.0.insert("OK".into(), "a\0b".into());
         assert!(matches!(err(&p), ProjectError::InvalidValue(_)));
+
+        let mut p = sample();
+        p.instances[1].env.0.insert("1BAD".into(), "x".into());
+        assert!(matches!(err(&p), ProjectError::Name(NameError::EnvKey(_))));
+
+        let mut p = sample();
+        p.instances[1].env.0.insert("OK".into(), "a\0b".into());
+        assert!(matches!(err(&p), ProjectError::InvalidValue(m) if m.contains("\"test\" env OK")));
     }
 
     #[test]

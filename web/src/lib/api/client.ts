@@ -69,7 +69,7 @@ export class ApiClient {
     this.fetcher = fetcher
   }
 
-  private async call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, request: Request = {}): Promise<T> {
+  private async call<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, request: Request = {}): Promise<T> {
     let url = `${API_PREFIX}${path}`
     const params = new URLSearchParams()
     for (const [key, value] of Object.entries(request.query ?? {})) {
@@ -216,6 +216,18 @@ export class ApiClient {
 
   declineFix(project: string, instance: string): Promise<Ok<'decline_fix', 200>> {
     return this.post(`${this.instancePath(project, instance)}/fix/decline`)
+  }
+
+  getInstanceSettings(project: string, instance: string): Promise<Ok<'get_instance_settings', 200>> {
+    return this.get(`${this.instancePath(project, instance)}/settings`)
+  }
+
+  putInstanceSettings(
+    project: string,
+    instance: string,
+    body: Body<'put_instance_settings'>,
+  ): Promise<Ok<'put_instance_settings', 200>> {
+    return this.call('PUT', `${this.instancePath(project, instance)}/settings`, { body })
   }
 
   instanceLogs(

@@ -729,6 +729,146 @@
         }
       }
     },
+    "/api/v1/projects/{name}/instances/{id}/settings": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "The settings of an instance.",
+        "operationId": "get_instance_settings",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceSettingsInfo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "Replaces the settings of an instance. A running instance keeps its old\nsettings until it is restarted. Refused while the project is being set\nup.",
+        "operationId": "put_instance_settings",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstanceSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceSettingsInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A setup of the project runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid settings, e.g. a managed option or a bad variable name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{name}/instances/{id}/start": {
       "post": {
         "tags": [
@@ -2621,6 +2761,77 @@
           }
         ],
         "description": "What is known about one instance."
+      },
+      "InstanceSettings": {
+        "type": "object",
+        "description": "Settings of one instance.",
+        "required": [
+          "reload_mode",
+          "autofix_mode",
+          "extra_args",
+          "env"
+        ],
+        "properties": {
+          "autofix_mode": {
+            "$ref": "#/components/schemas/AutofixMode",
+            "description": "What happens when Odoo misses a Python package."
+          },
+          "env": {
+            "type": "object",
+            "description": "Environment variables for this instance only; they override the\nproject's variables of the same name.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "extra_args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra `odoo-bin` arguments, one argv entry each (never split or\npassed through a shell). Options OdHive sets itself are refused.",
+            "example": [
+              "--dev=xml",
+              "--log-level=debug"
+            ]
+          },
+          "reload_mode": {
+            "$ref": "#/components/schemas/ReloadMode",
+            "description": "What happens when files of the project's modules change."
+          }
+        },
+        "additionalProperties": false
+      },
+      "InstanceSettingsInfo": {
+        "type": "object",
+        "description": "An instance's settings and what they are checked against.",
+        "required": [
+          "settings",
+          "project_env",
+          "managed_options"
+        ],
+        "properties": {
+          "managed_options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`odoo-bin` options OdHive sets itself, which `extra_args` cannot\ncontain (also not as `--opt=value` or `-ovalue`)."
+          },
+          "project_env": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of the variables every instance of the project gets (its\n`[env]`; values are not shown here)."
+          },
+          "settings": {
+            "$ref": "#/components/schemas/InstanceSettings",
+            "description": "The saved settings."
+          }
+        }
       },
       "InstanceUsage": {
         "allOf": [

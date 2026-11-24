@@ -592,6 +592,170 @@ async fn instance_starts_logs_restarts_and_stops() {
 }
 
 #[tokio::test]
+async fn instance_settings_are_saved_and_used_at_the_next_start() {
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    env.make_runnable("shop", 19_120, 19_121);
+    let dir = env.project_dir("shop");
+    let mut p = odhive_core::project::ProjectConfig::load(&dir).expect("load");
+    p.env.0.insert("STAGE".into(), "project".into());
+    p.env.0.insert("SHARED".into(), "project".into());
+    p.save(&dir).expect("save");
+    let url = "/api/v1/projects/shop/instances/main/settings";
+
+    let (status, body) = api.get(url).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["settings"],
+        json!({ "reload_mode": "auto", "autofix_mode": "auto", "extra_args": [], "env": {} })
+    );
+    assert_eq!(body["project_env"], json!(["SHARED", "STAGE"]));
+    assert!(
+        body["managed_options"]
+            .as_array()
+            .is_some_and(|o| o.contains(&json!("--http-port"))),
+        "{body}"
+    );
+
+    // Invalid settings are refused and nothing is written.
+    let before = std::fs::read_to_string(dir.join("odhive.toml")).expect("read");
+    let valid = json!({
+        "reload_mode": "restart",
+        "autofix_mode": "ask",
+        "extra_args": ["--log-env=STAGE", "--log-env=SHARED"],
+        "env": { "STAGE": "instance" },
+    });
+    for (patch, code, error) in [
+        (
+            json!({ "extra_args": ["--http-port=9000"] }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_project",
+        ),
+        (
+            json!({ "extra_args": [""] }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_project",
+        ),
+        (
+            json!({ "env": { "1BAD": "x" } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_project",
+        ),
+        (
+            json!({ "env": { "OK": "a\u{0}b" } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_project",
+        ),
+        (
+            json!({ "env": { "BIG": "x".repeat(300 * 1024) } }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_project",
+        ),
+        (
+            json!({ "reload_mode": "sometimes" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_body",
+        ),
+        (
+            json!({ "workers": 4 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_body",
+        ),
+    ] {
+        let mut req = valid.clone();
+        for (k, v) in patch.as_object().expect("object") {
+            req[k] = v.clone();
+        }
+        let (status, body) = api.put(url, req).await;
+        assert_eq!(
+            (status, body["error"].as_str()),
+            (code, Some(error)),
+            "{patch} → {body}"
+        );
+    }
+    let (status, body) = api
+        .put(
+            "/api/v1/projects/shop/instances/nope/settings",
+            valid.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "unknown_instance");
+    let (status, body) = api
+        .put(
+            "/api/v1/projects/nope/instances/main/settings",
+            valid.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("odhive.toml")).expect("read"),
+        before
+    );
+
+    let (status, body) = api.put(url, valid.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["settings"], valid);
+    let (_, body) = api.get(url).await;
+    assert_eq!(body["settings"], valid);
+    let (_, project) = api.get("/api/v1/projects/shop").await;
+    let main = &project["instances"][0];
+    assert_eq!(main["reload_mode"], "restart");
+    assert_eq!(main["autofix_mode"], "ask");
+    // Env values stay out of the project view.
+    assert!(!project.to_string().contains("STAGE"), "{project}");
+    let saved = odhive_core::project::ProjectConfig::load(&dir).expect("load");
+    assert_eq!(
+        saved.instances[0].http_port,
+        Some(19_120),
+        "other settings kept"
+    );
+
+    // The instance runs with them: its own env wins over the project's.
+    let (status, info) = api
+        .post("/api/v1/projects/shop/instances/main/start", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let (_, page) = api.get("/api/v1/projects/shop/instances/main/logs").await;
+        let lines: Vec<&str> = page["records"]
+            .as_array()
+            .expect("records")
+            .iter()
+            .filter_map(|r| r["message"].as_str())
+            .collect();
+        if lines.contains(&"env STAGE=instance") && lines.contains(&"env SHARED=project") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "env not logged: {lines:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Saving while it runs is allowed; it applies at the next start.
+    let (status, body) = api
+        .put(
+            url,
+            json!({ "reload_mode": "off", "autofix_mode": "off", "extra_args": [], "env": {} }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = api
+        .post("/api/v1/projects/shop/instances/main/stop", None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        odhive_core::project::ProjectConfig::load(&dir)
+            .expect("load")
+            .instances[0]
+            .env
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn projects_show_the_git_branch_of_their_addons() {
     let env = Env::new();
     let api = env.app();

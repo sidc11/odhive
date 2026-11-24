@@ -275,6 +275,10 @@ impl Api {
         self.call(Method::POST, path, body).await
     }
 
+    pub async fn put(&self, path: &str, body: Value) -> (StatusCode, Value) {
+        self.call(Method::PUT, path, Some(body)).await
+    }
+
     pub async fn delete(&self, path: &str) -> (StatusCode, Value) {
         self.call(Method::DELETE, path, None).await
     }

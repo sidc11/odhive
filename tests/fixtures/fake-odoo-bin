@@ -22,6 +22,7 @@ Simulation flags (not real Odoo options):
   --start-delay SECONDS          wait SECONDS before binding the HTTP port (a slow start)
   --odoo-version VERSION         version reported in logs (default: 19.0)
   --flood N                      after startup, log N INFO lines as fast as possible
+  --log-env NAME                 log the value of environment variable NAME at startup
 """
 
 import argparse
@@ -97,6 +98,7 @@ def parse_args(argv):
     p.add_argument("--start-delay", type=float, default=0.0)
     p.add_argument("--odoo-version", default="19.0")
     p.add_argument("--flood", type=int, default=0)
+    p.add_argument("--log-env", action="append", default=[])
     args, _unknown = p.parse_known_args(argv)
     return args
 
@@ -110,6 +112,8 @@ def main(argv):
         log("INFO", "odoo", f"Using configuration file at {args.config} ")
     log("INFO", "odoo", f"addons paths: {args.addons_path or '/opt/odoo/addons'}")
     log("INFO", "odoo", "database: default@default:default")
+    for name in args.log_env:
+        log("INFO", "odoo", f"env {name}={os.environ.get(name, '<unset>')}")
 
     missing = None
     if args.simulate == "module-not-found":

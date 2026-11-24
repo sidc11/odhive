@@ -39,6 +39,11 @@ export type Status = Schemas['Status']
 export type StopResult = Schemas['StopResult']
 export type ExitInfo = Schemas['ExitInfo']
 export type Candidate = Schemas['Candidate']
+export type ReloadMode = Schemas['ReloadMode']
+export type AutofixMode = Schemas['AutofixMode']
+/** Per-instance settings edited in the settings drawer. */
+export type InstanceSettings = Schemas['InstanceSettings']
+export type InstanceSettingsInfo = Schemas['InstanceSettingsInfo']
 export type LogPage = Schemas['LogPage']
 export type LogRecord = Schemas['Record']
 

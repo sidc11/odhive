@@ -8,6 +8,7 @@
     actions as defaultActions,
     palette as defaultPalette,
     projects as defaultProjects,
+    settingsDrawer,
   } from '../stores'
   import { buildCommands, highlight, search, type CommandDeps, type Match } from './commands'
   import { isPaletteShortcut, type PaletteStore } from './palette.svelte'
@@ -18,6 +19,7 @@
     deps = {
       navigate: (href) => router.navigate(href),
       act: (action, project, instance) => void defaultActions.run(action, project, instance),
+      settings: (project, instance) => settingsDrawer.show(project, instance),
     },
   }: { palette?: PaletteStore; projects?: Pick<ProjectsStore, 'state'>; deps?: CommandDeps } = $props()
 
