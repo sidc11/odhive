@@ -1,7 +1,9 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte'
+  import { compileSearch, LEVEL_CHIPS, parseLoggers, rowFilter, rowMatcher, type LevelChip } from './filter'
   import { LogLines } from './lines'
   import LogRowView from './LogRowView.svelte'
+  import LogToolbar from './LogToolbar.svelte'
   import type { LogStream } from './stream.svelte'
 
   let { stream, label }: { stream: LogStream; label: string } = $props()
@@ -10,6 +12,8 @@
   const OVERSCAN = 30
   /** Line height until the real one is measured (px). */
   const DEFAULT_LINE_HEIGHT = 20
+  /** Typing pause before the logger filter and search apply (ms). */
+  const TYPING_DELAY = 150
 
   // The parent keys this component by stream, so it never changes.
   const lines = untrack(() => new LogLines(stream))
@@ -26,6 +30,52 @@
   /** Rows added while paused. */
   let unseen = $state(0)
 
+  // Filters and search, as typed and as applied (after a typing pause).
+  let levels = $state.raw(new Set<LevelChip>(LEVEL_CHIPS))
+  let loggers = $state('')
+  let query = $state('')
+  let regex = $state(false)
+  let caseSensitive = $state(false)
+  let appliedLoggers = $state('')
+  let appliedQuery = $state('')
+  let searchInput: HTMLInputElement | undefined = $state()
+  /** Row id of the current search match. */
+  let current: number | null = $state(null)
+  let matchCount = $state(0)
+
+  const search = $derived(compileSearch(appliedQuery, { regex, caseSensitive }))
+  const pattern = $derived(search.ok ? search.pattern : null)
+
+  $effect(() => {
+    const value = loggers
+    const timer = setTimeout(() => (appliedLoggers = value), TYPING_DELAY)
+    return () => clearTimeout(timer)
+  })
+  $effect(() => {
+    const value = query
+    if (value === '') {
+      appliedQuery = ''
+      return
+    }
+    const timer = setTimeout(() => (appliedQuery = value), TYPING_DELAY)
+    return () => clearTimeout(timer)
+  })
+
+  $effect(() => {
+    const filter = rowFilter(levels, parseLoggers(appliedLoggers))
+    untrack(() => applyFilter(filter))
+  })
+
+  $effect(() => {
+    const matcher = pattern ? rowMatcher(pattern) : null
+    untrack(() => {
+      lines.setSearch(matcher)
+      matchCount = lines.matches.length
+      current = null
+      revision += 1
+    })
+  })
+
   $effect(() => {
     void stream.version
     untrack(() => update())
@@ -34,6 +84,7 @@
   function update(): void {
     const { added, removedLines } = lines.sync()
     if (added === 0 && removedLines === 0) return
+    matchCount = lines.matches.length
     revision += 1
     if (following) {
       void tick().then(scrollToEnd)
@@ -45,6 +96,74 @@
           if (scroller) scroller.scrollTop = Math.max(scroller.scrollTop - removedLines * lineHeight, 0)
         })
       }
+    }
+  }
+
+  /** Id of the row at the top of the viewport. */
+  function topRowId(): number | null {
+    return lines.items[lines.layout.indexAt(scrollTop / lineHeight)]?.id ?? null
+  }
+
+  /** Shows the rows `filter` passes, keeping the top row in place when paused. */
+  function applyFilter(filter: Parameters<LogLines['setFilter']>[0]): void {
+    const anchor = following ? null : topRowId()
+    lines.setFilter(filter)
+    matchCount = lines.matches.length
+    revision += 1
+    void tick().then(() => {
+      if (following || anchor === null || !scroller) {
+        scrollToEnd()
+        return
+      }
+      scroller.scrollTop = lines.layout.offsetOf(lines.indexOfId(anchor)) * lineHeight
+      scrollTop = scroller.scrollTop
+    })
+  }
+
+  /** Moves to the next (or previous) match, from the current one or the viewport. */
+  function goToMatch(forward: boolean): void {
+    let target: number | null
+    if (current !== null) {
+      target = lines.nextMatch(current, forward)
+    } else {
+      const index = lines.layout.indexAt((scrollTop + (forward ? 0 : viewport)) / lineHeight)
+      const anchor = lines.items[index]?.id ?? 0
+      target = lines.nextMatch(anchor, forward, true)
+    }
+    if (target === null) return
+    current = target
+    reveal(target)
+  }
+
+  /** Scrolls row `id` to the middle of the viewport (pausing follow). */
+  function reveal(id: number): void {
+    if (!scroller) return
+    following = false
+    const index = lines.indexOfId(id)
+    const rowHeight = lines.layout.linesOf(index) * lineHeight
+    const top = lines.layout.offsetOf(index) * lineHeight - Math.max((viewport - rowHeight) / 2, 0)
+    scroller.scrollTop = Math.max(top, 0)
+    scrollTop = scroller.scrollTop
+    void tick().then(() => {
+      // Long lines: bring the match itself into view horizontally.
+      scroller?.querySelector('[data-current] mark')?.scrollIntoView?.({ block: 'nearest', inline: 'center' })
+    })
+  }
+
+  /** 1-based position of the current match among all matches, 0 if none. */
+  const currentPosition = $derived.by(() => {
+    void revision
+    if (current === null) return 0
+    return lines.matches.indexOf(current) + 1
+  })
+
+  // Ctrl/Cmd+F inside the log searches the log (the browser's find can't
+  // see rows that aren't rendered).
+  function onkeydown(event: KeyboardEvent): void {
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'f') {
+      event.preventDefault()
+      searchInput?.focus()
+      searchInput?.select()
     }
   }
 
@@ -67,6 +186,10 @@
   const empty = $derived.by(() => {
     void revision
     return lines.items.length === 0
+  })
+  const filteredOut = $derived.by(() => {
+    void revision
+    return lines.items.length === 0 && stream.rows.length > 0
   })
 
   const jumpLabel = $derived(
@@ -125,6 +248,21 @@
   })
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="flex min-h-0 flex-1 flex-col gap-2" {onkeydown}>
+<LogToolbar
+  bind:levels
+  bind:loggers
+  bind:query
+  bind:regex
+  bind:caseSensitive
+  bind:searchInput
+  error={search.ok ? null : search.error}
+  matches={matchCount}
+  current={currentPosition}
+  onnext={() => goToMatch(true)}
+  onprev={() => goToMatch(false)}
+/>
 <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-line bg-surface-raised">
   <!-- Focusable so the keyboard can scroll it. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -142,13 +280,15 @@
     <div class="relative w-max min-w-full" style:height={`${totalHeight}px`}>
       <div style:transform={`translateY(${offsetTop}px)`}>
         {#each visible as row (row.id)}
-          <LogRowView {row} {lineHeight} />
+          <LogRowView {row} {lineHeight} search={pattern} current={row.id === current} />
         {/each}
       </div>
     </div>
     {#if empty}
       <p class="absolute inset-0 flex items-center justify-center p-4 text-center font-sans text-sm text-fg-muted">
-        {#if stream.running === null}
+        {#if filteredOut}
+          No entries match the level and logger filters.
+        {:else if stream.running === null}
           Connecting to the log…
         {:else if stream.running}
           Waiting for log output…
@@ -169,4 +309,5 @@
       <span class="tabular-nums">{jumpLabel}</span>
     </button>
   {/if}
+</div>
 </div>

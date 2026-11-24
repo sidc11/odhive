@@ -68,6 +68,40 @@ test('the log viewer streams entries as text and follows the end', async ({ page
     await expect(jump).toBeHidden()
     await expect(log.getByText(/flood line 3000\b/)).toBeVisible()
 
+    // Level chips: without INFO only the traceback (ERROR) is left.
+    const info = page.getByRole('button', { name: 'INFO', exact: true })
+    await info.click()
+    await expect(info).toHaveAttribute('aria-pressed', 'false')
+    await expect(log.getByText(/flood line/)).toHaveCount(0)
+    await expect(log.getByText(/ValueError: Expected singleton/)).toBeVisible()
+    // Logger filter: hiding its logger leaves nothing.
+    const loggers = page.getByRole('textbox', { name: 'Logger' })
+    await loggers.fill('-odoo.http')
+    await expect(log.getByText('No entries match the level and logger filters.')).toBeVisible()
+    await loggers.fill('')
+    await info.click()
+    await expect(log.getByText(/flood line 3000\b/)).toBeVisible()
+
+    // Regex search: highlights, counts and steps through the matches.
+    await page.getByRole('button', { name: 'Regular expression' }).click()
+    const search = page.getByRole('searchbox', { name: 'Search the log' })
+    await search.fill(String.raw`flood line 12\d\b`)
+    const status = page.getByTestId('log-search-status')
+    await expect(status).toHaveText('10 matches')
+    await search.press('Enter')
+    await expect(status).toHaveText('1 of 10')
+    const current = log.locator('[data-current]')
+    await expect(current.locator('mark')).toHaveText('flood line 120')
+    await expect(current).toBeInViewport()
+    await search.press('Enter')
+    await expect(current.locator('mark')).toHaveText('flood line 121')
+    await search.press('Shift+Enter')
+    await expect(status).toHaveText('1 of 10')
+    // Highlights pass contrast in both themes.
+    for (const scheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: scheme })
+      expect(await seriousViolations(page), `search, ${scheme}`).toEqual([])
+    }
   } finally {
     await client.post('/api/v1/projects/shop/instances/main/stop')
     await client.put(SETTINGS, saved.settings)

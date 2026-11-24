@@ -32,6 +32,12 @@
   --odh-level-info: #1d4ed8;
   --odh-level-warning: #a14a07;
   --odh-level-error: #b91c1c;
+
+  --odh-match: #fde68a;
+  --odh-match-fg: #1f1a1e;
+  --odh-match-current: #f59e0b;
+  --odh-match-current-fg: #1f1a1e;
+  --odh-row-current: #fef3c7;
 }
 
 [data-theme='dark'] {
@@ -58,6 +64,12 @@
   --odh-level-info: #7cb3fb;
   --odh-level-warning: #fbbf24;
   --odh-level-error: #f87171;
+
+  --odh-match: #6b5310;
+  --odh-match-fg: #f2eef1;
+  --odh-match-current: #fbbf24;
+  --odh-match-current-fg: #1f1a1e;
+  --odh-row-current: #2e2519;
 }
 
 @theme inline {
@@ -86,6 +98,12 @@
   --color-level-info: var(--odh-level-info);
   --color-level-warning: var(--odh-level-warning);
   --color-level-error: var(--odh-level-error);
+
+  --color-match: var(--odh-match);
+  --color-match-fg: var(--odh-match-fg);
+  --color-match-current: var(--odh-match-current);
+  --color-match-current-fg: var(--odh-match-current-fg);
+  --color-row-current: var(--odh-row-current);
 }
 
 @layer base {
