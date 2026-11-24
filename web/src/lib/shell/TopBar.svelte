@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { shortcutLabel } from '../palette/palette.svelte'
   import { routeHref, router, type Route } from '../router.svelte'
-  import { connection } from '../stores'
+  import { connection, palette } from '../stores'
   import ConnectionStatus from './ConnectionStatus.svelte'
   import ThemeToggle from './ThemeToggle.svelte'
 
@@ -33,6 +34,7 @@
   }
 
   const trail = $derived(crumbs(router.route))
+  const shortcut = shortcutLabel()
 </script>
 
 <header class="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-line bg-surface-raised px-2 md:px-4">
@@ -68,5 +70,19 @@
   </nav>
 
   <ConnectionStatus {connection} />
+  <button
+    type="button"
+    class="inline-flex size-9 items-center justify-center gap-2 rounded-md text-sm text-fg-muted hover:bg-surface-sunken hover:text-fg sm:w-auto sm:border sm:border-line sm:px-2.5"
+    aria-label="Command palette"
+    aria-haspopup="dialog"
+    aria-keyshortcuts="Control+K Meta+K"
+    title="Command palette ({shortcut})"
+    onclick={() => palette.show()}
+  >
+    <svg viewBox="0 0 24 24" class="size-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"
+      ><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg
+    >
+    <kbd class="hidden font-sans text-xs sm:inline">{shortcut}</kbd>
+  </button>
   <ThemeToggle />
 </header>
