@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { project, routedFetch } from '../../test-fixtures'
 import { ApiClient, ApiRequestError, UNREACHABLE } from './client'
-import type { CreateProject, InstanceInfo, Job, LogPage, Project, StopResult } from './index'
+import type { CreateProject, InstanceInfo, InstanceSettings, Job, LogPage, Project, StopResult } from './index'
 
 describe('ApiClient', () => {
   it('GETs JSON without the mutation header', async () => {
@@ -53,6 +53,19 @@ describe('ApiClient', () => {
     expect(await api.listPythons()).toEqual(list)
     await api.listPythons('odoo-19.0')
     expect(calls.map((c) => c.path)).toEqual(['/pythons', '/pythons?source=odoo-19.0'])
+  })
+
+  it('reads and replaces instance settings with PUT', async () => {
+    const settings: InstanceSettings = { reload_mode: 'restart', autofix_mode: 'ask', extra_args: ['--dev=xml'], env: { A: '1' } }
+    const info = { settings, project_env: ['PGHOST'], managed_options: ['--http-port'] }
+    const { fetcher, calls } = routedFetch({
+      'GET /projects/shop/instances/main/settings': [200, info],
+      'PUT /projects/shop/instances/main/settings': [200, info],
+    })
+    const api = new ApiClient(fetcher)
+    expect(await api.getInstanceSettings('shop', 'main')).toEqual(info)
+    expect(await api.putInstanceSettings('shop', 'main', settings)).toEqual(info)
+    expect(calls[1]).toMatchObject({ method: 'PUT', headers: { 'X-OdHive': '1' }, body: settings })
   })
 
   it('runs the environment check', async () => {

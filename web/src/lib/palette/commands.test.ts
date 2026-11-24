@@ -15,7 +15,7 @@ const READY: ProjectsState = {
 }
 
 function deps() {
-  return { navigate: vi.fn(), act: vi.fn() }
+  return { navigate: vi.fn(), act: vi.fn(), settings: vi.fn() }
 }
 
 const ids = (commands: { id: string }[]): string[] => commands.map((command) => command.id)
@@ -37,10 +37,14 @@ describe('buildCommands', () => {
       'instance:shop/test',
       'instance:crm/main',
       'new-project',
-      // Running: stop and restart, no start. Stopped: start only. No venv: nothing.
+      // Running: stop and restart, no start. Stopped: start only. No venv:
+      // nothing to run. Settings: always.
       'stop:shop/main',
       'restart:shop/main',
+      'settings:shop/main',
       'start:shop/test',
+      'settings:shop/test',
+      'settings:crm/main',
     ])
     const main = commands.find((command) => command.id === 'instance:shop/main')
     expect(main).toMatchObject({ group: 'Instances', title: 'shop/main', state: 'running', hint: 'Database db_main' })
@@ -68,11 +72,14 @@ describe('buildCommands', () => {
     byId('instance:shop/test').run()
     byId('start:shop/test').run()
     byId('restart:shop/main').run()
+    byId('settings:crm/main').run()
     expect(d.navigate.mock.calls).toEqual([['/new'], ['/projects/shop'], ['/projects/shop/instances/test']])
     expect(d.act.mock.calls).toEqual([
       ['start', 'shop', 'test'],
       ['restart', 'shop', 'main'],
     ])
+    expect(d.settings.mock.calls).toEqual([['crm', 'main']])
+    expect(search(commands, 'settings crm')[0]?.command.id).toBe('settings:crm/main')
   })
 
   it('encodes names in links', () => {

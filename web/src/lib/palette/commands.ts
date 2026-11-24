@@ -24,13 +24,14 @@ export interface Command {
 export interface CommandDeps {
   navigate: (href: string) => void
   act: (action: InstanceAction, project: string, instance: string) => void
+  settings: (project: string, instance: string) => void
 }
 
 const ACTION_TITLE: Record<InstanceAction, string> = { start: 'Start', stop: 'Stop', restart: 'Restart' }
 const ACTION_ORDER: InstanceAction[] = ['start', 'stop', 'restart']
 
 export function buildCommands(state: ProjectsState, deps: CommandDeps): Command[] {
-  const { navigate, act } = deps
+  const { navigate, act, settings } = deps
   const commands: Command[] = [
     {
       id: 'page-dashboard',
@@ -93,6 +94,14 @@ export function buildCommands(state: ProjectsState, deps: CommandDeps): Command[
           run: () => act(action, project.name, view.id),
         })
       }
+      actionCommands.push({
+        id: `settings:${name}`,
+        group: 'Actions',
+        title: `Settings of ${name}`,
+        hint: 'Reload, auto-fix, arguments, environment',
+        keywords: ['configure', 'options', 'env', 'arguments', 'reload', 'autofix'],
+        run: () => settings(project.name, view.id),
+      })
     }
   }
   return [...commands, ...instanceCommands, ...actionCommands]

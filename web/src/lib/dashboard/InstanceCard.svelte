@@ -14,6 +14,7 @@
     now,
     busy,
     onaction,
+    onsettings,
   }: {
     project: Project
     view: InstanceView
@@ -22,6 +23,8 @@
     now: number
     busy: InstanceAction | undefined
     onaction: (action: InstanceAction) => void
+    /** Opens the instance's settings. */
+    onsettings: () => void
   } = $props()
 
   const state = $derived(instanceState(view))
@@ -137,6 +140,12 @@
         {busy === 'restart' ? 'Restarting…' : 'Restart'}
       </button>
     {/if}
+    <button type="button" class="{button} px-2" title="Settings" onclick={onsettings}>
+      <svg viewBox="0 0 24 24" class="size-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+        ><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg
+      >
+      <span class="sr-only">Settings of {project.name} / {view.id}</span>
+    </button>
     {#if reachable && port !== null}
       <span class="ml-auto flex gap-2">
         <a class={button} href={odooUrl(port)} target="_blank" rel="noopener noreferrer">

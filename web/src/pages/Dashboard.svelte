@@ -1,6 +1,6 @@
 <script lang="ts">
   import InstanceCard from '../lib/dashboard/InstanceCard.svelte'
-  import { actions, projects, usage } from '../lib/stores'
+  import { actions, projects, settingsDrawer, usage } from '../lib/stores'
   import { routeHref, router } from '../lib/router.svelte'
   import { instanceState, isUp } from '../lib/status'
 
@@ -62,6 +62,7 @@
               now={usage.now}
               busy={actions.busy(project.name, view.id)}
               onaction={(action) => void actions.run(action, project.name, view.id)}
+              onsettings={() => settingsDrawer.show(project.name, view.id)}
             />
           </li>
         {/each}

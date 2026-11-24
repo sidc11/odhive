@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import CommandPalette from './lib/palette/CommandPalette.svelte'
-import { router } from './lib/router.svelte'
+  import { router } from './lib/router.svelte'
+  import SettingsDrawer from './lib/settings/SettingsDrawer.svelte'
   import AppShell from './lib/shell/AppShell.svelte'
   import Toaster from './lib/shell/Toaster.svelte'
   import { connectStores, toasts } from './lib/stores'
@@ -55,4 +56,5 @@ import { router } from './lib/router.svelte'
 </AppShell>
 
 <CommandPalette />
+<SettingsDrawer />
 <Toaster {toasts} />

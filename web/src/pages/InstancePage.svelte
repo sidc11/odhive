@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { projects } from '../lib/stores'
+  import { projects, settingsDrawer } from '../lib/stores'
   import { instanceState, STATE_LABELS } from '../lib/status'
   import StatusDot from '../lib/shell/StatusDot.svelte'
 
@@ -8,7 +8,16 @@
   const view = $derived(projects.find(project)?.instances.find((candidate) => candidate.id === instance))
 </script>
 
-<h1 class="truncate text-2xl font-semibold">{instance}</h1>
+<div class="flex flex-wrap items-center gap-3">
+  <h1 class="min-w-0 flex-1 truncate text-2xl font-semibold">{instance}</h1>
+  {#if view}
+    <button
+      type="button"
+      class="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-line px-3 text-sm font-medium hover:bg-surface-sunken"
+      onclick={() => settingsDrawer.show(project, instance)}>Settings</button
+    >
+  {/if}
+</div>
 
 {#if view}
   {@const state = instanceState(view)}

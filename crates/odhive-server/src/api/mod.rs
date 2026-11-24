@@ -13,6 +13,7 @@ pub mod instances;
 mod jobs;
 pub mod projects;
 pub mod pythons;
+pub mod settings;
 pub mod sources;
 pub mod ws;
 
@@ -79,6 +80,7 @@ fn api_router() -> OpenApiRouter<Service> {
         .routes(routes!(instances::confirm_fix))
         .routes(routes!(instances::decline_fix))
         .routes(routes!(instances::logs))
+        .routes(routes!(settings::get, settings::put))
         .routes(routes!(ws::upgrade))
 }
 

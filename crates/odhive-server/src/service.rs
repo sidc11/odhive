@@ -12,6 +12,7 @@ use odhive_core::launch::{self, LoadedProject, Target};
 use odhive_core::manager::{InstanceInfo, Manager, StopOutcome};
 use odhive_core::pidfile::{self, PidRecord, RecordState, RunDir};
 use odhive_core::ports::PortOwner;
+use odhive_core::project::ProjectConfig;
 use odhive_core::python::DiscoverOptions;
 use odhive_core::sources::CloneOptions;
 use odhive_core::supervisor::DEFAULT_STOP_TIMEOUT;
@@ -274,6 +275,23 @@ impl Service {
         let mut cfg = self.config()?;
         let out = edit(&mut cfg)?;
         cfg.save(&self.inner.paths.config_file())?;
+        Ok(out)
+    }
+
+    /// Loads project `name`, lets `edit` change its settings and saves them
+    /// when `edit` succeeds (the save validates them first). Serialized with
+    /// config edits; refused while the project is being set up, since setup
+    /// writes the same file.
+    pub(crate) async fn edit_project<T>(
+        &self,
+        name: &str,
+        edit: impl FnOnce(&mut ProjectConfig) -> ApiResult<T>,
+    ) -> ApiResult<T> {
+        let _guard = self.inner.config_lock.lock().await;
+        self.ensure_not_setting_up(name)?;
+        let (_, mut project) = self.project(name)?;
+        let out = edit(&mut project.config)?;
+        project.config.save(project.dir())?;
         Ok(out)
     }
 

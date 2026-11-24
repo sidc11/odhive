@@ -12,6 +12,8 @@ fn project() -> ProjectConfig {
     test.db = Some("shop_tests".into());
     test.workers = 2;
     test.extra_args = vec!["--dev=xml".into()];
+    test.env.0.insert("PGHOST".into(), "/run/pg-test".into());
+    test.env.0.insert("STAGE".into(), "test".into());
     p.instances.push(test);
     p
 }
@@ -49,8 +51,18 @@ fn plan_takes_ports_db_and_args_from_the_instance() {
         Some(Path::new("/w/projects/shop/odoo.conf"))
     );
     assert_eq!(
-        test.spec.env.0.get("PGHOST").map(String::as_str),
+        main.spec.env.0.get("PGHOST").map(String::as_str),
         Some("localhost")
+    );
+    assert_eq!(main.spec.env.0.len(), 1);
+    // The instance's own variables win over the project's.
+    assert_eq!(
+        test.spec.env.0.get("PGHOST").map(String::as_str),
+        Some("/run/pg-test")
+    );
+    assert_eq!(
+        test.spec.env.0.get("STAGE").map(String::as_str),
+        Some("test")
     );
 }
 

@@ -18,7 +18,7 @@ const READY: ProjectsState = {
 
 function setup(state: ProjectsState = READY) {
   const palette = new PaletteStore()
-  const deps = { navigate: vi.fn(), act: vi.fn() }
+  const deps = { navigate: vi.fn(), act: vi.fn(), settings: vi.fn() }
   render(CommandPalette, { palette, projects: { state }, deps })
   return { palette, deps }
 }

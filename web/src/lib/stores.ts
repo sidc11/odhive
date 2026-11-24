@@ -8,6 +8,7 @@ import { LiveConnection } from './live.svelte'
 import { Notifier } from './notices'
 import { PaletteStore } from './palette/palette.svelte'
 import { ProjectsStore } from './projects.svelte'
+import { SettingsDrawerStore } from './settings/settings.svelte'
 import { ToastStore } from './toasts.svelte'
 import { UsageStore } from './usage.svelte'
 
@@ -20,6 +21,7 @@ export const usage = new UsageStore(api)
 export const actions = new InstanceActions(api, projects, toasts)
 export const environment = new EnvironmentStore(api)
 export const palette = new PaletteStore()
+export const settingsDrawer = new SettingsDrawerStore()
 
 /** Wait after a stale event before asking for a snapshot (events come in bursts). */
 export const RESYNC_DELAY_MS = 200
