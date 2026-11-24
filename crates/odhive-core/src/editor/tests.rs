@@ -328,12 +328,14 @@ async fn open_runs_the_program_with_the_args() {
 #[tokio::test]
 async fn open_reports_spawn_failures() {
     let dir = tempfile::tempdir().unwrap();
-    // Executable but not a program the kernel can run.
-    let bad = dir.path().join("ed");
-    fs::write(&bad, [0u8, 1, 2, 3]).unwrap();
-    fs::set_permissions(&bad, fs::Permissions::from_mode(0o755)).unwrap();
-    let template = s(&[bad.to_str().unwrap()]);
+    // An editor that is gone by the time it is opened. (A file the kernel
+    // can't run is no good here: macOS runs it with `/bin/sh` instead.)
+    let gone = dir.path().join("ed");
+    fs::write(&gone, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&gone, fs::Permissions::from_mode(0o755)).unwrap();
+    let template = s(&[gone.to_str().unwrap()]);
     let e = Editor::resolve(Some(&template), None, None, OsStr::new("")).unwrap();
+    fs::remove_file(&gone).unwrap();
     assert!(matches!(
         e.open(Path::new("/p/x.py"), 1),
         Err(EditorError::Spawn { .. })
