@@ -23,6 +23,9 @@ export class LogLines {
   /** Id of the newest stream row looked at. */
   private seen = 0
   private filter: (row: LogRow) => boolean = () => true
+  /** Ids of shown rows matching the search, ascending. */
+  matches: number[] = []
+  private search: ((row: LogRow) => boolean) | null = null
   private readonly source: RowSource
 
   constructor(source: RowSource) {
@@ -35,7 +38,48 @@ export class LogLines {
     this.items = []
     this.layout.reset()
     this.seen = 0
+    this.matches = []
     this.sync()
+  }
+
+  /** Tracks shown rows matching `search` (null: none). */
+  setSearch(search: ((row: LogRow) => boolean) | null): void {
+    this.search = search
+    this.matches = search ? this.items.filter(search).map((row) => row.id) : []
+  }
+
+  /**
+   * Match after (`forward`) or before row id `from`, wrapping around;
+   * `inclusive` also accepts `from` itself. Null without matches.
+   */
+  nextMatch(from: number, forward: boolean, inclusive = false): number | null {
+    const matches = this.matches
+    if (matches.length === 0) return null
+    // Split the matches into "before" and "after" `from`; where `from`
+    // itself goes decides whether it can be the answer.
+    const fromIsBefore = forward ? !inclusive : inclusive
+    let low = 0
+    let high = matches.length
+    while (low < high) {
+      const mid = (low + high) >> 1
+      const id = matches[mid] ?? 0
+      if (id < from || (id === from && fromIsBefore)) low = mid + 1
+      else high = mid
+    }
+    if (forward) return matches[low] ?? matches[0] ?? null
+    return matches[low - 1] ?? matches.at(-1) ?? null
+  }
+
+  /** Index of the first shown row with an id at or after `id`. */
+  indexOfId(id: number): number {
+    let low = 0
+    let high = this.items.length
+    while (low < high) {
+      const mid = (low + high) >> 1
+      if ((this.items[mid]?.id ?? 0) < id) low = mid + 1
+      else high = mid
+    }
+    return low
   }
 
   /** Takes what the stream dropped and added since the last call. */
@@ -48,6 +92,10 @@ export class LogLines {
     if (drop > 0) {
       this.items.splice(0, drop)
       removedLines = this.layout.dropFront(drop)
+      const first = this.items[0]?.id ?? Infinity
+      let gone = 0
+      while (gone < this.matches.length && (this.matches[gone] ?? 0) < first) gone += 1
+      if (gone > 0) this.matches.splice(0, gone)
     }
     // Rows it added: ids are consecutive from `firstId`.
     const from = Math.max(this.seen + 1 - firstId, 0)
@@ -59,6 +107,8 @@ export class LogLines {
     this.seen = rows.at(-1)?.id ?? this.seen
     for (const row of added) this.items.push(row)
     this.layout.append(added.map((row) => row.lines))
+    const search = this.search
+    if (search) for (const row of added) if (search(row)) this.matches.push(row.id)
     return { added: added.length, removedLines }
   }
 }
