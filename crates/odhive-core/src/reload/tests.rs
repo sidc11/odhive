@@ -483,8 +483,17 @@ async fn real_file_changes_arrive_as_batches() {
     assert_eq!(started.modules, 2);
     assert_eq!(started.unwatched, [root.join("linked")]);
 
-    // Give inotify / FSEvents a moment to settle before the first write.
+    // FSEvents can still deliver the fixture's own setup writes after the
+    // watch started. Write a marker and drop every batch up to the one that
+    // carries it, so the checks below only see their own changes.
     tokio::time::sleep(Duration::from_millis(200)).await;
+    fs::write(root.join("m1/views/settle.xml"), "<odoo/>").expect("write marker");
+    loop {
+        let b = next(&mut w).await;
+        if b.files.iter().any(|f| f.ends_with("m1/views/settle.xml")) {
+            break;
+        }
+    }
     fs::write(root.join("m1/views/x.xml"), "<odoo/>").expect("write");
     let b = next(&mut w).await;
     assert_eq!(
