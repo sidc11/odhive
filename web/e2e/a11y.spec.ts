@@ -1,9 +1,9 @@
-import AxeBuilder from '@axe-core/playwright'
-import { expect, test } from './fixtures'
+import { expect, seriousViolations, test } from './fixtures'
 
 const pages = [
   { name: 'dashboard', path: '/', heading: 'Dashboard' },
   { name: 'wizard', path: '/new', heading: 'New project' },
+  { name: 'instance page', path: '/projects/shop/instances/main', heading: 'main' },
 ]
 
 for (const scheme of ['light', 'dark'] as const) {
@@ -15,11 +15,7 @@ for (const scheme of ['light', 'dark'] as const) {
       await expect(page.getByRole('heading', { level: 1, name: target.heading })).toBeVisible()
       await expect(page.locator('html')).toHaveAttribute('data-theme', scheme)
 
-      const result = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze()
-      const serious = result.violations
-        .filter((v) => v.impact === 'serious' || v.impact === 'critical')
-        .map((v) => ({ id: v.id, help: v.help, targets: v.nodes.map((n) => n.target.join(' ')) }))
-      expect(serious).toEqual([])
+      expect(await seriousViolations(page)).toEqual([])
     })
   }
 }

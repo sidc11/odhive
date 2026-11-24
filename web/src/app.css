@@ -27,6 +27,11 @@
   --odh-state-stopped: #8a8389;
   --odh-state-crashed: #c2261d;
   --odh-state-external: #2563eb;
+
+  --odh-level-debug: #6b6369;
+  --odh-level-info: #1d4ed8;
+  --odh-level-warning: #a14a07;
+  --odh-level-error: #b91c1c;
 }
 
 [data-theme='dark'] {
@@ -48,6 +53,11 @@
   --odh-state-stopped: #7d757b;
   --odh-state-crashed: #f87171;
   --odh-state-external: #60a5fa;
+
+  --odh-level-debug: #9a9298;
+  --odh-level-info: #7cb3fb;
+  --odh-level-warning: #fbbf24;
+  --odh-level-error: #f87171;
 }
 
 @theme inline {
@@ -71,6 +81,11 @@
   --color-state-stopped: var(--odh-state-stopped);
   --color-state-crashed: var(--odh-state-crashed);
   --color-state-external: var(--odh-state-external);
+
+  --color-level-debug: var(--odh-level-debug);
+  --color-level-info: var(--odh-level-info);
+  --color-level-warning: var(--odh-level-warning);
+  --color-level-error: var(--odh-level-error);
 }
 
 @layer base {

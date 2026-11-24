@@ -5,6 +5,7 @@ const pages = [
   { path: '/', heading: 'Dashboard' },
   { path: '/new', heading: 'New project' },
   { path: '/environment', heading: 'Environment' },
+  { path: '/projects/shop/instances/main', heading: 'main' },
 ]
 
 for (const width of widths) {
