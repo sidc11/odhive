@@ -103,6 +103,11 @@ export class LogLines {
     return low
   }
 
+  /** Shown rows with ids from `from` to `to`, both included. */
+  between(from: number, to: number): LogRow[] {
+    return this.items.slice(this.indexOfId(from), this.indexOfId(to + 1))
+  }
+
   /** Takes what the stream dropped and added since the last call. */
   sync(): SyncResult {
     const { rows, firstId } = this.source

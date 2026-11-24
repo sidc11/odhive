@@ -296,4 +296,113 @@ describe('LogView', () => {
       expect(scroller.querySelector('mark')?.textContent).toBe('import ldap')
     })
   })
+
+  describe('copy actions', () => {
+    function clipboard() {
+      const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText },
+      })
+      return writeText
+    }
+
+    function selectRows(scroller: HTMLElement, from: number, to: number): void {
+      const start = scroller.querySelector(`[data-seq="${from}"]`)
+      const end = scroller.querySelector(`[data-seq="${to}"]`)
+      if (!start || !end) throw new Error('rows not rendered')
+      const range = document.createRange()
+      range.setStart(start, 0)
+      range.setEnd(end, end.childNodes.length)
+      const selection = document.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      document.dispatchEvent(new Event('selectionchange'))
+    }
+
+    it('copies the entries on screen as log text', async () => {
+      const writeText = clipboard()
+      // The viewport is measured on mount (jsdom has no layout or ResizeObserver).
+      const own = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.dataset['testid'] === 'log-scroller' ? 200 : 0
+        },
+      })
+      let mounted: ReturnType<typeof setup>
+      try {
+        mounted = setup()
+      } finally {
+        if (own) Object.defineProperty(HTMLElement.prototype, 'clientHeight', own)
+        else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+      }
+      const { connection, scroller } = mounted
+      const copy = screen.getByRole('button', { name: 'Copy visible' })
+      expect(copy).toBeDisabled()
+      connection.receive(msg.subscribed(1))
+      connection.receive(msg.logs(records(1, 100)))
+      await tick()
+      // 20px lines, 200px tall: rows 11 to 20 are on screen.
+      scrollTo(scroller, 200)
+      await tick()
+      await fireEvent.click(copy)
+      const text = writeText.mock.calls[0]?.[0] ?? ''
+      expect(text.split('\n')).toHaveLength(10)
+      expect(text.split('\n')[0]).toBe('2026-11-24 09:00:00,000 4242 INFO ? odoo.modules.loading: entry 11')
+      expect(text.split('\n')[9]).toMatch(/: entry 20$/)
+      expect(await screen.findByRole('button', { name: 'Copied 10 entries' })).toBeInTheDocument()
+    })
+
+    it('copies whole entries the selection touches and pauses follow', async () => {
+      const writeText = clipboard()
+      const { connection, scroller } = setup()
+      const copy = screen.getByRole('button', { name: 'Copy selection' })
+      expect(copy).toBeDisabled()
+      connection.receive(msg.subscribed(1))
+      connection.receive(
+        msg.logs([
+          record(1),
+          record(2, 'boom\nTraceback (most recent call last):\nKeyError: 1', {
+            exceptions: ['KeyError: 1'],
+          }),
+          record(3),
+        ]),
+      )
+      await tick()
+      expect(scroller.querySelector('[data-seq="2"]')).toHaveAttribute('data-folded')
+      expect(screen.queryByRole('button', { name: /Jump to latest/ })).toBeNull()
+      selectRows(scroller, 2, 3)
+      await tick()
+      // Selecting pauses following, so new rows don't scroll the selection away.
+      expect(screen.getByRole('button', { name: /Jump to latest/ })).toBeInTheDocument()
+      expect(copy).toBeEnabled()
+      await fireEvent.click(copy)
+      // The folded traceback is copied in full.
+      expect(writeText).toHaveBeenCalledWith(
+        [
+          '2026-11-24 09:00:00,000 4242 INFO ? odoo.modules.loading: boom',
+          'Traceback (most recent call last):',
+          'KeyError: 1',
+          '2026-11-24 09:00:00,000 4242 INFO ? odoo.modules.loading: entry 3',
+        ].join('\n'),
+      )
+      expect(await screen.findByRole('button', { name: 'Copied 2 entries' })).toBeInTheDocument()
+      document.getSelection()?.removeAllRanges()
+      document.dispatchEvent(new Event('selectionchange'))
+    })
+
+    it('says when the clipboard refuses', async () => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) },
+      })
+      const { connection } = setup()
+      connection.receive(msg.subscribed(1))
+      connection.receive(msg.logs(records(1, 3)))
+      await tick()
+      await fireEvent.click(screen.getByRole('button', { name: 'Copy visible' }))
+      expect(await screen.findByRole('button', { name: 'Copy failed' })).toBeInTheDocument()
+    })
+  })
 })

@@ -13,6 +13,10 @@
     searchInput = $bindable(),
     onnext,
     onprev,
+    canCopyVisible = false,
+    canCopySelection = false,
+    oncopyvisible,
+    oncopyselection,
   }: {
     levels: Set<LevelChip>
     loggers: string
@@ -27,7 +31,42 @@
     searchInput?: HTMLInputElement
     onnext: () => void
     onprev: () => void
+    /** Whether there are rows on screen to copy. */
+    canCopyVisible?: boolean
+    /** Whether text in the log is selected. */
+    canCopySelection?: boolean
+    /** Copy actions; resolve to the entries copied, or null if it failed. */
+    oncopyvisible?: () => Promise<number | null>
+    oncopyselection?: () => Promise<number | null>
   } = $props()
+
+  /** How long a copy result shows (ms). */
+  const COPIED_MS = 1500
+
+  /** Result of the last copy, shown in place of its button's label for a moment. */
+  let copied: { which: 'visible' | 'selection'; text: string } | null = $state(null)
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined
+
+  async function copy(which: 'visible' | 'selection'): Promise<void> {
+    const action = which === 'visible' ? oncopyvisible : oncopyselection
+    if (!action) return
+    const count = await action()
+    const text =
+      count === null ? 'Copy failed' : `Copied ${count.toLocaleString()} ${count === 1 ? 'entry' : 'entries'}`
+    copied = { which, text }
+    clearTimeout(copiedTimer)
+    copiedTimer = setTimeout(() => (copied = null), COPIED_MS)
+  }
+
+  $effect(() => () => clearTimeout(copiedTimer))
+
+  // A click on a copy button keeps the text selection (and focus) where it is.
+  function keepSelection(event: MouseEvent): void {
+    event.preventDefault()
+  }
+
+  const copyLabel = (which: 'visible' | 'selection', label: string): string =>
+    copied?.which === which ? copied.text : label
 
   const uid = $props.id()
   const errorId = `${uid}-search-error`
@@ -154,6 +193,26 @@
       title="Next match (Enter)"
       disabled={matches === 0}
       onclick={onnext}><span aria-hidden="true">↓</span></button
+    >
+  </div>
+  <div class="flex items-center gap-1" role="group" aria-label="Copy">
+    <button
+      type="button"
+      class="inline-flex min-h-8 items-center rounded border border-line px-2 text-xs text-fg-muted hover:bg-surface-sunken hover:text-fg disabled:opacity-50"
+      title="Copy the entries on screen as log text"
+      aria-live="polite"
+      onmousedown={keepSelection}
+      disabled={!canCopyVisible}
+      onclick={() => void copy('visible')}>{copyLabel('visible', 'Copy visible')}</button
+    >
+    <button
+      type="button"
+      class="inline-flex min-h-8 items-center rounded border border-line px-2 text-xs text-fg-muted hover:bg-surface-sunken hover:text-fg disabled:opacity-50"
+      title="Copy the whole entries the selection touches as log text (tracebacks included)"
+      aria-live="polite"
+      onmousedown={keepSelection}
+      disabled={!canCopySelection && copied?.which !== 'selection'}
+      onclick={() => void copy('selection')}>{copyLabel('selection', 'Copy selection')}</button
     >
   </div>
   {#if error}
