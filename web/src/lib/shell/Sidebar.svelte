@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { projects } from '../stores'
+  import { worstStatus } from '../environment.svelte'
+  import { environment, projects } from '../stores'
   import { routeHref, router } from '../router.svelte'
   import { instanceState, upCount } from '../status'
   import StatusDot from './StatusDot.svelte'
@@ -8,6 +9,8 @@
   let { onnavigate }: { onnavigate?: () => void } = $props()
 
   const route = $derived(router.route)
+  /** Shown once a check has run (the wizard and the page run it). */
+  const envWorst = $derived(environment.report ? worstStatus(environment.report.checks) : null)
 
   function follow(event: MouseEvent): void {
     router.link(event)
@@ -25,9 +28,26 @@
   </a>
 
   <nav aria-label="Main" class="flex flex-col gap-4">
+    <div class="flex flex-col gap-0.5">
     <a href="/" class={item} aria-current={route.name === 'dashboard' ? 'page' : undefined} onclick={follow}>
       Dashboard
     </a>
+    <a
+      href={routeHref({ name: 'environment' })}
+      class={item}
+      aria-current={route.name === 'environment' ? 'page' : undefined}
+      onclick={follow}
+    >
+      <span class="flex-1">Environment</span>
+      {#if envWorst === 'error' || envWorst === 'warning'}
+        <span
+          class="inline-block size-2 shrink-0 rounded-full {envWorst === 'error' ? 'bg-state-crashed' : 'bg-state-starting'}"
+          aria-hidden="true"
+        ></span>
+        <span class="sr-only">{envWorst === 'error' ? '(problems found)' : '(warnings)'}</span>
+      {/if}
+    </a>
+    </div>
 
     <section aria-labelledby="nav-projects" class="flex flex-col gap-1">
       <div class="flex items-center justify-between gap-2">

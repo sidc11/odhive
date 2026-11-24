@@ -1,12 +1,22 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { onMount, tick } from 'svelte'
+  import { blockers, CHECK_LABELS, type EnvironmentStore } from '../lib/environment.svelte'
   import { routeHref, router } from '../lib/router.svelte'
-  import { api, jobs, projects } from '../lib/stores'
+  import { api, environment as defaultEnvironment, jobs, projects } from '../lib/stores'
   import SetupProgress from '../lib/wizard/SetupProgress.svelte'
   import { cloneSummary } from '../lib/wizard/progress'
   import { CLONE_VERSIONS, ProjectWizard, STEP_LABELS, STEPS } from '../lib/wizard/wizard.svelte'
 
-  let { wizard = new ProjectWizard(api, jobs, projects) }: { wizard?: ProjectWizard } = $props()
+  let {
+    wizard = new ProjectWizard(api, jobs, projects),
+    environment = defaultEnvironment,
+  }: { wizard?: ProjectWizard; environment?: EnvironmentStore } = $props()
+
+  // Pre-check: what would stop Odoo from running on this machine.
+  onMount(() => {
+    void environment.ensure()
+  })
+  const envBlockers = $derived(environment.report ? blockers(environment.report) : [])
 
   let heading = $state<HTMLHeadingElement>()
   let communityPath = $state('')
@@ -79,6 +89,26 @@
 </script>
 
 <h1 class="text-2xl font-semibold">New project</h1>
+
+{#if envBlockers.length > 0}
+  <section
+    class="mt-4 rounded-lg border-l-4 border-state-crashed bg-surface-raised px-4 py-3 text-sm"
+    aria-labelledby="env-precheck"
+  >
+    <h2 id="env-precheck" class="font-medium">This machine is not ready for Odoo yet</h2>
+    <ul class="mt-1 flex flex-col gap-0.5 text-fg-muted">
+      {#each envBlockers as check (check.id)}
+        <li><span class="font-medium text-fg">{CHECK_LABELS[check.id]}:</span> {check.summary}</li>
+      {/each}
+    </ul>
+    <p class="mt-2">
+      You can create the project now and fix this before starting it.
+      <a href={routeHref({ name: 'environment' })} class="text-accent underline underline-offset-2" onclick={router.link}
+        >See how to fix it</a
+      >
+    </p>
+  </section>
+{/if}
 
 <div class="mt-4 flex flex-col gap-6 lg:flex-row lg:items-start">
   <nav aria-label="Wizard steps" class="lg:w-52 lg:shrink-0">

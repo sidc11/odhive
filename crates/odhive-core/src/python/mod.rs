@@ -639,7 +639,7 @@ fn parse_uv_list(out: &[u8]) -> Result<Vec<PathBuf>, String> {
 
 /// Runs `cmd` (no stdin, piped stdout/stderr, killed on timeout) and returns its
 /// stdout and stderr if it exits successfully.
-async fn run_capped(
+pub(crate) async fn run_capped(
     cmd: &mut Command,
     exe: &Path,
     timeout: Duration,

@@ -6,6 +6,8 @@ describe('parseRoute', () => {
     expect(parseRoute('/')).toEqual({ name: 'dashboard' })
     expect(parseRoute('')).toEqual({ name: 'dashboard' })
     expect(parseRoute('/new')).toEqual({ name: 'new_project' })
+    expect(parseRoute('/environment')).toEqual({ name: 'environment' })
+    expect(parseRoute('/environment/x')).toEqual({ name: 'not_found', path: '/environment/x' })
     // A project may be called "new".
     expect(parseRoute('/projects/new')).toEqual({ name: 'project', project: 'new' })
     expect(parseRoute('/projects/shop')).toEqual({ name: 'project', project: 'shop' })
@@ -40,6 +42,7 @@ describe('parseRoute', () => {
     const routes = [
       { name: 'dashboard' },
       { name: 'new_project' },
+      { name: 'environment' },
       { name: 'project', project: 'a b?#' },
       { name: 'instance', project: 'shop', instance: 'main/x' },
     ] as const

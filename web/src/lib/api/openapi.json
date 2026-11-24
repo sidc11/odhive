@@ -44,6 +44,37 @@
         }
       }
     },
+    "/api/v1/environment": {
+      "get": {
+        "tags": [
+          "service"
+        ],
+        "summary": "Checks PostgreSQL (reachable over the default connection, server\nversion, role may create databases), Python for each registered\nCommunity source (Odoo 19 and 20 when none is registered), wkhtmltopdf,\ngit and uv. Each check carries a fix when something is off; install\ncommands are text for the user and are never run.",
+        "operationId": "check_environment",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvCheckReport"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Config unreadable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "tags": [
@@ -1771,6 +1802,128 @@
         ],
         "description": "One log record, possibly spanning several lines."
       },
+      "EnvCheck": {
+        "type": "object",
+        "description": "The result of one check.",
+        "required": [
+          "id",
+          "status",
+          "summary",
+          "details"
+        ],
+        "properties": {
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Further findings, one per line."
+          },
+          "fix": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvFix",
+                "description": "How to fix it; `None` when nothing needs fixing."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/EnvCheckId",
+            "description": "What was checked."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Program found, or where PostgreSQL was reached."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EnvStatus",
+            "description": "How it came out."
+          },
+          "summary": {
+            "type": "string",
+            "description": "One line describing the result."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version found, e.g. `16.4` or `2.47.1`."
+          }
+        }
+      },
+      "EnvCheckId": {
+        "type": "string",
+        "description": "What a check looked at.",
+        "enum": [
+          "postgresql",
+          "python",
+          "wkhtmltopdf",
+          "git",
+          "uv"
+        ]
+      },
+      "EnvCheckReport": {
+        "type": "object",
+        "description": "Every check, in display order.",
+        "required": [
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvCheck"
+            },
+            "description": "The checks: PostgreSQL, Python, wkhtmltopdf, git, uv."
+          },
+          "package_manager": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PackageManager",
+                "description": "Package manager the install commands are written for; `None` when the\nhost's is unknown (commands are then left out)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "EnvFix": {
+        "type": "object",
+        "description": "How to fix a check: advice and commands for the user to run.",
+        "required": [
+          "text",
+          "commands"
+        ],
+        "properties": {
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Commands to run, in order (text only; OdHive never runs them)."
+          },
+          "text": {
+            "type": "string",
+            "description": "What to do, as a sentence."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to read more or download from."
+          }
+        }
+      },
       "EnvReport": {
         "type": "object",
         "description": "What [`setup_env`] did.",
@@ -1796,6 +1949,16 @@
             "description": "The venv's interpreter."
           }
         }
+      },
+      "EnvStatus": {
+        "type": "string",
+        "description": "How a check came out, from best to worst.",
+        "enum": [
+          "ok",
+          "info",
+          "warning",
+          "error"
+        ]
       },
       "ErrorBody": {
         "type": "object",

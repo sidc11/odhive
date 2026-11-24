@@ -1,11 +1,12 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Job, PythonList, SourceEntry } from '../lib/api'
 import { ApiClient } from '../lib/api/client'
+import { EnvironmentStore } from '../lib/environment.svelte'
 import { JobsStore } from '../lib/jobs.svelte'
 import { ProjectsStore } from '../lib/projects.svelte'
 import { ProjectWizard } from '../lib/wizard/wizard.svelte'
-import { project, routedFetch } from '../test-fixtures'
+import { envReport, project, routedFetch } from '../test-fixtures'
 import NewProject from './NewProject.svelte'
 
 const C19: SourceEntry = { id: 'odoo-19.0', edition: 'community', odoo_version: '19.0', path: '/src/odoo-19.0' }
@@ -22,8 +23,9 @@ function setupJob(state: Job['state']): Job {
   return { id: 9, kind: 'setup', project: 'shop', state, started_at: 1, steps: [], output: ['Installed 42 packages'], output_dropped: 0 } as Job
 }
 
-function renderWizard() {
+function renderWizard(environment = envReport()) {
   const { fetcher, calls } = routedFetch({
+    'GET /environment': [200, environment],
     'GET /projects': [200, []],
     'GET /sources': [200, [C19]],
     'GET /pythons?source=odoo-19.0': [200, PYTHONS],
@@ -33,7 +35,7 @@ function renderWizard() {
   const api = new ApiClient(fetcher)
   const jobs = new JobsStore()
   const wizard = new ProjectWizard(api, jobs, new ProjectsStore(api))
-  render(NewProject, { wizard })
+  render(NewProject, { wizard, environment: new EnvironmentStore(api) })
   return { calls, jobs, wizard }
 }
 
@@ -100,5 +102,24 @@ describe('NewProject', () => {
     await fireEvent.click(steps.getByRole('button', { name: /Name/ }))
     expect(stepHeading()).toHaveTextContent('Name')
     expect(steps.getByRole('button', { name: /Name/ })).toHaveAttribute('aria-current', 'step')
+  })
+
+  it('warns up front when the machine cannot run Odoo', async () => {
+    renderWizard(
+      envReport({
+        postgresql: { status: 'error', summary: 'PostgreSQL is not reachable' },
+        wkhtmltopdf: { status: 'warning', summary: 'Not installed' },
+      }),
+    )
+    const banner = await screen.findByRole('region', { name: 'This machine is not ready for Odoo yet' })
+    expect(within(banner).getByRole('listitem')).toHaveTextContent('PostgreSQL: PostgreSQL is not reachable')
+    expect(within(banner).getByRole('link', { name: 'See how to fix it' })).toHaveAttribute('href', '/environment')
+  })
+
+  it('shows no pre-check banner when nothing blocks', async () => {
+    const { calls } = renderWizard(envReport({ wkhtmltopdf: { status: 'warning' } }))
+    await vi.waitFor(() => expect(calls.some((c) => c.path === '/environment')).toBe(true))
+    await Promise.resolve()
+    expect(screen.queryByRole('region', { name: /not ready/ })).toBeNull()
   })
 })

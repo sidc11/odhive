@@ -55,6 +55,7 @@ async fn api_routes_need_a_signed_in_caller() {
         (Method::GET, "/api/v1/health"),
         (Method::GET, "/api/v1/sources"),
         (Method::GET, "/api/v1/projects/shop"),
+        (Method::GET, "/api/v1/environment"),
         (Method::POST, "/api/v1/sources"),
         (Method::POST, "/api/v1/auth/codes"),
         (Method::DELETE, "/api/v1/sources/odoo-19.0"),
