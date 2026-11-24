@@ -35,3 +35,19 @@ export function isUp(state: InstanceState): boolean {
 export function upCount(project: Project): number {
   return project.instances.filter((view) => isUp(instanceState(view))).length
 }
+
+/** Which of start, stop and restart make sense now (card and palette agree). */
+export interface AllowedActions {
+  start: boolean
+  stop: boolean
+  restart: boolean
+}
+
+export function allowedActions(project: Project, view: InstanceView): AllowedActions {
+  const state = instanceState(view)
+  return {
+    start: !isUp(state) && project.has_venv && !project.error,
+    stop: state === 'starting' || state === 'running' || state === 'external',
+    restart: state === 'starting' || state === 'running',
+  }
+}

@@ -4,7 +4,7 @@
   import { formatBytes, formatCpu, formatUptime } from '../format'
   import { routeHref, router } from '../router.svelte'
   import StatusDot from '../shell/StatusDot.svelte'
-  import { instanceState, isUp, STATE_LABELS } from '../status'
+  import { allowedActions, instanceState, isUp, STATE_LABELS } from '../status'
   import { exitSummary, gitSummary, odooUrl, portMove } from './card'
 
   let {
@@ -30,9 +30,10 @@
   const git = $derived(gitSummary(project.git))
   const exit = $derived(exitSummary(view.live?.status))
   const reachable = $derived((state === 'running' || state === 'external') && port !== null)
-  const canStart = $derived(!isUp(state) && project.has_venv && !project.error)
-  const canStop = $derived(state === 'starting' || state === 'running' || state === 'external')
-  const canRestart = $derived(state === 'starting' || state === 'running')
+  const allowed = $derived(allowedActions(project, view))
+  const canStart = $derived(allowed.start)
+  const canStop = $derived(allowed.stop)
+  const canRestart = $derived(allowed.restart)
   const headingId = $derived(`card-${project.name}-${view.id}`)
 
   const button =
