@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte'
+  import { entryCount, rowsText, selectedRowIds } from './copy'
   import { compileSearch, LEVEL_CHIPS, parseLoggers, rowFilter, rowMatcher, type LevelChip } from './filter'
   import { LogLines } from './lines'
   import LogRowView from './LogRowView.svelte'
@@ -53,6 +54,8 @@
   /** Row id of the current search match. */
   let current: number | null = $state(null)
   let matchCount = $state(0)
+  /** Rows the text selection in the log touches (by id), if any. */
+  let selected: { from: number; to: number } | null = $state(null)
 
   const search = $derived(compileSearch(appliedQuery, { regex, caseSensitive }))
   const pattern = $derived(search.ok ? search.pattern : null)
@@ -169,6 +172,42 @@
       return false
     }
   }
+
+  /** Rows on screen (none of the overscan). */
+  function onScreen(): LogRow[] {
+    // A hair less than the viewport: a row starting at the bottom edge isn't on screen.
+    const { start, end } = lines.layout.range(scrollTop / lineHeight, Math.max(viewport / lineHeight - 0.01, 0))
+    return lines.items.slice(start, end)
+  }
+
+  /** Copies whole entries as log text; resolves to how many, or null if it failed. */
+  async function copyRows(rows: LogRow[]): Promise<number | null> {
+    try {
+      await navigator.clipboard.writeText(rowsText(rows))
+      return entryCount(rows)
+    } catch {
+      return null
+    }
+  }
+
+  function copyVisible(): Promise<number | null> {
+    return copyRows(onScreen())
+  }
+
+  function copySelection(): Promise<number | null> {
+    return copyRows(selected ? lines.between(selected.from, selected.to) : [])
+  }
+
+  // Track the selection in the log; selecting pauses follow, so new rows
+  // don't scroll the selected ones away.
+  $effect(() => {
+    const onselectionchange = (): void => {
+      selected = selectedRowIds(document.getSelection(), scroller)
+      if (selected) following = false
+    }
+    document.addEventListener('selectionchange', onselectionchange)
+    return () => document.removeEventListener('selectionchange', onselectionchange)
+  })
 
   /** Scrolls row `id` to the middle of the viewport (pausing follow), unfolding it. */
   function reveal(id: number): void {
@@ -299,6 +338,10 @@
   current={currentPosition}
   onnext={() => goToMatch(true)}
   onprev={() => goToMatch(false)}
+  canCopyVisible={!empty}
+  canCopySelection={selected !== null}
+  oncopyvisible={copyVisible}
+  oncopyselection={copySelection}
 />
 <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-line bg-surface-raised">
   <!-- Focusable so the keyboard can scroll it. -->
@@ -313,7 +356,7 @@
     {onscroll}
     {onwheel}
   >
-    <span bind:this={probe} class="pointer-events-none invisible absolute block" aria-hidden="true">0</span>
+    <span bind:this={probe} class="pointer-events-none invisible absolute block select-none" aria-hidden="true">0</span>
     <div class="relative w-max min-w-full" style:height={`${totalHeight}px`}>
       <div style:transform={`translateY(${offsetTop}px)`}>
         {#each visible as row (row.id)}

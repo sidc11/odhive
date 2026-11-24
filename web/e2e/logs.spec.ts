@@ -169,3 +169,67 @@ test('tracebacks fold, copy exactly and open file:line in the editor', async ({ 
     await client.put(SETTINGS, saved.settings)
   }
 })
+
+test('log text selects and copies natively, and as whole entries', async ({ page, context, signIn, request, e2e }) => {
+  const client = api(request, e2e)
+  const saved = (await (await client.get(SETTINGS)).json()) as { settings: Record<string, unknown> }
+  const put = await client.put(SETTINGS, { ...saved.settings, extra_args: ['--simulate', 'traceback'] })
+  expect(put.status(), await put.text()).toBe(200)
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+
+  try {
+    await signIn()
+    await page.goto('/projects/shop/instances/main')
+    const log = page.getByRole('region', { name: 'Log of shop/main' })
+    const start = await client.post('/api/v1/projects/shop/instances/main/start')
+    expect(start.status(), await start.text()).toBe(200)
+    const folded = log.locator('[data-folded]')
+    await expect(folded).toBeVisible({ timeout: 30_000 })
+    const copySelection = page.getByRole('button', { name: 'Copy selection' })
+    await expect(copySelection).toBeDisabled()
+    await expect(page.getByRole('button', { name: /Jump to latest/ })).toBeHidden()
+
+    // Drag from the start of the first row to the end of the folded traceback.
+    const first = log.locator('[data-row-id]').first()
+    const from = await first.boundingBox()
+    const to = await folded.boundingBox()
+    if (!from || !to) throw new Error('rows not laid out')
+    await page.mouse.move(from.x + 2, from.y + from.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(to.x + to.width - 2, to.y + to.height / 2, { steps: 8 })
+    await page.mouse.up()
+    const rows = await log.locator('[data-row-id]').evaluateAll((elements) => {
+      const selection = document.getSelection()
+      return elements.filter((element) => selection?.containsNode(element, true)).length
+    })
+    expect(rows).toBeGreaterThan(1)
+    // Selecting pauses follow, so new lines don't scroll the selection away.
+    await expect(page.getByRole('button', { name: /Jump to latest/ })).toBeVisible()
+
+    // Ctrl/Cmd+C copies what is shown, one row per line, without the buttons.
+    await page.keyboard.press('ControlOrMeta+C')
+    const shown = await page.evaluate(() => navigator.clipboard.readText())
+    expect(shown.trim().split('\n')).toHaveLength(rows)
+    expect(shown).toContain('Exception during request handling. · ValueError: Expected singleton')
+    expect(shown).not.toContain('Copy traceback')
+
+    // Copy selection: the same entries as Odoo logged them, tracebacks in full.
+    await expect(copySelection).toBeEnabled()
+    await copySelection.click()
+    await expect(page.getByRole('button', { name: /^Copied \d+ entr/ })).toBeVisible()
+    const whole = await page.evaluate(() => navigator.clipboard.readText())
+    // OdHive's own marker lines have no header and stay as they are.
+    expect(whole).toMatch(/^----- odhive: started pid \d+ -----$/m)
+    expect(whole).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} \d+ INFO \? odoo: Odoo version /m)
+    expect(whole).toMatch(/ ERROR \S+ \S+: Exception during request handling\.\nTraceback \(most recent call last\):\n/)
+    expect(whole.endsWith('ValueError: Expected singleton: res.partner(1, 2)')).toBe(true)
+
+    // Copy visible: every entry on screen.
+    await page.getByRole('button', { name: 'Copy visible' }).click()
+    const visible = await page.evaluate(() => navigator.clipboard.readText())
+    expect(visible).toContain(whole.split('\n')[0] ?? '')
+  } finally {
+    await client.post('/api/v1/projects/shop/instances/main/stop')
+    await client.put(SETTINGS, saved.settings)
+  }
+})

@@ -89,6 +89,15 @@ describe('LogLines', () => {
     expect(lines.indexOfId(99)).toBe(3)
   })
 
+  it('gives the shown rows between two ids', () => {
+    const { connection, lines } = setup()
+    connection.receive(msg.logs(records(1, 6)))
+    lines.setFilter((row) => row.id !== 3)
+    expect(lines.between(2, 5).map((row) => row.id)).toEqual([2, 4, 5])
+    expect(lines.between(3, 3)).toEqual([])
+    expect(lines.between(5, 99).map((row) => row.id)).toEqual([5, 6])
+  })
+
   it('folds tracebacks until unfolded, across filters and drops', () => {
     const { connection, lines } = setup(10)
     const trace = record(2, 'boom\nTraceback (most recent call last):\nValueError: x', { exceptions: ['ValueError: x'] })
