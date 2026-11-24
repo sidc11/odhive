@@ -6,12 +6,16 @@ import svelteConfig from './svelte.config.js'
 
 export default ts.config(
   // src/lib/api/schema.d.ts is generated from the OpenAPI document (pnpm api:gen).
-  { ignores: ['dist/', 'node_modules/', 'src/lib/api/schema.d.ts'] },
+  { ignores: ['dist/', 'node_modules/', 'test-results/', 'playwright-report/', 'src/lib/api/schema.d.ts'] },
   js.configs.recommended,
   ...ts.configs.strict,
   ...svelte.configs.recommended,
   {
     languageOptions: { globals: { ...globals.browser } },
+  },
+  {
+    files: ['e2e/**/*.ts', '*.config.ts'],
+    languageOptions: { globals: { ...globals.node } },
   },
   {
     files: ['**/*.svelte', '**/*.svelte.ts'],

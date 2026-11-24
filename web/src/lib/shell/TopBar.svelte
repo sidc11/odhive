@@ -73,7 +73,6 @@
   <button
     type="button"
     class="inline-flex size-9 items-center justify-center gap-2 rounded-md text-sm text-fg-muted hover:bg-surface-sunken hover:text-fg sm:w-auto sm:border sm:border-line sm:px-2.5"
-    aria-label="Command palette"
     aria-haspopup="dialog"
     aria-keyshortcuts="Control+K Meta+K"
     title="Command palette ({shortcut})"
@@ -82,6 +81,8 @@
     <svg viewBox="0 0 24 24" class="size-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"
       ><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg
     >
+    <!-- The name includes the visible shortcut (WCAG 2.5.3, label in name). -->
+    <span class="sr-only">Command palette</span>
     <kbd class="hidden font-sans text-xs sm:inline">{shortcut}</kbd>
   </button>
   <ThemeToggle />

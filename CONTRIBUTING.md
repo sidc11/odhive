@@ -44,6 +44,18 @@ pnpm test
 pnpm build
 ```
 
+End-to-end tests (Playwright) drive the real `odhive` binary with the fake
+`odoo-bin` in a private temporary HOME: they sign in through a one-time URL,
+create a project with the wizard, start and stop instances, run axe on the
+dashboard and wizard, and check layouts at 360/768/1440 px. Build the UI and
+the binary first (set `ODHIVE_BIN` to use another binary):
+
+```sh
+pnpm build && cargo build -p odhive
+pnpm exec playwright install chromium   # once
+pnpm e2e
+```
+
 API types: the web UI's TypeScript types (`web/src/lib/api/schema.d.ts`) are
 generated from the server's OpenAPI document (`web/src/lib/api/openapi.json`).
 After changing an API route or a type it returns, regenerate both and commit
