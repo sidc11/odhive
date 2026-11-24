@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright'
 import { expect, test as base, type Page } from '@playwright/test'
 import { readState, type E2eState } from './env'
 
@@ -38,3 +39,11 @@ export function card(page: Page, project: string, instance = 'main') {
   return page.getByRole('article', { name: `${project} / ${instance}`, exact: true })
 }
 
+
+/** Serious and critical WCAG 2.1 AA violations axe finds on the page. */
+export async function seriousViolations(page: Page) {
+  const result = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze()
+  return result.violations
+    .filter((v) => v.impact === 'serious' || v.impact === 'critical')
+    .map((v) => ({ id: v.id, help: v.help, targets: v.nodes.map((n) => n.target.join(' ')) }))
+}
