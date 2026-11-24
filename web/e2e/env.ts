@@ -15,6 +15,8 @@ export const stateFile = join(here, '.state.json')
 
 export interface E2eState {
   home: string
+  /** Where the fake editor writes the arguments it was started with. */
+  editorLog: string
   baseURL: string
   /** Bearer token of the service (for one-time sign-in codes). */
   token: string
@@ -103,6 +105,26 @@ export async function serve(home: string, port: number): Promise<{ child: ChildP
   child.stdout?.resume()
   child.stderr?.resume()
   return { child, baseURL }
+}
+
+/** Config folder of `odhive` (the same as the data folder on macOS). */
+export function configDir(home: string): string {
+  return process.platform === 'darwin' ? dataDir(home) : join(home, '.config/odhive')
+}
+
+/**
+ * Configures a fake editor that writes its arguments (one per line) to the
+ * returned file, so open-in-editor can be checked without a real editor.
+ */
+export function fakeEditor(home: string): string {
+  const log = join(home, 'editor-args.txt')
+  const script = join(home, 'fake-editor')
+  writeFileSync(script, `#!/bin/sh\nprintf '%s\\n' "$@" > '${log}'\n`)
+  chmodSync(script, 0o755)
+  // A top-level key goes before the first table.
+  const config = join(configDir(home), 'config.toml')
+  writeFileSync(config, `editor = [${JSON.stringify(script)}, "{file}:{line}"]\n${readFileSync(config, 'utf8')}`)
+  return log
 }
 
 export function dataDir(home: string): string {

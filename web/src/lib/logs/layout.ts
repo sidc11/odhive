@@ -45,6 +45,14 @@ export class RowLayout {
     }
   }
 
+  /** Sets row `index` to `lines` lines high; returns the change in lines. */
+  resize(index: number, lines: number): number {
+    if (index < 0 || index >= this.length) return 0
+    const delta = Math.max(1, lines) - this.linesOf(index)
+    if (delta !== 0) for (let i = index + 1; i < this.offsets.length; i += 1) this.offsets[i] = this.at(i) + delta
+    return delta
+  }
+
   /** Removes the first `count` rows; returns the lines they took. */
   dropFront(count: number): number {
     const n = Math.min(Math.max(count, 0), this.length)

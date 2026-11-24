@@ -7,6 +7,7 @@
 //! request without a CORS preflight, which OdHive never answers. The `Origin`
 //! check, body and time limits are applied app-wide ([`crate::security`]).
 
+pub mod editor;
 pub mod environment;
 pub mod error;
 pub mod instances;
@@ -67,6 +68,7 @@ fn api_router() -> OpenApiRouter<Service> {
         .routes(routes!(projects::get, projects::remove))
         .routes(routes!(projects::schema))
         .routes(routes!(projects::setup))
+        .routes(routes!(editor::open))
         .routes(routes!(pythons::list))
         .routes(routes!(environment::check))
         .routes(routes!(jobs::list))

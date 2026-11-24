@@ -191,6 +191,12 @@ pub struct GlobalConfig {
     /// Index of known projects.
     #[serde(default)]
     pub projects: Vec<ProjectEntry>,
+    /// Command that opens a file at a line, one argv entry each, with
+    /// `{file}` and `{line}` placeholders (the file is appended when
+    /// `{file}` is missing). Unset: `$VISUAL`, `$EDITOR`, then `code`; see
+    /// [`crate::editor`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<Vec<String>>,
 }
 
 impl GlobalConfig {
@@ -202,6 +208,7 @@ impl GlobalConfig {
             workspace_root,
             sources: Vec::new(),
             projects: Vec::new(),
+            editor: None,
         }
     }
 

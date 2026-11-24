@@ -47,6 +47,11 @@ def log(level, logger, message, db="?"):
     sys.stdout.flush()
 
 
+# Line of the `sys.exit(main(...))` call at the end of this file.
+with open(__file__, encoding="utf-8") as _self:
+    MAIN_CALL_LINE = next(n for n, line in enumerate(_self, 1) if line.startswith("    sys.exit(main("))
+
+
 def traceback_lines(exc_line, frames):
     lines = ["Traceback (most recent call last):"]
     for path, lineno, func, code in frames:
@@ -190,6 +195,8 @@ def main(argv):
         tb = traceback_lines(
             "ValueError: Expected singleton: res.partner(1, 2)",
             [
+                # This file: a real path inside the Odoo source, for file:line links.
+                (os.path.realpath(__file__), MAIN_CALL_LINE, "<module>", "sys.exit(main(sys.argv[1:]))"),
                 ("/opt/odoo/odoo/http.py", 2104, "_serve_db", "return service_model.retrying(self._serve_ir_http, self.env)"),
                 ("/opt/custom/my_module/models/sale_order.py", 57, "action_confirm", "partner.ensure_one()"),
             ],

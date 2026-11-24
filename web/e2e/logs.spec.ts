@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import type { APIRequestContext } from '@playwright/test'
 import type { E2eState } from './env'
 import { expect, seriousViolations, test } from './fixtures'
@@ -102,6 +104,66 @@ test('the log viewer streams entries as text and follows the end', async ({ page
       await page.emulateMedia({ colorScheme: scheme })
       expect(await seriousViolations(page), `search, ${scheme}`).toEqual([])
     }
+  } finally {
+    await client.post('/api/v1/projects/shop/instances/main/stop')
+    await client.put(SETTINGS, saved.settings)
+  }
+})
+
+test('tracebacks fold, copy exactly and open file:line in the editor', async ({ page, context, signIn, request, e2e }) => {
+  const client = api(request, e2e)
+  const saved = (await (await client.get(SETTINGS)).json()) as { settings: Record<string, unknown> }
+  const put = await client.put(SETTINGS, { ...saved.settings, extra_args: ['--simulate', 'traceback'] })
+  expect(put.status(), await put.text()).toBe(200)
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  rmSync(e2e.editorLog, { force: true })
+
+  try {
+    await signIn()
+    await page.goto('/projects/shop/instances/main')
+    const log = page.getByRole('region', { name: 'Log of shop/main' })
+    const start = await client.post('/api/v1/projects/shop/instances/main/start')
+    expect(start.status(), await start.text()).toBe(200)
+
+    // Folded to one line: the message, the exception and what is hidden.
+    const row = log.locator('[data-folded]')
+    await expect(row).toContainText(
+      'Exception during request handling. · ValueError: Expected singleton: res.partner(1, 2) · 8 more lines',
+      { timeout: 30_000 },
+    )
+    await expect(log.getByText('partner.ensure_one()')).toHaveCount(0)
+
+    // Copy traceback: exactly the logged traceback.
+    await row.getByRole('button', { name: 'Copy traceback' }).click()
+    await expect(row.getByRole('button', { name: 'Copied' })).toBeVisible()
+    const copied = await page.evaluate(() => navigator.clipboard.readText())
+    expect(copied.split('\n')[0]).toBe('Traceback (most recent call last):')
+    expect(copied.split('\n')).toHaveLength(8)
+    expect(copied).toMatch(/File ".*\/odoo-bin", line \d+, in <module>\n {4}sys\.exit\(main\(sys\.argv\[1:\]\)\)\n/)
+    expect(copied.endsWith('\nValueError: Expected singleton: res.partner(1, 2)')).toBe(true)
+
+    // Unfolded: every frame, paths as links.
+    await log.getByRole('button', { name: 'Unfold traceback' }).click()
+    await expect(log.getByText('partner.ensure_one()', { exact: false })).toBeVisible()
+    const oddoBin = log.locator('button[data-path$="/odoo-src/odoo-bin"]')
+    await expect(oddoBin).toBeVisible()
+    for (const scheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: scheme })
+      expect(await seriousViolations(page), `traceback, ${scheme}`).toEqual([])
+    }
+
+    // A file of the Odoo source opens in the (fake) editor at its line.
+    const line = await oddoBin.getAttribute('data-line')
+    await oddoBin.click()
+    await expect.poll(() => (existsSync(e2e.editorLog) ? readFileSync(e2e.editorLog, 'utf8') : '')).toBe(
+      `${join(e2e.home, 'odoo-src/odoo-bin')}:${line}\n`,
+    )
+    // A path outside the project and its sources is refused.
+    rmSync(e2e.editorLog)
+    await log.locator('button[data-path="/opt/odoo/odoo/http.py"]').click()
+    const toast = page.getByRole('alert').filter({ hasText: 'Could not open http.py:2104' })
+    await expect(toast).toContainText('outside the project and its Odoo sources')
+    expect(existsSync(e2e.editorLog)).toBe(false)
   } finally {
     await client.post('/api/v1/projects/shop/instances/main/stop')
     await client.put(SETTINGS, saved.settings)

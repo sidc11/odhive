@@ -88,4 +88,31 @@ describe('LogLines', () => {
     expect(lines.indexOfId(5)).toBe(2)
     expect(lines.indexOfId(99)).toBe(3)
   })
+
+  it('folds tracebacks until unfolded, across filters and drops', () => {
+    const { connection, lines } = setup(10)
+    const trace = record(2, 'boom\nTraceback (most recent call last):\nValueError: x', { exceptions: ['ValueError: x'] })
+    connection.receive(msg.logs([record(1), trace, record(3, 'a\nb')]))
+    lines.sync()
+    // Folded: one line; plain multi-line rows are never folded.
+    expect(lines.layout.total).toBe(4)
+    expect(lines.isExpanded(2)).toBe(false)
+    expect(lines.setExpanded(2, true)).toBe(2)
+    expect(lines.setExpanded(2, true)).toBe(0)
+    expect(lines.setExpanded(3, true)).toBe(0)
+    expect(lines.setExpanded(99, true)).toBe(0)
+    expect(lines.layout.total).toBe(6)
+    expect(lines.layout.offsetOf(2)).toBe(4)
+    // Kept when the filter rebuilds the view.
+    lines.setFilter(() => true)
+    expect(lines.layout.total).toBe(6)
+    expect(lines.setExpanded(2, false)).toBe(-2)
+    expect(lines.layout.total).toBe(4)
+    lines.setExpanded(2, true)
+    // Forgotten once the stream drops the row.
+    connection.receive(msg.logs(records(4, 12)))
+    lines.sync()
+    expect(lines.items[0]?.id).toBeGreaterThan(2)
+    expect(lines.isExpanded(2)).toBe(false)
+  })
 })

@@ -344,6 +344,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{name}/open-file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Opens a file of the project at a line in the configured editor
+         *     (`editor` in config.toml, else `$VISUAL`/`$EDITOR` when they name a
+         *     graphical editor, else `code`). Returns once the editor has started.
+         */
+        post: operations["open_file"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{name}/schema": {
         parameters: {
             query?: never;
@@ -1386,6 +1407,22 @@ export interface components {
             metavar?: string | null;
             /** @description Value must be masked everywhere. */
             secret: boolean;
+        };
+        /** @description A source location to open. */
+        OpenFile: {
+            /**
+             * Format: int32
+             * @description Line number, from 1.
+             * @example 42
+             */
+            line: number;
+            /**
+             * @description Absolute path, as logged. It must be a file inside the project
+             *     folder, its addons folders or its Odoo sources (after resolving
+             *     symlinks).
+             * @example /home/me/OdHive/projects/shop/addons/sale_x/models/order.py
+             */
+            path: string;
         };
         /** @description Value type of an option. */
         OptionKind: {
@@ -2626,6 +2663,67 @@ export interface operations {
             };
             /** @description A stop is under way */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    open_file: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OpenFile"];
+            };
+        };
+        responses: {
+            /** @description The editor was started */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The path is outside the project and its sources */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unknown project, or no such file */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No editor is configured or found */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not an absolute path, or a bad line number */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
