@@ -70,6 +70,17 @@ test('the config builder edits options from the schema and keeps secrets hidden'
     await expect(page.getByRole('button', { name: 'Replace admin_passwd' })).toBeVisible()
     await expect(page.getByLabel('admin_passwd', { exact: true })).toHaveCount(0)
     expect(await page.content()).not.toContain(SECRET)
+
+    // Reveal shows the saved value in its field only (the preview stays masked); Hide removes it.
+    await page.getByRole('button', { name: 'Reveal admin_passwd' }).click()
+    const field = page.locator('[data-option="admin_passwd"]')
+    await expect(field.getByText(SECRET)).toBeVisible()
+    const preview = page.getByRole('region', { name: 'odoo.conf preview' })
+    await expect(preview).toContainText('admin_passwd = ********')
+    await expect(preview).not.toContainText(SECRET)
+    await page.getByRole('button', { name: 'Hide admin_passwd' }).click()
+    expect(await page.content()).not.toContain(SECRET)
+
     const read = await (await client.get(OPTIONS)).text()
     expect(read).not.toContain(SECRET)
     expect(JSON.parse(read)).toMatchObject({

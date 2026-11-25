@@ -81,19 +81,22 @@ describe('ApiClient', () => {
     expect(calls[1]).toMatchObject({ method: 'PUT', headers: { 'X-OdHive': '1' }, body })
   })
 
-  it('previews and imports project options with POST', async () => {
+  it('previews, imports and reveals project options with POST', async () => {
     const preview = { text: 'a', saved: 'b' }
     const imported = { options: {}, secrets: {}, warnings: [] }
     const { fetcher, calls } = routedFetch({
       'POST /projects/shop/options/preview': [200, preview],
       'POST /projects/shop/options/import': [200, imported],
+      'POST /projects/shop/options/reveal': [200, { key: 'admin_passwd', value: 'pw' }],
     })
     const api = new ApiClient(fetcher)
     expect(await api.previewProjectOptions('shop', { options: {} })).toEqual(preview)
     expect(await api.importProjectOptions('shop', { text: '[options]' })).toEqual(imported)
+    expect(await api.revealProjectSecret('shop', { key: 'admin_passwd' })).toEqual({ key: 'admin_passwd', value: 'pw' })
     expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([
       ['POST', '/projects/shop/options/preview', { options: {} }],
       ['POST', '/projects/shop/options/import', { text: '[options]' }],
+      ['POST', '/projects/shop/options/reveal', { key: 'admin_passwd' }],
     ])
   })
 

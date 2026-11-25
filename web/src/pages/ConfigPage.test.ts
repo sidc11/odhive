@@ -19,6 +19,7 @@ function renderPage(put: [number, unknown?] = [200, projectOptions()]) {
     'PUT /projects/shop/options': put,
     'POST /projects/shop/options/preview': [200, PREVIEW],
     'POST /projects/shop/options/import': [200, IMPORTED],
+    'POST /projects/shop/options/reveal': [200, { key: 'admin_passwd', value: 's3cret-<b>' }],
   })
   render(ConfigPage, { project: 'shop', api: new ApiClient(fetcher) })
   return { calls }
@@ -72,6 +73,44 @@ describe('ConfigPage', () => {
     expect(field).toHaveFocus()
     // A secret without a saved value is a password field right away.
     expect(screen.getByLabelText('db_password')).toHaveAttribute('type', 'password')
+  })
+
+  it('reveals a saved secret only on request, as text, and hides it again', async () => {
+    const { calls } = renderPage()
+    await loaded()
+    const field = document.querySelector('[data-option="admin_passwd"]') as HTMLElement
+    expect(field).not.toHaveTextContent('s3cret')
+    expect(calls.some((c) => c.path.endsWith('/reveal'))).toBe(false)
+    const reveal = screen.getByRole('button', { name: 'Reveal admin_passwd' })
+    expect(reveal).toHaveAttribute('aria-pressed', 'false')
+    await fireEvent.click(reveal)
+    const hide = await screen.findByRole('button', { name: 'Hide admin_passwd' })
+    expect(hide).toHaveAttribute('aria-pressed', 'true')
+    expect(within(field).getByText('s3cret-<b>')).toBeInTheDocument()
+    expect(field.querySelector('b')).toBeNull()
+    expect(calls.filter((c) => c.path.endsWith('/reveal')).map((c) => c.body)).toEqual([{ key: 'admin_passwd' }])
+    // The revealed value never goes into a save or preview body.
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    await fireEvent.click(hide)
+    expect(field).not.toHaveTextContent('s3cret')
+    await fireEvent.click(screen.getByRole('button', { name: 'Reveal admin_passwd' }))
+    await screen.findByText('s3cret-<b>')
+    await fireEvent.click(screen.getByRole('button', { name: 'Replace admin_passwd' }))
+    expect(field).not.toHaveTextContent('s3cret')
+  })
+
+  it('shows a typed secret as text on request', async () => {
+    renderPage()
+    await loaded()
+    const field = screen.getByLabelText('db_password')
+    await fireEvent.input(field, { target: { value: 'typed' } })
+    const show = screen.getByRole('button', { name: 'Show typed db_password' })
+    expect(show).toHaveAttribute('aria-pressed', 'false')
+    await fireEvent.click(show)
+    expect(field).toHaveAttribute('type', 'text')
+    expect(field).toHaveValue('typed')
+    await fireEvent.click(screen.getByRole('button', { name: 'Hide typed db_password' }))
+    expect(field).toHaveAttribute('type', 'password')
   })
 
   it('shows problems while typing and resets to the default', async () => {

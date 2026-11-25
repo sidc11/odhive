@@ -3,14 +3,17 @@
 //!
 //! Secret values (`admin_passwd`, `db_password`, …) never leave the service
 //! here: a read only says which secrets are set, a preview masks them, and a
-//! write changes a secret only when it is named in `secrets`. The one
-//! exception is an import, which answers with the secrets of the file the
-//! browser just sent.
+//! write changes a secret only when it is named in `secrets`. Two
+//! exceptions: a reveal answers with one saved secret the user asked to
+//! see (`POST`, so it needs the UI's Origin and is never cached), and an
+//! import answers with the secrets of the file the browser just sent.
 
 use std::collections::BTreeMap;
 
 use axum::Json;
 use axum::extract::State;
+use axum::http::{HeaderValue, header};
+use axum::response::{IntoResponse, Response};
 use odhive_core::conf::{
     self, CONF_FILE, ConfContext, ConfError, GENERATED_KEYS, INSTANCE_KEYS, ImportedConf,
     OdooOptions,
@@ -273,6 +276,73 @@ pub(super) async fn preview(
     }))
 }
 
+/// A secret to reveal.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RevealSecret {
+    /// The secret's option key, e.g. `admin_passwd`.
+    #[schema(example = "admin_passwd")]
+    pub key: String,
+}
+
+/// A saved secret's value, shown because the user asked for it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RevealedSecret {
+    pub key: String,
+    pub value: String,
+}
+
+impl std::fmt::Debug for RevealedSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RevealedSecret")
+            .field("key", &self.key)
+            .field("value", &conf::MASK)
+            .finish()
+    }
+}
+
+/// Looks up the saved value of secret `key`.
+fn reveal_secret(options: &OdooOptions, key: &str) -> ApiResult<RevealedSecret> {
+    if !conf::is_secret(key) {
+        return Err(ApiError::invalid(
+            "not_secret",
+            format!("{key} is not a secret; read it from the options"),
+        ));
+    }
+    let value = options.get(key).ok_or_else(|| {
+        ApiError::not_found("secret_not_set", format!("{key} has no saved value"))
+    })?;
+    Ok(RevealedSecret {
+        key: key.to_owned(),
+        value: value.to_owned(),
+    })
+}
+
+/// Answers with the saved value of one secret option, for the config
+/// builder's reveal toggle. The answer is marked `Cache-Control: no-store`;
+/// nothing else in the API returns saved secrets.
+#[utoipa::path(operation_id = "reveal_project_secret", post, path = "/projects/{name}/options/reveal", tag = "projects",
+    request_body = RevealSecret,
+    params(("name" = String, Path, description = "Project name")),
+    responses(
+        (status = OK, description = "The secret", body = RevealedSecret),
+        (status = BAD_REQUEST, description = "Invalid request", body = ErrorBody),
+        (status = NOT_FOUND, description = "No such project, or the secret has no saved value", body = ErrorBody),
+        (status = UNPROCESSABLE_ENTITY, description = "The key is not a secret", body = ErrorBody),
+    ))]
+pub(super) async fn reveal(
+    State(svc): State<Service>,
+    Params(name): Params<String>,
+    Body(req): Body<RevealSecret>,
+) -> ApiResult<Response> {
+    let (_, project) = svc.project(&name)?;
+    let secret = reveal_secret(&project.config.odoo_options, &req.key)?;
+    let mut resp = Json(secret).into_response();
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(resp)
+}
+
 /// An existing `odoo.conf` to import.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -471,5 +541,22 @@ mod tests {
             secrets: BTreeMap::new(),
         };
         assert_eq!(code(apply(&none, &s, u)), "too_many_options");
+    }
+
+    #[test]
+    fn reveal_answers_only_saved_secrets() {
+        let saved = opts(&[("admin_passwd", "hunter2"), ("log_level", "debug")]);
+        let shown = reveal_secret(&saved, "admin_passwd").expect("revealed");
+        assert_eq!(shown.value, "hunter2");
+        assert!(!format!("{shown:?}").contains("hunter2"));
+        for (key, expected) in [
+            ("log_level", "not_secret"),
+            ("x_custom", "not_secret"),
+            ("db_password", "secret_not_set"),
+        ] {
+            let e = reveal_secret(&saved, key).expect_err("refused");
+            assert_eq!(e.code, expected, "{key}");
+            assert!(!e.message.contains("hunter2"));
+        }
     }
 }

@@ -827,6 +827,38 @@ async fn project_options_are_checked_saved_and_secrets_never_returned() {
         assert!(!shown.to_string().contains("s3cret-value"), "{shown}");
     }
 
+    // A reveal answers with one saved secret, never cached.
+    let reveal = "/api/v1/projects/shop/options/reveal";
+    let resp = api
+        .respond(Method::POST, reveal, Some(json!({ "key": "admin_passwd" })))
+        .await;
+    assert_eq!(
+        resp.headers()
+            .get(header::CACHE_CONTROL)
+            .map(|v| v.as_bytes()),
+        Some(&b"no-store"[..])
+    );
+    let (status, body) = split(resp).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({ "key": "admin_passwd", "value": "s3cret-value" })
+    );
+    for (key, status, error) in [
+        ("db_password", StatusCode::NOT_FOUND, "secret_not_set"),
+        ("log_level", StatusCode::UNPROCESSABLE_ENTITY, "not_secret"),
+    ] {
+        let (s, body) = api.post(reveal, Some(json!({ "key": key }))).await;
+        assert_eq!((s, body["error"].as_str()), (status, Some(error)), "{body}");
+    }
+    let (status, _) = api
+        .post(
+            "/api/v1/projects/nope/options/reveal",
+            Some(json!({ "key": "admin_passwd" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
     // A secret not named in the update keeps its value; null removes it.
     let (_, body) = api
         .put(url, json!({ "options": { "list_db": "False" } }))
