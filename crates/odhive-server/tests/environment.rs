@@ -24,12 +24,7 @@ fn isolated() -> ServiceOptions {
         env: CheckOptions {
             path_var: None,
             discover: discover.clone(),
-            postgres: PgTarget {
-                socket_dirs: Vec::new(),
-                host: None,
-                port: PgTarget::DEFAULT_PORT,
-                user: None,
-            },
+            postgres: PgTarget::nowhere(),
             requirements: Vec::new(),
             package_manager: Some(PackageManager::Pacman),
             timeout: Duration::from_secs(5),

@@ -4,6 +4,7 @@
 pub mod autofix;
 pub mod conf;
 pub mod config;
+pub mod db;
 pub mod editor;
 pub mod envcheck;
 pub mod events;
@@ -28,6 +29,8 @@ pub mod setup;
 pub mod sources;
 pub mod supervisor;
 pub mod syslib;
+#[cfg(test)]
+pub(crate) mod testpg;
 pub mod token;
 pub mod usage;
 pub mod venv;

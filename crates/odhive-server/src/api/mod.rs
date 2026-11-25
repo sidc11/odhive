@@ -7,6 +7,7 @@
 //! request without a CORS preflight, which OdHive never answers. The `Origin`
 //! check, body and time limits are applied app-wide ([`crate::security`]).
 
+pub mod databases;
 pub mod editor;
 pub mod environment;
 pub mod error;
@@ -49,6 +50,7 @@ pub const MUTATION_HEADER: &str = "x-odhive";
         (name = "sources", description = "Registered Odoo source trees"),
         (name = "projects", description = "Projects and their instances"),
         (name = "instances", description = "Running Odoo instances"),
+        (name = "databases", description = "Odoo databases and the PostgreSQL server they live on"),
         (name = "jobs", description = "Background work: source clones and project setups"),
         (name = "service", description = "The OdHive service itself"),
     ),
@@ -76,6 +78,7 @@ fn api_router() -> OpenApiRouter<Service> {
         .routes(routes!(editor::open))
         .routes(routes!(pythons::list))
         .routes(routes!(environment::check))
+        .routes(routes!(databases::health))
         .routes(routes!(jobs::list))
         .routes(routes!(jobs::get))
         .routes(routes!(jobs::cancel))

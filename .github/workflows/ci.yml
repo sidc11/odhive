@@ -88,6 +88,10 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: test
         run: cargo nextest run --workspace --locked
+        env:
+          # The runner image ships PostgreSQL server binaries: tests that
+          # start a throwaway server must not skip there.
+          ODHIVE_REQUIRE_PG: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
       - name: build
         run: cargo build -p odhive --locked
       - name: package (UI must be embedded)
