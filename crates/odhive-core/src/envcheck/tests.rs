@@ -1,11 +1,11 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::*;
 use crate::python::{Origin, PyVersion};
+use crate::testpg::TempPg;
 
 fn v(major: u8) -> OdooVersion {
     OdooVersion::new(major, 0, false).expect("version")
@@ -35,12 +35,7 @@ fn empty_options() -> CheckOptions {
             explicit: Vec::new(),
             timeout: Duration::from_secs(5),
         },
-        postgres: PgTarget {
-            socket_dirs: Vec::new(),
-            host: None,
-            port: PgTarget::DEFAULT_PORT,
-            user: None,
-        },
+        postgres: PgTarget::nowhere(),
         requirements: Vec::new(),
         package_manager: Some(PackageManager::Apt),
         timeout: Duration::from_secs(5),
@@ -246,101 +241,6 @@ async fn tools_are_found_and_judged_by_their_version_output() {
     assert!(wk.summary.contains("needs 0.12"), "{wk:?}");
 }
 
-/// A throwaway PostgreSQL server listening only on a Unix socket in a
-/// temporary folder. `None` (test skipped) when no server binaries exist.
-struct TempPg {
-    child: Child,
-    socket_dir: PathBuf,
-    _dir: tempfile::TempDir,
-}
-
-impl TempPg {
-    fn bin_dir() -> Option<PathBuf> {
-        let path = std::env::var_os("PATH")?;
-        if let Some(initdb) = crate::python::find_executable(&path, "initdb") {
-            return initdb.parent().map(Path::to_path_buf);
-        }
-        // Debian/Ubuntu keep the server off PATH.
-        let mut dirs: Vec<PathBuf> = fs::read_dir("/usr/lib/postgresql")
-            .ok()?
-            .flatten()
-            .map(|e| e.path().join("bin"))
-            .filter(|b| b.join("initdb").is_file())
-            .collect();
-        dirs.sort();
-        dirs.pop()
-    }
-
-    fn start() -> Option<Self> {
-        let bin = Self::bin_dir()?;
-        let dir = tempfile::tempdir().expect("tempdir");
-        let data = dir.path().join("data");
-        let socket_dir = dir.path().join("sock");
-        fs::create_dir(&socket_dir).expect("mkdir");
-        let out = Command::new(bin.join("initdb"))
-            .args(["-A", "trust", "-E", "UTF8", "--no-instructions", "-D"])
-            .arg(&data)
-            .output()
-            .expect("initdb");
-        assert!(out.status.success(), "initdb: {out:?}");
-        // `pw` must use a password; everyone else is trusted.
-        fs::write(
-            data.join("pg_hba.conf"),
-            "local all pw scram-sha-256\nlocal all all trust\n",
-        )
-        .expect("pg_hba");
-        let child = Command::new(bin.join("postgres"))
-            .arg("-D")
-            .arg(&data)
-            .arg("-k")
-            .arg(&socket_dir)
-            .args(["-c", "listen_addresses=", "-p", "5432"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("postgres");
-        let pg = Self {
-            child,
-            socket_dir,
-            _dir: dir,
-        };
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !pg.socket_dir.join(".s.PGSQL.5432").exists() {
-            assert!(Instant::now() < deadline, "postgres did not start");
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Some(pg)
-    }
-
-    fn target(&self, user: Option<&str>) -> PgTarget {
-        PgTarget {
-            socket_dirs: vec![self.socket_dir.clone()],
-            host: None,
-            port: 5432,
-            user: user.map(str::to_owned),
-        }
-    }
-
-    async fn sql(&self, sql: &str) {
-        let (client, conn) = tokio_postgres::Config::new()
-            .host_path(&self.socket_dir)
-            .port(5432)
-            .dbname("postgres")
-            .connect(tokio_postgres::NoTls)
-            .await
-            .expect("connect");
-        tokio::spawn(conn);
-        client.batch_execute(sql).await.expect("sql");
-    }
-}
-
-impl Drop for TempPg {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn postgres_is_checked_against_a_real_server() {
     let Some(pg) = TempPg::start() else {
@@ -431,9 +331,8 @@ async fn a_socket_without_a_server_is_unreachable() {
     drop(listener);
     let target = PgTarget {
         socket_dirs: vec![dir.path().to_path_buf(), dir.path().join("missing")],
-        host: None,
         port: 5432,
-        user: None,
+        ..PgTarget::nowhere()
     };
     let c = postgres::check(
         &target,

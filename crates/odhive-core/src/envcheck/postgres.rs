@@ -3,90 +3,27 @@
 //!
 //! Without `db_host`, Odoo (through libpq) connects over the Unix socket as
 //! the OS user. The check tries the usual socket folders, then TCP on
-//! `localhost`, and stops at the first server that answers. It never sends
-//! a password: a server that asks for one is reported as such.
+//! `localhost`, and stops at the first server that answers. It sends a
+//! password only when the target carries one (a project's `db_password`);
+//! a server that asks for one otherwise is reported as such.
 
 use std::error::Error as _;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
+use tokio_postgres::config::SslMode as PqSslMode;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, NoTls};
 
 use super::{Check, CheckId, Fix, Requirement, Status};
+use crate::db::{PgTarget, ServerFacts, SslMode};
 use crate::python::find_executable;
 use crate::syslib::PackageManager;
 
-/// Socket folders libpq builds use: Debian, Arch, Fedora (`/run/postgresql`,
-/// also as `/var/run/postgresql`) and Homebrew / upstream (`/tmp`).
-const SOCKET_DIRS: [&str; 3] = ["/run/postgresql", "/var/run/postgresql", "/tmp"];
-
 /// Database connected to; `template1` when it does not exist.
 const DATABASES: [&str; 2] = ["postgres", "template1"];
-
-/// Where and as whom to connect.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PgTarget {
-    /// Folders to look for the server's Unix socket in, tried first.
-    pub socket_dirs: Vec<PathBuf>,
-    /// TCP host tried after the sockets; `None` = sockets only.
-    pub host: Option<String>,
-    /// Server port (also names the socket file).
-    pub port: u16,
-    /// Role to connect as; `None` = the OS user.
-    pub user: Option<String>,
-}
-
-impl PgTarget {
-    /// Default port.
-    pub const DEFAULT_PORT: u16 = 5432;
-
-    /// libpq's defaults, overridden by `PGHOST`, `PGPORT` and `PGUSER` like
-    /// Odoo's own connections would be.
-    #[must_use]
-    pub fn from_env() -> Self {
-        let var = |k| std::env::var_os(k).filter(|v: &OsString| !v.is_empty());
-        Self::from_vars(var("PGHOST"), var("PGPORT"), var("PGUSER"))
-    }
-
-    fn from_vars(host: Option<OsString>, port: Option<OsString>, user: Option<OsString>) -> Self {
-        let port = port
-            .and_then(|p| p.to_str().and_then(|p| p.parse().ok()))
-            .filter(|p| *p != 0)
-            .unwrap_or(Self::DEFAULT_PORT);
-        let user = user.and_then(|u| u.into_string().ok());
-        let (socket_dirs, host) = match host {
-            Some(h) if Path::new(&h).is_absolute() => (vec![PathBuf::from(h)], None),
-            Some(h) => (Vec::new(), h.into_string().ok()),
-            None => (
-                SOCKET_DIRS.iter().map(PathBuf::from).collect(),
-                Some("localhost".to_owned()),
-            ),
-        };
-        Self {
-            socket_dirs,
-            host,
-            port,
-            user,
-        }
-    }
-
-    /// The socket file in `dir`, e.g. `/run/postgresql/.s.PGSQL.5432`.
-    fn socket(&self, dir: &Path) -> PathBuf {
-        dir.join(format!(".s.PGSQL.{}", self.port))
-    }
-
-    /// The role name shown to the user.
-    fn user_label(&self) -> String {
-        self.user
-            .clone()
-            .or_else(|| std::env::var("USER").ok())
-            .or_else(|| std::env::var("LOGNAME").ok())
-            .unwrap_or_else(|| "your user".to_owned())
-    }
-}
 
 /// One place a server may listen.
 #[derive(Debug, Clone)]
@@ -115,8 +52,10 @@ enum Attempt {
 }
 
 enum Refusal {
-    /// It asked for a password, which the check never sends.
+    /// It asked for a password and none is set.
     NeedsPassword,
+    /// It rejected the password sent.
+    WrongPassword,
     /// `role "x" does not exist`.
     NoRole(String),
     /// Any other login failure (`pg_hba.conf`, starting up, …).
@@ -130,6 +69,21 @@ pub(super) async fn check(
     pm: Option<PackageManager>,
     timeout: Duration,
 ) -> Check {
+    probe(target, path_var, requirements, pm, timeout).await.0
+}
+
+/// [`check`], plus what the server said about itself and the role when the
+/// login worked.
+pub(crate) async fn probe(
+    target: &PgTarget,
+    path_var: Option<&OsStr>,
+    requirements: &[Requirement],
+    pm: Option<PackageManager>,
+    timeout: Duration,
+) -> (Check, Option<ServerFacts>) {
+    if target.ssl_mode.requires_tls() {
+        return (tls_required(target.ssl_mode), None);
+    }
     let mut places: Vec<Place> = Vec::new();
     let mut seen_sockets = Vec::new();
     for dir in &target.socket_dirs {
@@ -150,9 +104,9 @@ pub(super) async fn check(
         let label = place.label(target.port);
         match attempt(target, place, timeout).await {
             Attempt::Unreachable(why) => tried.push(format!("{label}: {why}")),
-            Attempt::Refused(r) => return refused(target, &label, r, pm),
+            Attempt::Refused(r) => return (refused(target, &label, r, pm), None),
             Attempt::Connected(client) => {
-                let mut c = connected(target, &client, requirements, pm).await;
+                let (mut c, facts) = connected(target, &client, requirements, pm).await;
                 c.location = Some(label);
                 if matches!(place, Place::Tcp(_)) && !target.socket_dirs.is_empty() {
                     c.details.push(
@@ -161,11 +115,31 @@ pub(super) async fn check(
                     );
                     c.status = c.status.max(Status::Warning);
                 }
-                return c;
+                return (c, facts);
             }
         }
     }
-    unreachable_check(target, tried, server_installed(path_var), pm)
+    (
+        unreachable_check(target, tried, server_installed(path_var), pm),
+        None,
+    )
+}
+
+fn tls_required(mode: SslMode) -> Check {
+    let mut c = Check::new(
+        CheckId::Postgresql,
+        Status::Error,
+        format!(
+            "db_sslmode = {} needs TLS, which OdHive does not support yet",
+            mode.as_str()
+        ),
+    );
+    c.fix = Some(Fix {
+        text: "Set db_sslmode to prefer (the default) or disable in the project's Odoo options; a local development server does not need TLS.".into(),
+        commands: Vec::new(),
+        url: None,
+    });
+    c
 }
 
 async fn attempt(target: &PgTarget, place: &Place, timeout: Duration) -> Attempt {
@@ -177,10 +151,18 @@ async fn attempt(target: &PgTarget, place: &Place, timeout: Duration) -> Attempt
         };
         cfg.port(target.port)
             .dbname(db)
-            .application_name("odhive-envcheck")
-            .connect_timeout(timeout);
+            .application_name("odhive")
+            .connect_timeout(timeout)
+            .ssl_mode(if target.ssl_mode == SslMode::Disable {
+                PqSslMode::Disable
+            } else {
+                PqSslMode::Prefer
+            });
         if let Some(user) = &target.user {
             cfg.user(user);
+        }
+        if let Some(password) = &target.password {
+            cfg.password(password);
         }
         let result = tokio::time::timeout(timeout, cfg.connect(NoTls)).await;
         let err = match result {
@@ -201,7 +183,11 @@ async fn attempt(target: &PgTarget, place: &Place, timeout: Duration) -> Attempt
             }
             let message = db_err.message().to_owned();
             return Attempt::Refused(if *code == SqlState::INVALID_PASSWORD {
-                Refusal::NeedsPassword
+                if target.password.is_some() {
+                    Refusal::WrongPassword
+                } else {
+                    Refusal::NeedsPassword
+                }
             } else if *code == SqlState::INVALID_AUTHORIZATION_SPECIFICATION
                 && message.starts_with("role ")
                 && message.ends_with(" does not exist")
@@ -230,16 +216,7 @@ async fn attempt(target: &PgTarget, place: &Place, timeout: Duration) -> Attempt
     ))
 }
 
-/// What the server and role look like once logged in.
-struct ServerInfo {
-    version_num: i32,
-    version: String,
-    role: String,
-    create_db: bool,
-    superuser: bool,
-}
-
-async fn server_info(client: &Client) -> Result<ServerInfo, tokio_postgres::Error> {
+async fn server_info(client: &Client) -> Result<ServerFacts, tokio_postgres::Error> {
     let row = client
         .query_one(
             "SELECT current_setting('server_version_num')::int4, \
@@ -249,12 +226,21 @@ async fn server_info(client: &Client) -> Result<ServerInfo, tokio_postgres::Erro
             &[],
         )
         .await?;
-    Ok(ServerInfo {
+    let version: String = row.try_get(1)?;
+    // `16.4 (Ubuntu 16.4-1.pgdg24.04+1)` → `16.4`.
+    let version = version
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    let create_db: bool = row.try_get(3)?;
+    let superuser: bool = row.try_get(4)?;
+    Ok(ServerFacts {
         version_num: row.try_get(0)?,
-        version: row.try_get(1)?,
+        version,
         role: row.try_get(2)?,
-        create_db: row.try_get(3)?,
-        superuser: row.try_get(4)?,
+        can_create_db: create_db || superuser,
+        superuser,
     })
 }
 
@@ -263,7 +249,7 @@ async fn connected(
     client: &Client,
     requirements: &[Requirement],
     pm: Option<PackageManager>,
-) -> Check {
+) -> (Check, Option<ServerFacts>) {
     let id = CheckId::Postgresql;
     let info = match server_info(client).await {
         Ok(i) => i,
@@ -274,16 +260,10 @@ async fn connected(
                 "Connected, but the server version could not be read",
             );
             c.details.push(e.to_string());
-            return c;
+            return (c, None);
         }
     };
-    // `16.4 (Ubuntu 16.4-1.pgdg24.04+1)` → `16.4`.
-    let version = info
-        .version
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .to_owned();
+    let version = info.version.clone();
     let major = u32::try_from(info.version_num / 10_000).unwrap_or(0);
     let too_old: Vec<&Requirement> = requirements.iter().filter(|r| major < r.min_pg).collect();
 
@@ -314,7 +294,7 @@ async fn connected(
     }
     if info.superuser {
         c.details.push(format!("Role {} is a superuser", info.role));
-    } else if info.create_db {
+    } else if info.can_create_db {
         c.details
             .push(format!("Role {} may create databases", info.role));
     } else {
@@ -343,7 +323,7 @@ async fn connected(
         }
     }
     c.fix = fix;
-    c
+    (c, Some(info))
 }
 
 fn refused(target: &PgTarget, label: &str, why: Refusal, pm: Option<PackageManager>) -> Check {
@@ -357,11 +337,24 @@ fn refused(target: &PgTarget, label: &str, why: Refusal, pm: Option<PackageManag
                 format!("PostgreSQL asks role {user} for a password"),
             );
             c.details
-                .push("The check never sends passwords, so the server version is unknown".into());
+                .push("No password is set, so the server version is unknown".into());
             c.fix = Some(Fix {
                 text: "Set db_user and db_password in the project's Odoo options, or allow your role to log in over the local socket without a password (peer authentication in pg_hba.conf).".into(),
                 commands: Vec::new(),
                 url: Some("https://www.postgresql.org/docs/current/auth-pg-hba-conf.html".into()),
+            });
+            c
+        }
+        Refusal::WrongPassword => {
+            let mut c = Check::new(
+                id,
+                Status::Error,
+                format!("PostgreSQL rejected the password for role {user}"),
+            );
+            c.fix = Some(Fix {
+                text: "Check db_user and db_password in the project's Odoo options.".into(),
+                commands: Vec::new(),
+                url: None,
             });
             c
         }
@@ -562,35 +555,6 @@ fn quote_ident(s: &str) -> String {
 #[cfg(test)]
 mod unit_tests {
     use super::*;
-
-    #[test]
-    fn target_follows_libpq_variables() {
-        let d = PgTarget::from_vars(None, None, None);
-        assert_eq!(d.port, 5432);
-        assert_eq!(d.host.as_deref(), Some("localhost"));
-        assert_eq!(d.socket_dirs.len(), 3);
-        assert_eq!(d.user, None);
-
-        let s = PgTarget::from_vars(
-            Some("/srv/pg".into()),
-            Some("5433".into()),
-            Some("odoo".into()),
-        );
-        assert_eq!(s.socket_dirs, [PathBuf::from("/srv/pg")]);
-        assert_eq!(s.host, None);
-        assert_eq!(s.port, 5433);
-        assert_eq!(s.user.as_deref(), Some("odoo"));
-        assert_eq!(
-            s.socket(Path::new("/srv/pg")),
-            Path::new("/srv/pg/.s.PGSQL.5433")
-        );
-
-        let t = PgTarget::from_vars(Some("db.local".into()), Some("nope".into()), None);
-        assert!(t.socket_dirs.is_empty());
-        assert_eq!(t.host.as_deref(), Some("db.local"));
-        assert_eq!(t.port, 5432);
-        assert_eq!(PgTarget::from_vars(None, Some("0".into()), None).port, 5432);
-    }
 
     #[test]
     fn commands_quote_names() {

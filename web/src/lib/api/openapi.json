@@ -1404,6 +1404,48 @@
         }
       }
     },
+    "/api/v1/projects/{name}/postgres": {
+      "get": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Connects with the project's `db_host`, `db_port`, `db_user`,\n`db_password` and `db_sslmode` (unset ones come from the project's\n`[env]` `PG*` variables, then the service's, then libpq's defaults) and\nreports whether the server is reachable, its version against the\nproject's Odoo series, and whether the role may create databases. The\npassword is used to log in and is never part of the answer.",
+        "operationId": "check_project_postgres",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (problems are findings in `check`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DbHealth"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{name}/schema": {
       "get": {
         "tags": [
@@ -2270,6 +2312,51 @@
           }
         }
       },
+      "ConnectionSettings": {
+        "type": "object",
+        "description": "A [`PgTarget`] as shown to the user: never the password itself.",
+        "required": [
+          "socket_dirs",
+          "port",
+          "user",
+          "password_set",
+          "ssl_mode"
+        ],
+        "properties": {
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TCP host tried after the sockets."
+          },
+          "password_set": {
+            "type": "boolean",
+            "description": "Whether a password is set (`db_password` or `PGPASSWORD`)."
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Server port.",
+            "minimum": 0
+          },
+          "socket_dirs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Socket folders tried first (empty when `db_host` names a TCP host)."
+          },
+          "ssl_mode": {
+            "$ref": "#/components/schemas/SslMode",
+            "description": "`db_sslmode`."
+          },
+          "user": {
+            "type": "string",
+            "description": "Role connected as."
+          }
+        }
+      },
       "CreateProject": {
         "type": "object",
         "description": "A project to create.",
@@ -2322,6 +2409,35 @@
           }
         },
         "additionalProperties": false
+      },
+      "DbHealth": {
+        "type": "object",
+        "description": "[`health`]'s answer.",
+        "required": [
+          "check",
+          "settings"
+        ],
+        "properties": {
+          "check": {
+            "$ref": "#/components/schemas/EnvCheck",
+            "description": "Whether the server can be used, and the fix when it cannot."
+          },
+          "server": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ServerFacts",
+                "description": "Set when the login worked."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "settings": {
+            "$ref": "#/components/schemas/ConnectionSettings",
+            "description": "The connection settings used (never the password)."
+          }
+        }
       },
       "Edition": {
         "type": "string",
@@ -5303,6 +5419,40 @@
           "bundled"
         ]
       },
+      "ServerFacts": {
+        "type": "object",
+        "description": "What the server says about itself and the role once logged in.",
+        "required": [
+          "version_num",
+          "version",
+          "role",
+          "can_create_db",
+          "superuser"
+        ],
+        "properties": {
+          "can_create_db": {
+            "type": "boolean",
+            "description": "Whether the role may create databases (`CREATEDB` or superuser)."
+          },
+          "role": {
+            "type": "string",
+            "description": "Role logged in as."
+          },
+          "superuser": {
+            "type": "boolean",
+            "description": "Whether the role is a superuser."
+          },
+          "version": {
+            "type": "string",
+            "description": "e.g. `17.2`."
+          },
+          "version_num": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`server_version_num`, e.g. `170002`."
+          }
+        }
+      },
       "ServerMessage": {
         "oneOf": [
           {
@@ -5825,6 +5975,18 @@
           }
         }
       },
+      "SslMode": {
+        "type": "string",
+        "description": "Odoo's `db_sslmode`. Without a TLS stack OdHive connects in plain text,\nso the modes that demand TLS are refused rather than downgraded.",
+        "enum": [
+          "disable",
+          "allow",
+          "prefer",
+          "require",
+          "verify-ca",
+          "verify-full"
+        ]
+      },
       "Status": {
         "oneOf": [
           {
@@ -6295,6 +6457,10 @@
     {
       "name": "instances",
       "description": "Running Odoo instances"
+    },
+    {
+      "name": "databases",
+      "description": "Odoo databases and the PostgreSQL server they live on"
     },
     {
       "name": "jobs",

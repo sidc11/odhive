@@ -9,7 +9,7 @@
 //! Tools are found on `PATH` and asked for `--version` directly (no shell,
 //! no stdin, output capped, killed on timeout).
 
-mod postgres;
+pub(crate) mod postgres;
 mod tools;
 
 #[cfg(test)]
@@ -25,7 +25,7 @@ use crate::python::{self, Compat, DiscoverOptions, Discovery, Interpreter, PySup
 use crate::syslib::PackageManager;
 use crate::version::{self, OdooVersion};
 
-pub use postgres::PgTarget;
+pub use crate::db::PgTarget;
 
 /// How a check came out, from best to worst.
 #[derive(

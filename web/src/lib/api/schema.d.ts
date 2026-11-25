@@ -451,6 +451,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{name}/postgres": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Connects with the project's `db_host`, `db_port`, `db_user`,
+         *     `db_password` and `db_sslmode` (unset ones come from the project's
+         *     `[env]` `PG*` variables, then the service's, then libpq's defaults) and
+         *     reports whether the server is reachable, its version against the
+         *     project's Odoo series, and whether the role may create databases. The
+         *     password is used to log in and is never part of the answer.
+         */
+        get: operations["check_project_postgres"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{name}/schema": {
         parameters: {
             query?: never;
@@ -762,6 +786,24 @@ export interface components {
             /** @description The file the update would give, secret values masked. */
             text: string;
         };
+        /** @description A [`PgTarget`] as shown to the user: never the password itself. */
+        ConnectionSettings: {
+            /** @description TCP host tried after the sockets. */
+            host?: string | null;
+            /** @description Whether a password is set (`db_password` or `PGPASSWORD`). */
+            password_set: boolean;
+            /**
+             * Format: int32
+             * @description Server port.
+             */
+            port: number;
+            /** @description Socket folders tried first (empty when `db_host` names a TCP host). */
+            socket_dirs: string[];
+            /** @description `db_sslmode`. */
+            ssl_mode: components["schemas"]["SslMode"];
+            /** @description Role connected as. */
+            user: string;
+        };
         /** @description A project to create. */
         CreateProject: {
             /**
@@ -787,6 +829,14 @@ export interface components {
              *     detected at setup.
              */
             python?: string | null;
+        };
+        /** @description [`health`]'s answer. */
+        DbHealth: {
+            /** @description Whether the server can be used, and the fix when it cannot. */
+            check: components["schemas"]["EnvCheck"];
+            server?: components["schemas"]["ServerFacts"] | null;
+            /** @description The connection settings used (never the password). */
+            settings: components["schemas"]["ConnectionSettings"];
         };
         /**
          * @description Odoo edition of a registered source tree.
@@ -1849,6 +1899,22 @@ export interface components {
          * @enum {string}
          */
         SchemaSource: "cached" | "introspected" | "bundled";
+        /** @description What the server says about itself and the role once logged in. */
+        ServerFacts: {
+            /** @description Whether the role may create databases (`CREATEDB` or superuser). */
+            can_create_db: boolean;
+            /** @description Role logged in as. */
+            role: string;
+            /** @description Whether the role is a superuser. */
+            superuser: boolean;
+            /** @description e.g. `17.2`. */
+            version: string;
+            /**
+             * Format: int32
+             * @description `server_version_num`, e.g. `170002`.
+             */
+            version_num: number;
+        };
         /** @description A message from the server. */
         ServerMessage: {
             /** @enum {string} */
@@ -2004,6 +2070,12 @@ export interface components {
             /** @description Absolute path of the source tree. */
             path: string;
         };
+        /**
+         * @description Odoo's `db_sslmode`. Without a TLS stack OdHive connects in plain text,
+         *     so the modes that demand TLS are refused rather than downgraded.
+         * @enum {string}
+         */
+        SslMode: "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full";
         /** @description State of a supervised instance. */
         Status: {
             /**
@@ -3213,6 +3285,38 @@ export interface operations {
             };
             /** @description The key is not a secret */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    check_project_postgres: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success (problems are findings in `check`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DbHealth"];
+                };
+            };
+            /** @description No such project */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
