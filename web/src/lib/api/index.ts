@@ -46,6 +46,8 @@ export type InstanceSettings = Schemas['InstanceSettings']
 export type InstanceSettingsInfo = Schemas['InstanceSettingsInfo']
 export type ProjectOptions = Schemas['ProjectOptions']
 export type OptionsUpdate = Schemas['OptionsUpdate']
+export type ConfPreview = Schemas['ConfPreview']
+export type ImportedOptions = Schemas['ImportedOptions']
 export type LogPage = Schemas['LogPage']
 export type LogRecord = Schemas['Record']
 

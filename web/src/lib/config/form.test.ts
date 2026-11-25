@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ApiClient } from '../api/client'
 import { configSchema as SCHEMA, projectOptions as saved, routedFetch } from '../../test-fixtures'
-import { ConfigForm } from './form.svelte'
+import { ConfigForm, MAX_IMPORT_BYTES } from './form.svelte'
 
 function setup(putAnswer: [number, unknown?] = [200, saved()]) {
   const { fetcher, calls } = routedFetch({
@@ -118,5 +118,28 @@ describe('ConfigForm', () => {
     const broken = new ConfigForm(new ApiClient(fetcher), 'shop')
     await broken.load()
     expect([broken.status, broken.loadError]).toEqual(['error', 'no project'])
+  })
+
+  it('imports a file into the form, refusing huge files and showing server errors', async () => {
+    const { fetcher, calls } = routedFetch({
+      'GET /projects/shop/schema': [200, SCHEMA],
+      'GET /projects/shop/options': [200, saved()],
+      'POST /projects/shop/options/import': [422, { error: 'bad_conf', message: 'no [options] section' }],
+    })
+    const form = new ConfigForm(new ApiClient(fetcher), 'shop')
+    await form.load()
+    const big = { size: MAX_IMPORT_BYTES + 1, text: () => Promise.resolve('') }
+    expect(await form.importFile(big)).toBe(false)
+    expect(form.importError).toMatch(/larger than 512 KiB/)
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+    expect(await form.importFile({ size: 3, text: () => Promise.resolve('x=1') })).toBe(false)
+    expect(form.importError).toBe('no [options] section')
+    expect(form.dirty).toBe(false)
+
+    form.applyImport({ options: { db_host: 'pg', x_new: '1' }, secrets: { admin_passwd: 'f' }, warnings: ['w'] })
+    expect(form.values).toEqual({ db_host: 'pg' })
+    expect(form.customRows.map((r) => r.key)).toEqual(['x_new'])
+    expect(form.update).toEqual({ options: { db_host: 'pg', x_new: '1' }, secrets: { admin_passwd: 'f' } })
+    expect(form.importNotes).toEqual(['w'])
   })
 })

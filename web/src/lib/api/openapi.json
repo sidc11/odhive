@@ -1111,7 +1111,7 @@
         "tags": [
           "projects"
         ],
-        "summary": "Replaces the project's `odoo.conf` options. Values are checked against\nthe project's option schema; options it does not know (read by\nthird-party modules) are accepted. Running instances keep the old\noptions until they restart. Refused while the project is being set up.",
+        "summary": "Replaces the project's `odoo.conf` options and writes `odoo.conf`\n(mode `0600`) the way the next start will. Values are checked against\nthe project's option schema; options it does not know (read by\nthird-party modules) are accepted. Running instances keep the old\noptions until they restart. Refused while the project is being set up.",
         "operationId": "put_project_options",
         "parameters": [
           {
@@ -1177,6 +1177,150 @@
           },
           "422": {
             "description": "Invalid option: bad key or value, a managed or command-line only option, a secret outside secrets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/options/import": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Reads an existing `odoo.conf` into options the form can save. Ports,\ndatabase and workers belong to instances, addons paths and other\nsections to the project; they are reported, not imported.",
+        "operationId": "import_project_options",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportConf"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportedOptions"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not an odoo.conf: syntax error or no [options] section",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/options/preview": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Renders `odoo.conf` for options not saved yet (checked like a save),\nnext to the saved file. Secret values are masked; nothing is written.",
+        "operationId": "preview_project_options",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rendered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid option, as for a save",
             "content": {
               "application/json": {
                 "schema": {
@@ -2036,6 +2180,24 @@
           "too_new"
         ]
       },
+      "ConfPreview": {
+        "type": "object",
+        "description": "`odoo.conf` rendered from options not saved yet, and from the saved ones.",
+        "required": [
+          "text",
+          "saved"
+        ],
+        "properties": {
+          "saved": {
+            "type": "string",
+            "description": "The file the saved options give, secret values masked."
+          },
+          "text": {
+            "type": "string",
+            "description": "The file the update would give, secret values masked."
+          }
+        }
+      },
       "CreateProject": {
         "type": "object",
         "description": "A project to create.",
@@ -2780,6 +2942,58 @@
               "null"
             ],
             "description": "Extra advice."
+          }
+        }
+      },
+      "ImportConf": {
+        "type": "object",
+        "description": "An existing `odoo.conf` to import.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The file's contents."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportedOptions": {
+        "type": "object",
+        "description": "Options read from an imported `odoo.conf`, for the form to review\nbefore saving. Nothing is saved by the import.",
+        "required": [
+          "options",
+          "secrets",
+          "warnings"
+        ],
+        "properties": {
+          "options": {
+            "type": "object",
+            "description": "Non-secret options (values equal to Odoo's default left out).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "secrets": {
+            "type": "object",
+            "description": "Secret values found in the file (sent back to the browser that\nsent them, so they can be saved).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What was not imported, and why."
           }
         }
       },
@@ -4711,9 +4925,14 @@
           "options",
           "secrets_set",
           "secret_keys",
-          "managed_keys"
+          "managed_keys",
+          "conf_path"
         ],
         "properties": {
+          "conf_path": {
+            "type": "string",
+            "description": "The `odoo.conf` OdHive writes for the project."
+          },
           "managed_keys": {
             "type": "array",
             "items": {

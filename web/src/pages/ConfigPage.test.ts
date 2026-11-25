@@ -4,11 +4,21 @@ import { ApiClient } from '../lib/api/client'
 import { configSchema, projectOptions, routedFetch } from '../test-fixtures'
 import ConfigPage from './ConfigPage.svelte'
 
+const SAVED_CONF = '[options]\naddons_path = /src/addons\nlog_level = debug\nadmin_passwd = ********\n'
+const PREVIEW = { text: SAVED_CONF.replace('debug', 'warn'), saved: SAVED_CONF }
+const IMPORTED = {
+  options: { log_level: 'warn', x_other: '2' },
+  secrets: { db_password: 'from-file' },
+  warnings: ['http_port = 8070: set per instance by OdHive, not imported'],
+}
+
 function renderPage(put: [number, unknown?] = [200, projectOptions()]) {
   const { fetcher, calls } = routedFetch({
     'GET /projects/shop/schema': [200, configSchema],
     'GET /projects/shop/options': [200, projectOptions()],
     'PUT /projects/shop/options': put,
+    'POST /projects/shop/options/preview': [200, PREVIEW],
+    'POST /projects/shop/options/import': [200, IMPORTED],
   })
   render(ConfigPage, { project: 'shop', api: new ApiClient(fetcher) })
   return { calls }
@@ -71,7 +81,7 @@ describe('ConfigPage', () => {
     await fireEvent.input(cpu, { target: { value: 'soon' } })
     expect(cpu).toHaveAttribute('aria-invalid', 'true')
     expect(cpu).toHaveAccessibleDescription('Enter a whole number Default: 60')
-    expect(screen.getByRole('status')).toHaveTextContent('Unsaved changes.')
+    expect(screen.getByText('Unsaved changes.')).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: 'Reset limit_time_cpu to default' }))
     expect(screen.getByLabelText('limit_time_cpu')).toHaveValue('')
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
@@ -99,7 +109,7 @@ describe('ConfigPage', () => {
     await fireEvent.change(screen.getByLabelText('log_level'), { target: { value: 'warn' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await vi.waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent('Saved. Running instances use the new options after a restart.'),
+      expect(screen.getByText('Saved to odoo.conf. Running instances use the new options after a restart.')).toBeInTheDocument(),
     )
     expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({
       options: { log_level: 'warn', x_module: 'on' },
@@ -118,5 +128,76 @@ describe('ConfigPage', () => {
     await vi.waitFor(() => expect(key).toHaveFocus())
     expect(screen.getByText('Lowercase letters, digits, _ . - only')).toBeInTheDocument()
     expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(0)
+  })
+
+  it('previews odoo.conf as the server renders it, with the changes against the saved file', async () => {
+    const { calls } = renderPage()
+    await loaded()
+    const file = screen.getByRole('region', { name: 'odoo.conf preview' })
+    await vi.waitFor(() => expect(file).toHaveTextContent('log_level = warn'))
+    expect(screen.getByText(/\/home\/dev\/OdHive\/projects\/shop\/odoo\.conf/)).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Changes (2)' }))
+    const changes = screen.getByRole('region', { name: 'Changes against the saved odoo.conf' })
+    expect([...changes.querySelectorAll('[data-kind]')].map((l) => [l.getAttribute('data-kind'), l.textContent])).toEqual([
+      ['same', ' [options]'],
+      ['same', ' addons_path = /src/addons'],
+      ['del', '-removed: log_level = debug'],
+      ['add', '+added: log_level = warn'],
+      ['same', ' admin_passwd = ********'],
+    ])
+    expect(calls.find((c) => c.path === '/projects/shop/options/preview')?.body).toEqual({
+      options: { log_level: 'debug', x_module: 'on' },
+      secrets: {},
+    })
+  })
+
+  it('holds the preview while a value is invalid', async () => {
+    const { calls } = renderPage()
+    await loaded()
+    await vi.waitFor(() => expect(calls.some((c) => c.path.endsWith('/preview'))).toBe(true))
+    const before = calls.length
+    await fireEvent.input(screen.getByLabelText('limit_time_cpu'), { target: { value: 'soon' } })
+    expect(screen.getByText('The preview waits until the marked options are fixed.')).toBeInTheDocument()
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(calls.length).toBe(before)
+  })
+
+  it('downloads the preview as odoo.conf', async () => {
+    const created: Blob[] = []
+    const urls = vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      created.push(blob as Blob)
+      return 'blob:x'
+    })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      expect(this.download).toBe('odoo.conf')
+    })
+    try {
+      renderPage()
+      await loaded()
+      await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Download' })).toBeEnabled())
+      await fireEvent.click(screen.getByRole('button', { name: 'Download' }))
+      expect(click).toHaveBeenCalledOnce()
+      expect(await created[0]?.text()).toBe(PREVIEW.text)
+    } finally {
+      urls.mockRestore()
+      click.mockRestore()
+    }
+  })
+
+  it('imports an odoo.conf into the form for review', async () => {
+    const { calls } = renderPage()
+    await loaded()
+    const input = screen.getByTestId('import-file') as HTMLInputElement
+    const file = new File(['[options]\nlog_level = warn\n'], 'odoo.conf', { type: 'text/plain' })
+    await fireEvent.change(input, { target: { files: [file] } })
+    const notes = await screen.findByTestId('import-notes')
+    expect(notes).toHaveTextContent('http_port = 8070: set per instance by OdHive, not imported')
+    expect(calls.find((c) => c.path.endsWith('/import'))?.body).toEqual({ text: '[options]\nlog_level = warn\n' })
+    expect(screen.getByLabelText('log_level')).toHaveValue('warn')
+    expect(screen.getByLabelText('Key of option 1')).toHaveValue('x_other')
+    // The file's secret is set but not shown as text.
+    expect(screen.getByLabelText('db_password')).toHaveAttribute('type', 'password')
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: /^Changes/ })).toHaveAttribute('aria-pressed', 'true'))
+    expect(screen.getByText('Unsaved changes.')).toBeInTheDocument()
   })
 })

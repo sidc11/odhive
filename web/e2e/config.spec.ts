@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { APIRequestContext } from '@playwright/test'
 import type { E2eState } from './env'
@@ -57,7 +57,7 @@ test('the config builder edits options from the schema and keeps secrets hidden'
     }
 
     await page.getByRole('button', { name: 'Save' }).click()
-    await expect(page.getByRole('status').filter({ hasText: 'Saved.' })).toBeVisible()
+    await expect(page.getByText('Saved to odoo.conf.')).toBeVisible()
 
     const toml = readFileSync(join(project.path, 'odhive.toml'), 'utf8')
     expect(toml).toContain('log_level = "debug"')
@@ -81,3 +81,56 @@ test('the config builder edits options from the schema and keeps secrets hidden'
     expect(reset.status(), await reset.text()).toBe(200)
   }
 })
+
+test('editing an option updates the preview, and saving writes that odoo.conf', async ({ page, signIn, request, e2e }) => {
+  const client = api(request, e2e)
+  const project = (await (await client.get('/api/v1/projects/shop')).json()) as { path: string }
+  const confPath = join(project.path, 'odoo.conf')
+  try {
+    await signIn()
+    await page.goto('/projects/shop/config')
+    const preview = page.getByRole('region', { name: 'odoo.conf preview' })
+    await expect(preview).toContainText('addons_path = ')
+    await expect(preview).not.toContainText('log_level')
+
+    await page.getByRole('searchbox', { name: 'Search options' }).fill('log level')
+    await page.getByLabel('log_level', { exact: true }).selectOption('warn')
+    await expect(preview).toContainText('log_level = warn')
+    await page.getByRole('button', { name: 'Changes (1)' }).click()
+    const changes = page.getByRole('region', { name: 'Changes against the saved odoo.conf' })
+    await expect(changes.locator('[data-kind="add"]')).toHaveText(['+added: log_level = warn'])
+
+    // Import: the file's options land in the form, the rest is reported.
+    await page.getByTestId('import-file').setInputFiles({
+      name: 'odoo.conf',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('[options]\nlog_level = warn\nlimit_time_cpu = 90\nhttp_port = 8070\n'),
+    })
+    await expect(page.getByTestId('import-notes')).toContainText('http_port = 8070')
+    await page.getByRole('button', { name: 'Preview', exact: true }).click()
+    await expect(preview).toContainText('limit_time_cpu = 90')
+
+    for (const scheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: scheme })
+      await expect(page.locator('html')).toHaveAttribute('data-theme', scheme)
+      expect(await seriousViolations(page), scheme).toEqual([])
+    }
+
+    // At phone width the long preview lines scroll inside the panel, not the page.
+    await page.setViewportSize({ width: 360, height: 800 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360)
+    await page.setViewportSize({ width: 1280, height: 720 })
+
+    await page.getByRole('button', { name: 'Save' }).click()
+    await expect(page.getByText('Saved to odoo.conf.')).toBeVisible()
+    // The file on disk is the preview (no secrets set, so nothing masked).
+    expect(readFileSync(confPath, 'utf8')).toBe(`${(await preview.textContent()) ?? ''}`)
+    expect(statSync(confPath).mode & 0o777).toBe(0o600)
+    await page.getByRole('button', { name: /^Changes/ }).click()
+    await expect(page.getByText('No changes against the saved options.')).toBeVisible()
+  } finally {
+    const reset = await client.put(OPTIONS, { options: {} })
+    expect(reset.status(), await reset.text()).toBe(200)
+  }
+})
+

@@ -2,14 +2,22 @@
 //! (`[odoo_options]` in `odhive.toml`), edited by the config builder.
 //!
 //! Secret values (`admin_passwd`, `db_password`, …) never leave the service
-//! here: a read only says which secrets are set, and a write changes a
-//! secret only when it is named in `secrets`.
+//! here: a read only says which secrets are set, a preview masks them, and a
+//! write changes a secret only when it is named in `secrets`. The one
+//! exception is an import, which answers with the secrets of the file the
+//! browser just sent.
 
 use std::collections::BTreeMap;
 
 use axum::Json;
 use axum::extract::State;
-use odhive_core::conf::{self, ConfError, GENERATED_KEYS, INSTANCE_KEYS, OdooOptions};
+use odhive_core::conf::{
+    self, CONF_FILE, ConfContext, ConfError, GENERATED_KEYS, INSTANCE_KEYS, ImportedConf,
+    OdooOptions,
+};
+use odhive_core::config::SourceEntry;
+use odhive_core::launch::{self, LoadedProject, StartConf};
+use odhive_core::project::ProjectConfig;
 use odhive_core::schema::{MAX_OPTIONS, OptionSchema, SECRET_KEYS};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -31,10 +39,18 @@ pub struct ProjectOptions {
     /// Keys OdHive writes itself (addons path, data dir, ports, database,
     /// workers, log file); they cannot be set here.
     pub managed_keys: Vec<String>,
+    /// The `odoo.conf` OdHive writes for the project.
+    pub conf_path: String,
 }
 
 impl ProjectOptions {
-    fn of(options: &OdooOptions) -> Self {
+    fn of(project: &LoadedProject) -> Self {
+        let mut out = Self::from_options(&project.config.odoo_options);
+        out.conf_path = project.dir().join(CONF_FILE).display().to_string();
+        out
+    }
+
+    fn from_options(options: &OdooOptions) -> Self {
         let (secret, plain): (BTreeMap<_, _>, BTreeMap<_, _>) = options
             .0
             .iter()
@@ -49,6 +65,7 @@ impl ProjectOptions {
                 .chain(INSTANCE_KEYS)
                 .map(|&k| k.to_owned())
                 .collect(),
+            conf_path: String::new(),
         }
     }
 }
@@ -68,6 +85,9 @@ pub struct OptionsUpdate {
 }
 
 fn conf_error(e: ConfError) -> ApiError {
+    if matches!(e, ConfError::Io { .. }) {
+        return ApiError::internal(e.to_string());
+    }
     let code = match e {
         ConfError::Managed(_) => "managed_option",
         ConfError::NotFileLoadable(_) => "cli_only_option",
@@ -117,6 +137,52 @@ fn apply(
     Ok(out)
 }
 
+/// The project, its sources and option schema: what rendering `odoo.conf`
+/// needs.
+struct Loaded {
+    project: LoadedProject,
+    community: SourceEntry,
+    enterprise: Option<SourceEntry>,
+    schema: OptionSchema,
+}
+
+impl Loaded {
+    async fn new(svc: &Service, name: &str) -> ApiResult<Self> {
+        let (cfg, project) = svc.project(name)?;
+        let schema = project_schema(svc, &cfg, &project).await?.schema;
+        let (community, enterprise) = project.config.resolve_sources(&cfg)?;
+        let (community, enterprise) = (community.clone(), enterprise.cloned());
+        Ok(Self {
+            project,
+            community,
+            enterprise,
+            schema,
+        })
+    }
+
+    fn start_conf(&self, config: &ProjectConfig) -> StartConf {
+        launch::start_conf(
+            config,
+            self.project.dir(),
+            &self.community,
+            self.enterprise.as_ref(),
+        )
+    }
+
+    /// `odoo.conf` as a start would write it for `config`, secrets masked.
+    fn preview(&self, config: &ProjectConfig) -> ApiResult<String> {
+        let sc = self.start_conf(config);
+        conf::render(
+            &sc.ctx,
+            &sc.config.odoo_options,
+            &sc.config.odoo_sections,
+            Some(&self.schema),
+            true,
+        )
+        .map_err(conf_error)
+    }
+}
+
 /// The project's `odoo.conf` options (secret values left out).
 #[utoipa::path(operation_id = "get_project_options", get, path = "/projects/{name}/options", tag = "projects",
     params(("name" = String, Path, description = "Project name")),
@@ -129,10 +195,11 @@ pub(super) async fn get(
     Params(name): Params<String>,
 ) -> ApiResult<Json<ProjectOptions>> {
     let (_, project) = svc.project(&name)?;
-    Ok(Json(ProjectOptions::of(&project.config.odoo_options)))
+    Ok(Json(ProjectOptions::of(&project)))
 }
 
-/// Replaces the project's `odoo.conf` options. Values are checked against
+/// Replaces the project's `odoo.conf` options and writes `odoo.conf`
+/// (mode `0600`) the way the next start will. Values are checked against
 /// the project's option schema; options it does not know (read by
 /// third-party modules) are accepted. Running instances keep the old
 /// options until they restart. Refused while the project is being set up.
@@ -151,15 +218,154 @@ pub(super) async fn put(
     Params(name): Params<String>,
     Body(update): Body<OptionsUpdate>,
 ) -> ApiResult<Json<ProjectOptions>> {
-    let (cfg, project) = svc.project(&name)?;
-    let schema = project_schema(&svc, &cfg, &project).await?.schema;
-    let out = svc
+    let loaded = Loaded::new(&svc, &name).await?;
+    let saved = svc
         .edit_project(&name, |c| {
-            c.odoo_options = apply(&c.odoo_options, &schema, update)?;
-            Ok(ProjectOptions::of(&c.odoo_options))
+            c.odoo_options = apply(&c.odoo_options, &loaded.schema, update)?;
+            Ok(c.clone())
         })
         .await?;
-    Ok(Json(out))
+    let sc = loaded.start_conf(&saved);
+    conf::write_conf(
+        &sc.config,
+        loaded.project.dir(),
+        &sc.ctx,
+        Some(&loaded.schema),
+    )
+    .map_err(conf_error)?;
+    let mut project = loaded.project;
+    project.config = saved;
+    Ok(Json(ProjectOptions::of(&project)))
+}
+
+/// `odoo.conf` rendered from options not saved yet, and from the saved ones.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ConfPreview {
+    /// The file the update would give, secret values masked.
+    pub text: String,
+    /// The file the saved options give, secret values masked.
+    pub saved: String,
+}
+
+/// Renders `odoo.conf` for options not saved yet (checked like a save),
+/// next to the saved file. Secret values are masked; nothing is written.
+#[utoipa::path(operation_id = "preview_project_options", post, path = "/projects/{name}/options/preview", tag = "projects",
+    request_body = OptionsUpdate,
+    params(("name" = String, Path, description = "Project name")),
+    responses(
+        (status = OK, description = "Rendered", body = ConfPreview),
+        (status = BAD_REQUEST, description = "Invalid request", body = ErrorBody),
+        (status = NOT_FOUND, description = "Not found", body = ErrorBody),
+        (status = UNPROCESSABLE_ENTITY, description = "Invalid option, as for a save", body = ErrorBody),
+    ))]
+pub(super) async fn preview(
+    State(svc): State<Service>,
+    Params(name): Params<String>,
+    Body(update): Body<OptionsUpdate>,
+) -> ApiResult<Json<ConfPreview>> {
+    let loaded = Loaded::new(&svc, &name).await?;
+    let saved = &loaded.project.config;
+    let mut next = saved.clone();
+    next.odoo_options = apply(&saved.odoo_options, &loaded.schema, update)?;
+    Ok(Json(ConfPreview {
+        text: loaded.preview(&next)?,
+        saved: loaded.preview(saved)?,
+    }))
+}
+
+/// An existing `odoo.conf` to import.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportConf {
+    /// The file's contents.
+    pub text: String,
+}
+
+/// Options read from an imported `odoo.conf`, for the form to review
+/// before saving. Nothing is saved by the import.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ImportedOptions {
+    /// Non-secret options (values equal to Odoo's default left out).
+    pub options: BTreeMap<String, String>,
+    /// Secret values found in the file (sent back to the browser that
+    /// sent them, so they can be saved).
+    pub secrets: BTreeMap<String, String>,
+    /// What was not imported, and why.
+    pub warnings: Vec<String>,
+}
+
+/// Reads an existing `odoo.conf` into options the form can save. Ports,
+/// database and workers belong to instances, addons paths and other
+/// sections to the project; they are reported, not imported.
+#[utoipa::path(operation_id = "import_project_options", post, path = "/projects/{name}/options/import", tag = "projects",
+    request_body = ImportConf,
+    params(("name" = String, Path, description = "Project name")),
+    responses(
+        (status = OK, description = "Read", body = ImportedOptions),
+        (status = BAD_REQUEST, description = "Invalid request", body = ErrorBody),
+        (status = NOT_FOUND, description = "Not found", body = ErrorBody),
+        (status = UNPROCESSABLE_ENTITY, description = "Not an odoo.conf: syntax error or no [options] section", body = ErrorBody),
+    ))]
+pub(super) async fn import(
+    State(svc): State<Service>,
+    Params(name): Params<String>,
+    Body(req): Body<ImportConf>,
+) -> ApiResult<Json<ImportedOptions>> {
+    let loaded = Loaded::new(&svc, &name).await?;
+    let sources = ConfContext::source_addons(&loaded.community, loaded.enterprise.as_ref());
+    let imported = conf::import_conf(&req.text, &loaded.schema, &sources)
+        .map_err(|e| ApiError::invalid("bad_conf", e.to_string()))?;
+    Ok(Json(ImportedOptions::from(imported)))
+}
+
+impl From<ImportedConf> for ImportedOptions {
+    fn from(i: ImportedConf) -> Self {
+        let mut warnings = i.warnings;
+        let hints = &i.instance;
+        let mut instance = Vec::new();
+        if let Some(p) = hints.http_port {
+            instance.push(format!("http_port = {p}"));
+        }
+        if let Some(p) = hints.gevent_port {
+            instance.push(format!("gevent_port = {p}"));
+        }
+        if let Some(db) = &hints.db {
+            instance.push(format!("db_name = {db}"));
+        }
+        if let Some(w) = hints.workers {
+            instance.push(format!("workers = {w}"));
+        }
+        if !instance.is_empty() {
+            warnings.push(format!(
+                "{}: set per instance by OdHive, not imported",
+                instance.join(", ")
+            ));
+        }
+        if !i.addons_paths.is_empty() {
+            let paths: Vec<String> = i
+                .addons_paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
+            warnings.push(format!(
+                "addons_path {}: add these folders to the project, not imported",
+                paths.join(", ")
+            ));
+        }
+        for name in i.sections.keys() {
+            warnings.push(format!("section [{name}]: not imported here"));
+        }
+        let (secrets, options) = i
+            .options
+            .0
+            .into_iter()
+            .partition(|(k, _)| conf::is_secret(k));
+        Self {
+            options,
+            secrets,
+            warnings,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -197,7 +403,7 @@ mod tests {
 
     #[test]
     fn reads_leave_secret_values_out() {
-        let v = ProjectOptions::of(&opts(&[
+        let v = ProjectOptions::from_options(&opts(&[
             ("admin_passwd", "hunter2"),
             ("log_level", "debug"),
         ]));

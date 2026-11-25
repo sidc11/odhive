@@ -69,7 +69,7 @@ describe('ApiClient', () => {
   })
 
   it('reads and replaces project options with PUT', async () => {
-    const info = { options: { log_level: 'debug' }, secrets_set: [], secret_keys: ['admin_passwd'], managed_keys: [] }
+    const info = { options: { log_level: 'debug' }, secrets_set: [], secret_keys: ['admin_passwd'], managed_keys: [], conf_path: '/p/odoo.conf' }
     const body = { options: { log_level: 'debug' }, secrets: { admin_passwd: null } }
     const { fetcher, calls } = routedFetch({
       'GET /projects/shop/options': [200, info],
@@ -79,6 +79,22 @@ describe('ApiClient', () => {
     expect(await api.getProjectOptions('shop')).toEqual(info)
     expect(await api.putProjectOptions('shop', body)).toEqual(info)
     expect(calls[1]).toMatchObject({ method: 'PUT', headers: { 'X-OdHive': '1' }, body })
+  })
+
+  it('previews and imports project options with POST', async () => {
+    const preview = { text: 'a', saved: 'b' }
+    const imported = { options: {}, secrets: {}, warnings: [] }
+    const { fetcher, calls } = routedFetch({
+      'POST /projects/shop/options/preview': [200, preview],
+      'POST /projects/shop/options/import': [200, imported],
+    })
+    const api = new ApiClient(fetcher)
+    expect(await api.previewProjectOptions('shop', { options: {} })).toEqual(preview)
+    expect(await api.importProjectOptions('shop', { text: '[options]' })).toEqual(imported)
+    expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([
+      ['POST', '/projects/shop/options/preview', { options: {} }],
+      ['POST', '/projects/shop/options/import', { text: '[options]' }],
+    ])
   })
 
   it('runs the environment check', async () => {
