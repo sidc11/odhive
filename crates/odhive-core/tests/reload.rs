@@ -203,13 +203,16 @@ async fn touching_a_view_restarts_with_update_of_its_module() {
         .filter_map(|r| r.mark.as_ref().map(|m| m.mark.clone()))
         .filter(|m| matches!(m, Mark::Reload { .. }))
         .collect();
+    // The latest one is for the view (macOS FSEvents may replay the
+    // project's creation as an earlier batch).
     assert_eq!(
-        marks,
-        [Mark::Reload {
+        marks.last(),
+        Some(&Mark::Reload {
             files: vec!["m1/views/x.xml".into()],
             file_count: 1,
             update: vec!["m1".into()],
-        }]
+        }),
+        "{marks:#?}"
     );
     let info = m.get(&owner()).expect("info").reload.expect("reload");
     assert!(info.watching);
