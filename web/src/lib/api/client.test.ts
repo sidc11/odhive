@@ -68,6 +68,19 @@ describe('ApiClient', () => {
     expect(calls[1]).toMatchObject({ method: 'PUT', headers: { 'X-OdHive': '1' }, body: settings })
   })
 
+  it('reads and replaces project options with PUT', async () => {
+    const info = { options: { log_level: 'debug' }, secrets_set: [], secret_keys: ['admin_passwd'], managed_keys: [] }
+    const body = { options: { log_level: 'debug' }, secrets: { admin_passwd: null } }
+    const { fetcher, calls } = routedFetch({
+      'GET /projects/shop/options': [200, info],
+      'PUT /projects/shop/options': [200, info],
+    })
+    const api = new ApiClient(fetcher)
+    expect(await api.getProjectOptions('shop')).toEqual(info)
+    expect(await api.putProjectOptions('shop', body)).toEqual(info)
+    expect(calls[1]).toMatchObject({ method: 'PUT', headers: { 'X-OdHive': '1' }, body })
+  })
+
   it('runs the environment check', async () => {
     const report = { package_manager: null, checks: [] }
     const { fetcher, calls } = routedFetch({ 'GET /environment': [200, report] })

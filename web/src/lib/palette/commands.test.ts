@@ -38,8 +38,10 @@ describe('buildCommands', () => {
       'instance:shop/test',
       'instance:crm/main',
       'new-project',
-      // Running: stop and restart, no start. Stopped: start only. No venv:
-      // nothing to run. Settings: always.
+      // Odoo options per project, then per instance. Running: stop and
+      // restart, no start. Stopped: start only. No venv: nothing to run.
+      // Settings: always.
+      'config:shop',
       'stop:shop/main',
       'restart:shop/main',
       'logs:shop/main',
@@ -47,11 +49,20 @@ describe('buildCommands', () => {
       'start:shop/test',
       'logs:shop/test',
       'settings:shop/test',
+      'config:crm',
       'logs:crm/main',
       'settings:crm/main',
     ])
     const main = commands.find((command) => command.id === 'instance:shop/main')
     expect(main).toMatchObject({ group: 'Instances', title: 'shop/main', state: 'running', hint: 'Database db_main' })
+  })
+
+  it('opens the Odoo options of a project', () => {
+    const d = deps()
+    const config = buildCommands(READY, d).find((command) => command.id === 'config:shop')
+    expect(config?.title).toBe('Odoo options of shop')
+    config?.run()
+    expect(d.navigate).toHaveBeenCalledWith('/projects/shop/config')
   })
 
   it('keeps each group together, whatever the number of projects', () => {

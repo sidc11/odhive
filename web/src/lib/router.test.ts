@@ -17,6 +17,7 @@ describe('parseRoute', () => {
       project: 'shop',
       instance: 'main',
     })
+    expect(parseRoute('/projects/shop/config')).toEqual({ name: 'config', project: 'shop' })
   })
 
   it('decodes segments', () => {
@@ -30,6 +31,8 @@ describe('parseRoute', () => {
       '/projects',
       '/projects/shop/instances',
       '/projects/shop/other/main',
+      '/projects/shop/config/x',
+      '/projects/shop/configs',
       '/projects/shop/instances/main/extra',
       '/projects/%E0%A4%A', // invalid percent-encoding
       '/projects/a%2Fb', // encoded slash must not become a second segment
@@ -44,6 +47,7 @@ describe('parseRoute', () => {
       { name: 'new_project' },
       { name: 'environment' },
       { name: 'project', project: 'a b?#' },
+      { name: 'config', project: 'a b?#' },
       { name: 'instance', project: 'shop', instance: 'main/x' },
     ] as const
     for (const route of routes) {

@@ -193,6 +193,14 @@ export class ApiClient {
     return this.get(`/projects/${segment(name)}/schema`)
   }
 
+  getProjectOptions(name: string): Promise<Ok<'get_project_options', 200>> {
+    return this.get(`/projects/${segment(name)}/options`)
+  }
+
+  putProjectOptions(name: string, body: Body<'put_project_options'>): Promise<Ok<'put_project_options', 200>> {
+    return this.call('PUT', `/projects/${segment(name)}/options`, { body })
+  }
+
   // Instances
 
   listInstances(): Promise<Ok<'list_instances', 200>> {

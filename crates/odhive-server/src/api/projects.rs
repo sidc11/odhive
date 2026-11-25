@@ -415,14 +415,22 @@ pub(super) async fn schema(
     Params(name): Params<String>,
 ) -> ApiResult<Json<SchemaInfo>> {
     let (cfg, project) = svc.project(&name)?;
-    let (community, _) = project.config.resolve_sources(&cfg)?;
+    Ok(Json(project_schema(&svc, &cfg, &project).await?.into()))
+}
+
+/// The option schema of a loaded project (see [`schema`]).
+pub(super) async fn project_schema(
+    svc: &Service,
+    cfg: &GlobalConfig,
+    project: &LoadedProject,
+) -> ApiResult<schema::LoadedSchema> {
+    let (community, _) = project.config.resolve_sources(cfg)?;
     let python = venv_python(&project.dir().join(VENV_DIR));
-    let loaded = schema::load_schema(
+    Ok(schema::load_schema(
         community,
         python.is_file().then_some(python.as_path()),
         &svc.paths().data_dir.join(SCHEMA_CACHE_DIR),
         SCHEMA_TIMEOUT,
     )
-    .await?;
-    Ok(Json(loaded.into()))
+    .await?)
 }

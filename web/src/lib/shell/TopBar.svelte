@@ -28,6 +28,11 @@
           { label: route.project, href: routeHref({ name: 'project', project: route.project }) },
           { label: route.instance },
         ]
+      case 'config':
+        return [
+          { label: route.project, href: routeHref({ name: 'project', project: route.project }) },
+          { label: 'Odoo options' },
+        ]
       case 'logs':
         return [{ label: 'Logs' }]
       case 'not_found':

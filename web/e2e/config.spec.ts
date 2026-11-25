@@ -1,0 +1,83 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import type { APIRequestContext } from '@playwright/test'
+import type { E2eState } from './env'
+import { expect, seriousViolations, test } from './fixtures'
+
+const OPTIONS = '/api/v1/projects/shop/options'
+const SECRET = 'e2e-master-password-7c1f'
+
+function api(request: APIRequestContext, e2e: E2eState) {
+  const headers = { Authorization: `Bearer ${e2e.token}`, 'X-OdHive': '1' }
+  return {
+    get: (path: string) => request.get(`${e2e.baseURL}${path}`, { headers }),
+    put: (path: string, data: unknown) => request.put(`${e2e.baseURL}${path}`, { headers, data }),
+  }
+}
+
+test('the config builder edits options from the schema and keeps secrets hidden', async ({
+  page,
+  signIn,
+  request,
+  e2e,
+}) => {
+  const client = api(request, e2e)
+  const project = (await (await client.get('/api/v1/projects/shop')).json()) as { path: string }
+  try {
+    await signIn()
+    await page.goto('/projects/shop')
+    await page.getByRole('link', { name: 'Odoo options' }).click()
+    await expect(page).toHaveURL(/\/projects\/shop\/config$/)
+    await expect(page.getByRole('heading', { level: 1, name: 'Odoo options' })).toBeVisible()
+
+    // Search narrows the form to matching options, in their sections.
+    const search = page.getByRole('searchbox', { name: 'Search options' })
+    await search.fill('log level')
+    const level = page.getByLabel('log_level', { exact: true })
+    await expect(level).toBeVisible()
+    await expect(page.getByLabel('db_host', { exact: true })).toHaveCount(0)
+    await level.selectOption('debug')
+
+    // A bad value is flagged while typing and blocks saving.
+    await search.fill('limit_time_cpu')
+    const cpu = page.getByLabel('limit_time_cpu', { exact: true })
+    await cpu.fill('soon')
+    await expect(cpu).toHaveAttribute('aria-invalid', 'true')
+    await expect(page.getByText('Enter a whole number')).toBeVisible()
+    await cpu.fill('120')
+    await expect(cpu).toHaveAttribute('aria-invalid', 'false')
+
+    await search.fill('admin_passwd')
+    await page.getByLabel('admin_passwd', { exact: true }).fill(SECRET)
+
+    for (const scheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: scheme })
+      await expect(page.locator('html')).toHaveAttribute('data-theme', scheme)
+      expect(await seriousViolations(page), scheme).toEqual([])
+    }
+
+    await page.getByRole('button', { name: 'Save' }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Saved.' })).toBeVisible()
+
+    const toml = readFileSync(join(project.path, 'odhive.toml'), 'utf8')
+    expect(toml).toContain('log_level = "debug"')
+    expect(toml).toContain('limit_time_cpu = "120"')
+    expect(toml).toContain(SECRET)
+
+    // After a reload the values are back, the secret only as "set".
+    await page.reload()
+    await page.getByRole('searchbox', { name: 'Search options' }).fill('admin_passwd')
+    await expect(page.getByRole('button', { name: 'Replace admin_passwd' })).toBeVisible()
+    await expect(page.getByLabel('admin_passwd', { exact: true })).toHaveCount(0)
+    expect(await page.content()).not.toContain(SECRET)
+    const read = await (await client.get(OPTIONS)).text()
+    expect(read).not.toContain(SECRET)
+    expect(JSON.parse(read)).toMatchObject({
+      options: { log_level: 'debug', limit_time_cpu: '120' },
+      secrets_set: ['admin_passwd'],
+    })
+  } finally {
+    const reset = await client.put(OPTIONS, { options: {}, secrets: { admin_passwd: null } })
+    expect(reset.status(), await reset.text()).toBe(200)
+  }
+})

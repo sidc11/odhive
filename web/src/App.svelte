@@ -6,6 +6,7 @@
   import AppShell from './lib/shell/AppShell.svelte'
   import Toaster from './lib/shell/Toaster.svelte'
   import { connectStores, toasts } from './lib/stores'
+  import ConfigPage from './pages/ConfigPage.svelte'
   import Dashboard from './pages/Dashboard.svelte'
   import Environment from './pages/Environment.svelte'
   import InstancePage from './pages/InstancePage.svelte'
@@ -28,6 +29,8 @@
         return `${route.project} · OdHive`
       case 'instance':
         return `${route.project}/${route.instance} · OdHive`
+      case 'config':
+        return `${route.project} options · OdHive`
       case 'logs':
         return 'Logs · OdHive'
       case 'not_found':
@@ -53,6 +56,10 @@
     <ProjectPage name={route.project} />
   {:else if route.name === 'instance'}
     <InstancePage project={route.project} instance={route.instance} />
+  {:else if route.name === 'config'}
+    {#key route.project}
+      <ConfigPage project={route.project} />
+    {/key}
   {:else if route.name === 'logs'}
     <LogsPage panes={route.panes} />
   {:else}
