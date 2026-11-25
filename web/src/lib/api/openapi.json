@@ -454,6 +454,48 @@
         }
       }
     },
+    "/api/v1/projects/{name}/databases": {
+      "get": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Lists the databases the project's Odoo would offer: owned by its role,\nnot templates, and passing its `dbfilter` (matched like Odoo's\n`re.match`; a filter using `%h`/`%d` or one OdHive cannot read is not\napplied and `filter_note` says why). Each comes with its size, `base`\nmodule version, latest change and the project's instances using it. A\nserver that cannot be used is reported in `error`.",
+        "operationId": "list_project_databases",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (a server that cannot be used is reported in `error`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseList"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{name}/instances/{id}/fix/confirm": {
       "post": {
         "tags": [
@@ -2409,6 +2451,125 @@
           }
         },
         "additionalProperties": false
+      },
+      "Database": {
+        "type": "object",
+        "description": "One database on the server.",
+        "required": [
+          "name",
+          "valid_name",
+          "odoo",
+          "instances"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the database could not be read, when it could not."
+          },
+          "instances": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ids of the project's instances using this database."
+          },
+          "last_modified": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Latest change seen (module install or upgrade, user change, login),\nUTC, `YYYY-MM-DDTHH:MM:SSZ`."
+          },
+          "name": {
+            "type": "string",
+            "description": "Database name."
+          },
+          "odoo": {
+            "type": "boolean",
+            "description": "Whether Odoo's `base` module is installed."
+          },
+          "odoo_series": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Odoo series from [`Self::odoo_version`], e.g. `19.0`."
+          },
+          "odoo_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`base`'s installed version, e.g. `19.0.1.3`."
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Size on disk in bytes; `None` when the role may not connect."
+          },
+          "valid_name": {
+            "type": "boolean",
+            "description": "Whether the name passes OdHive's rule (`^[A-Za-z0-9_.-]+$`, not\nstarting with `-`). Other databases are listed but cannot be acted on."
+          }
+        }
+      },
+      "DatabaseList": {
+        "type": "object",
+        "description": "[`list`]'s answer.",
+        "required": [
+          "databases",
+          "hidden",
+          "settings"
+        ],
+        "properties": {
+          "databases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Database"
+            },
+            "description": "The databases, by name."
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvCheck",
+                "description": "Set when the server could not be used; `databases` is then empty."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filter": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The project's `dbfilter`, when set."
+          },
+          "filter_note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the filter was not applied, when it was set and not applied."
+          },
+          "hidden": {
+            "type": "integer",
+            "description": "Databases the filter hid.",
+            "minimum": 0
+          },
+          "settings": {
+            "$ref": "#/components/schemas/ConnectionSettings",
+            "description": "The connection settings used (never the password)."
+          }
+        }
       },
       "DbHealth": {
         "type": "object",

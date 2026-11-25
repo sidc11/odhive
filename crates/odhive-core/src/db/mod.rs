@@ -2,14 +2,16 @@
 //!
 //! [`health`] checks the server the project's Odoo connects to (with the
 //! project's `db_*` options): reachable, server version, whether the role
-//! may create databases.
+//! may create databases. [`list()`] lists the databases Odoo would offer.
 
+mod list;
 mod target;
 
 use std::time::Duration;
 
 use serde::Serialize;
 
+pub use list::{Database, DatabaseList, list};
 pub use target::{ConnectionSettings, PgTarget, SOCKET_DIRS, SslMode};
 
 use crate::envcheck::{Check, Requirement, postgres};

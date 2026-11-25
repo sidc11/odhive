@@ -27,7 +27,7 @@ const DATABASES: [&str; 2] = ["postgres", "template1"];
 
 /// One place a server may listen.
 #[derive(Debug, Clone)]
-enum Place {
+pub(crate) enum Place {
     Socket(PathBuf),
     Tcp(String),
 }
@@ -51,7 +51,7 @@ enum Attempt {
     Connected(Client),
 }
 
-enum Refusal {
+pub(crate) enum Refusal {
     /// It asked for a password and none is set.
     NeedsPassword,
     /// It rejected the password sent.
@@ -81,8 +81,55 @@ pub(crate) async fn probe(
     pm: Option<PackageManager>,
     timeout: Duration,
 ) -> (Check, Option<ServerFacts>) {
+    match connect(target, timeout).await {
+        Err(e) => (failure_check(target, e, path_var, pm), None),
+        Ok(conn) => {
+            let (mut c, facts) = connected(target, &conn.client, requirements, pm).await;
+            c.location = Some(conn.label());
+            if matches!(conn.place, Place::Tcp(_)) && !target.socket_dirs.is_empty() {
+                c.details.push(
+                    "No Unix socket was found: set db_host (and db_port) in the project's Odoo options, as Odoo uses the socket otherwise"
+                        .into(),
+                );
+                c.status = c.status.max(Status::Warning);
+            }
+            (c, facts)
+        }
+    }
+}
+
+/// A login to the server's maintenance database, and where it was made.
+pub(crate) struct Connection {
+    pub(crate) client: Client,
+    pub(crate) place: Place,
+    port: u16,
+}
+
+impl Connection {
+    /// Where the server was reached, e.g. `Unix socket in /run/postgresql`.
+    pub(crate) fn label(&self) -> String {
+        self.place.label(self.port)
+    }
+}
+
+/// Why [`connect`] found no usable server.
+pub(crate) enum ConnectError {
+    /// `db_sslmode` demands TLS.
+    Tls(SslMode),
+    /// A server answered at `label` and refused the login.
+    Refused { label: String, why: Refusal },
+    /// Nothing answered; one line per place tried.
+    Unreachable(Vec<String>),
+}
+
+/// Logs in to the maintenance database (`postgres`, else `template1`) at the
+/// first place a server answers: sockets first, then TCP.
+pub(crate) async fn connect(
+    target: &PgTarget,
+    timeout: Duration,
+) -> Result<Connection, ConnectError> {
     if target.ssl_mode.requires_tls() {
-        return (tls_required(target.ssl_mode), None);
+        return Err(ConnectError::Tls(target.ssl_mode));
     }
     let mut places: Vec<Place> = Vec::new();
     let mut seen_sockets = Vec::new();
@@ -100,29 +147,54 @@ pub(crate) async fn probe(
     places.extend(target.host.iter().cloned().map(Place::Tcp));
 
     let mut tried = Vec::new();
-    for place in &places {
+    for place in places {
         let label = place.label(target.port);
-        match attempt(target, place, timeout).await {
+        match attempt(target, &place, &DATABASES, timeout).await {
             Attempt::Unreachable(why) => tried.push(format!("{label}: {why}")),
-            Attempt::Refused(r) => return (refused(target, &label, r, pm), None),
+            Attempt::Refused(why) => return Err(ConnectError::Refused { label, why }),
             Attempt::Connected(client) => {
-                let (mut c, facts) = connected(target, &client, requirements, pm).await;
-                c.location = Some(label);
-                if matches!(place, Place::Tcp(_)) && !target.socket_dirs.is_empty() {
-                    c.details.push(
-                        "No Unix socket was found: set db_host (and db_port) in the project's Odoo options, as Odoo uses the socket otherwise"
-                            .into(),
-                    );
-                    c.status = c.status.max(Status::Warning);
-                }
-                return (c, facts);
+                return Ok(Connection {
+                    client,
+                    place,
+                    port: target.port,
+                });
             }
         }
     }
-    (
-        unreachable_check(target, tried, server_installed(path_var), pm),
-        None,
-    )
+    Err(ConnectError::Unreachable(tried))
+}
+
+/// Logs in to database `db` at `place` (where [`connect`] reached the
+/// server). The name is a connection parameter, never part of a query.
+pub(crate) async fn connect_db(
+    target: &PgTarget,
+    place: &Place,
+    db: &str,
+    timeout: Duration,
+) -> Result<Client, String> {
+    match attempt(target, place, &[db], timeout).await {
+        Attempt::Connected(client) => Ok(client),
+        Attempt::Unreachable(why) => Err(why),
+        Attempt::Refused(Refusal::NeedsPassword) => Err("the server asks for a password".into()),
+        Attempt::Refused(Refusal::WrongPassword) => Err("the server rejected the password".into()),
+        Attempt::Refused(Refusal::NoRole(m) | Refusal::Other(m)) => Err(m),
+    }
+}
+
+/// The finding for a failed [`connect`].
+pub(crate) fn failure_check(
+    target: &PgTarget,
+    err: ConnectError,
+    path_var: Option<&OsStr>,
+    pm: Option<PackageManager>,
+) -> Check {
+    match err {
+        ConnectError::Tls(mode) => tls_required(mode),
+        ConnectError::Refused { label, why } => refused(target, &label, why, pm),
+        ConnectError::Unreachable(tried) => {
+            unreachable_check(target, tried, server_installed(path_var), pm)
+        }
+    }
 }
 
 fn tls_required(mode: SslMode) -> Check {
@@ -142,8 +214,9 @@ fn tls_required(mode: SslMode) -> Check {
     c
 }
 
-async fn attempt(target: &PgTarget, place: &Place, timeout: Duration) -> Attempt {
-    for db in DATABASES {
+/// Tries `dbs` in turn (the next one when a database does not exist).
+async fn attempt(target: &PgTarget, place: &Place, dbs: &[&str], timeout: Duration) -> Attempt {
+    for db in dbs.iter().copied() {
         let mut cfg = Config::new();
         match place {
             Place::Socket(dir) => cfg.host_path(dir),
@@ -211,9 +284,10 @@ async fn attempt(target: &PgTarget, place: &Place, timeout: Duration) -> Attempt
         }
         return Attempt::Unreachable(err.to_string());
     }
-    Attempt::Refused(Refusal::Other(
-        "neither the postgres nor the template1 database exists".into(),
-    ))
+    Attempt::Refused(Refusal::Other(match dbs {
+        [db] => format!("database {db} does not exist"),
+        _ => format!("none of the databases {} exists", dbs.join(", ")),
+    }))
 }
 
 async fn server_info(client: &Client) -> Result<ServerFacts, tokio_postgres::Error> {

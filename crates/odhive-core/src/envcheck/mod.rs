@@ -116,7 +116,7 @@ pub struct Check {
 }
 
 impl Check {
-    fn new(id: CheckId, status: Status, summary: impl Into<String>) -> Self {
+    pub(crate) fn new(id: CheckId, status: Status, summary: impl Into<String>) -> Self {
         Self {
             id,
             status,

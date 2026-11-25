@@ -206,6 +206,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{name}/databases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lists the databases the project's Odoo would offer: owned by its role,
+         *     not templates, and passing its `dbfilter` (matched like Odoo's
+         *     `re.match`; a filter using `%h`/`%d` or one OdHive cannot read is not
+         *     applied and `filter_note` says why). Each comes with its size, `base`
+         *     module version, latest change and the project's instances using it. A
+         *     server that cannot be used is reported in `error`.
+         */
+        get: operations["list_project_databases"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{name}/instances/{id}/fix/confirm": {
         parameters: {
             query?: never;
@@ -829,6 +853,50 @@ export interface components {
              *     detected at setup.
              */
             python?: string | null;
+        };
+        /** @description One database on the server. */
+        Database: {
+            /** @description Why the database could not be read, when it could not. */
+            error?: string | null;
+            /** @description Ids of the project's instances using this database. */
+            instances: string[];
+            /**
+             * @description Latest change seen (module install or upgrade, user change, login),
+             *     UTC, `YYYY-MM-DDTHH:MM:SSZ`.
+             */
+            last_modified?: string | null;
+            /** @description Database name. */
+            name: string;
+            /** @description Whether Odoo's `base` module is installed. */
+            odoo: boolean;
+            /** @description Odoo series from [`Self::odoo_version`], e.g. `19.0`. */
+            odoo_series?: string | null;
+            /** @description `base`'s installed version, e.g. `19.0.1.3`. */
+            odoo_version?: string | null;
+            /**
+             * Format: int64
+             * @description Size on disk in bytes; `None` when the role may not connect.
+             */
+            size_bytes?: number | null;
+            /**
+             * @description Whether the name passes OdHive's rule (`^[A-Za-z0-9_.-]+$`, not
+             *     starting with `-`). Other databases are listed but cannot be acted on.
+             */
+            valid_name: boolean;
+        };
+        /** @description [`list`]'s answer. */
+        DatabaseList: {
+            /** @description The databases, by name. */
+            databases: components["schemas"]["Database"][];
+            error?: components["schemas"]["EnvCheck"] | null;
+            /** @description The project's `dbfilter`, when set. */
+            filter?: string | null;
+            /** @description Why the filter was not applied, when it was set and not applied. */
+            filter_note?: string | null;
+            /** @description Databases the filter hid. */
+            hidden: number;
+            /** @description The connection settings used (never the password). */
+            settings: components["schemas"]["ConnectionSettings"];
         };
         /** @description [`health`]'s answer. */
         DbHealth: {
@@ -2593,6 +2661,38 @@ export interface operations {
             };
             /** @description An instance runs */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_project_databases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success (a server that cannot be used is reported in `error`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatabaseList"];
+                };
+            };
+            /** @description No such project */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
