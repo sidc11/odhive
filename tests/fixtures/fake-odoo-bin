@@ -30,7 +30,9 @@ folder, libpq `PG*` variables say where the server is):
                                  createdb NAME, record base as installed and the settings
                                  (FAKE_INIT_BROKEN=1: record no settings but exit 0, as
                                  Odoo does when initializing fails)
-  db [-c CONF] drop NAME         dropdb NAME, remove <data_dir>/filestore/NAME (data_dir from CONF)
+  db [-c CONF] drop NAME         dropdb --force NAME (ends other connections, like Odoo),
+                                 remove <data_dir>/filestore/NAME (data_dir from CONF)
+                                 (FAKE_DROP_BROKEN=1: drop nothing, exit 1)
   neutralize -d NAME             set database.is_neutralized in ir_config_parameter
                                  (FAKE_NEUTRALIZE_BROKEN=1: set nothing but exit 0)
   -d NAME -i MODS --stop-after-init
@@ -184,7 +186,9 @@ def db_main(argv):
     args = p.parse_args(argv)
     db = args.database
     if args.cmd == "drop":
-        r = subprocess.run([pg_tool("dropdb"), db], capture_output=True, text=True)
+        if os.environ.get("FAKE_DROP_BROKEN") == "1":
+            sys.exit(f"Couldn't drop database {db}: broken on purpose")
+        r = subprocess.run([pg_tool("dropdb"), "--force", db], capture_output=True, text=True)
         if r.returncode:
             sys.exit(f"Database {db} does not exist.")
         data_dir = conf_value(args.config, "data_dir")

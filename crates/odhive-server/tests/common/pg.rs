@@ -67,7 +67,9 @@ impl TempPg {
             _dir: dir,
         };
         let deadline = Instant::now() + Duration::from_secs(30);
-        while !pg.socket_dir.join(".s.PGSQL.5432").exists() {
+        // The socket shows up before connections are accepted ("the
+        // database system is starting up"); `postmaster.pid` says "ready".
+        while !ready(&data) {
             assert!(Instant::now() < deadline, "postgres did not start");
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -122,4 +124,11 @@ impl Drop for TempPg {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Whether the server in `data` accepts connections: line 8 of
+/// `postmaster.pid` is its status, `ready` once it does.
+fn ready(data: &Path) -> bool {
+    fs::read_to_string(data.join("postmaster.pid"))
+        .is_ok_and(|pid| pid.lines().nth(7).is_some_and(|l| l.trim() == "ready"))
 }

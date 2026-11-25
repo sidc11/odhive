@@ -711,6 +711,97 @@
         }
       }
     },
+    "/api/v1/projects/{name}/databases/{database}": {
+      "delete": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Starts deleting a database the project lists, with its filestore, as\nOdoo's database manager does (`odoo-bin db drop`: other connections are\nended, the database dropped, `data/filestore/<name>` removed). `confirm`\nmust be the database name, typed exactly. Refused while an instance of\nthe project runs on it (stop it first) or another job works on it.\nFollow the job with `/jobs/{id}` or the WebSocket. There is no undo.",
+        "operationId": "delete_project_database",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "database",
+            "in": "path",
+            "description": "Database name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteDatabase"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Deletion started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name, or the confirmation is not the name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project, or the project does not list this database",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An instance runs on the database, a job works on it, the project has no venv or is being set up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PostgreSQL cannot be used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{name}/instances/{id}/fix/confirm": {
       "post": {
         "tags": [
@@ -3000,6 +3091,92 @@
           }
         }
       },
+      "DeleteDatabase": {
+        "type": "object",
+        "description": "Confirms a database deletion.",
+        "required": [
+          "confirm"
+        ],
+        "properties": {
+          "confirm": {
+            "type": "string",
+            "description": "The database name, typed again exactly.",
+            "example": "shop_main"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeleteEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A step started.",
+            "required": [
+              "step",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step"
+                ]
+              },
+              "step": {
+                "$ref": "#/components/schemas/DeleteStep",
+                "description": "The step."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A line of `odoo-bin` output.",
+            "required": [
+              "line",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "output"
+                ]
+              },
+              "line": {
+                "type": "string",
+                "description": "The line."
+              }
+            }
+          }
+        ],
+        "description": "Progress of [`delete`]."
+      },
+      "DeleteStep": {
+        "type": "string",
+        "description": "A step of [`delete`].",
+        "enum": [
+          "drop",
+          "check"
+        ]
+      },
+      "DeletedDatabase": {
+        "type": "object",
+        "description": "What [`delete`] removed.",
+        "required": [
+          "name",
+          "filestore_removed"
+        ],
+        "properties": {
+          "filestore_removed": {
+            "type": "boolean",
+            "description": "Whether a filestore folder existed and was removed."
+          },
+          "name": {
+            "type": "string",
+            "description": "Database name."
+          }
+        }
+      },
       "DumpFormat": {
         "type": "string",
         "description": "What a dump file is.",
@@ -4384,6 +4561,31 @@
                 "description": "Project name."
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Deletes a database of a project with its filestore.",
+            "required": [
+              "project",
+              "database",
+              "kind"
+            ],
+            "properties": {
+              "database": {
+                "type": "string",
+                "description": "Database name."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "delete_database"
+                ]
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              }
+            }
           }
         ],
         "description": "What a job does."
@@ -4466,6 +4668,26 @@
                 "type": "string",
                 "enum": [
                   "restore_database"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The deleted database.",
+            "required": [
+              "database",
+              "kind"
+            ],
+            "properties": {
+              "database": {
+                "$ref": "#/components/schemas/DeletedDatabase",
+                "description": "What was deleted."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "delete_database"
                 ]
               }
             }
@@ -4576,6 +4798,29 @@
               }
             ],
             "description": "Progress of a database restore."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeleteEvent",
+                "description": "Progress of a database deletion."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "job"
+                ],
+                "properties": {
+                  "job": {
+                    "type": "string",
+                    "enum": [
+                      "delete_database"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Progress of a database deletion."
           }
         ],
         "description": "One step of a job's progress."

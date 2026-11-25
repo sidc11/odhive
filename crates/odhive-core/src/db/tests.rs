@@ -944,3 +944,110 @@ async fn a_script_cannot_run_psql_meta_commands() {
     // The SQL itself still ran.
     r.expect("restored");
 }
+
+// ---- delete ----
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_database_is_deleted_with_its_filestore() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = pg.target(None);
+    let odoo = fake_odoo(&pg, dir.path(), &[]);
+    create(&target, &odoo, &NewDatabase::new("doomed"), TIMEOUT, |_| {})
+        .await
+        .expect("create");
+    // The fake's conf has no data_dir, so Odoo's drop leaves this filestore:
+    // OdHive removes it.
+    let root = dir.path().join("filestore");
+    std::fs::create_dir_all(root.join("doomed/ab")).expect("mkdir");
+    std::fs::write(root.join("doomed/ab/cafe"), "x").expect("write");
+    // A connection left open (an Odoo instance) does not block the drop.
+    let (client, conn) = tokio_postgres::Config::new()
+        .host_path(&pg.socket_dir)
+        .port(5432)
+        .dbname("doomed")
+        .connect(tokio_postgres::NoTls)
+        .await
+        .expect("connect");
+    let held = tokio::spawn(conn);
+
+    let mut events = Vec::new();
+    let done = delete(&target, &odoo, "doomed", &root, TIMEOUT, |e| events.push(e))
+        .await
+        .expect("delete");
+    assert_eq!(
+        done,
+        DeletedDatabase {
+            name: "doomed".into(),
+            filestore_removed: true
+        }
+    );
+    assert!(!exists(&target, "doomed", TIMEOUT).await.expect("exists"));
+    assert!(root.join("doomed").symlink_metadata().is_err());
+    assert_eq!(
+        events
+            .iter()
+            .filter_map(|e| match e {
+                DeleteEvent::Step { step } => Some(*step),
+                DeleteEvent::Output { .. } => None,
+            })
+            .collect::<Vec<_>>(),
+        [DeleteStep::Drop, DeleteStep::Check]
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, DeleteEvent::Output { line } if line.contains("DROP DB: doomed")))
+    );
+    drop(client);
+    let _ = held.await;
+
+    // Gone already: nothing to delete.
+    assert!(matches!(
+        delete(&target, &odoo, "doomed", &root, TIMEOUT, |_| {}).await,
+        Err(DeleteError::NotFound(_))
+    ));
+    // Bad names never reach the server.
+    for name in ["x;DROP DATABASE postgres", "a b", "-x", "a'b", ""] {
+        assert!(
+            matches!(
+                delete(&PgTarget::nowhere(), &odoo, name, &root, TIMEOUT, |_| {}).await,
+                Err(DeleteError::Name(_))
+            ),
+            "{name:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_drop_keeps_the_database_and_filestore() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = pg.target(None);
+    let odoo = fake_odoo(&pg, dir.path(), &[]);
+    create(&target, &odoo, &NewDatabase::new("kept"), TIMEOUT, |_| {})
+        .await
+        .expect("create");
+    let root = dir.path().join("filestore");
+    std::fs::create_dir_all(root.join("kept")).expect("mkdir");
+
+    let broken = fake_odoo(&pg, dir.path(), &[("FAKE_DROP_BROKEN", "1")]);
+    let err = delete(&target, &broken, "kept", &root, TIMEOUT, |_| {})
+        .await
+        .expect_err("broken drop");
+    match &err {
+        DeleteError::Failed { name, tail } => {
+            assert_eq!(name, "kept");
+            assert!(tail.contains("broken on purpose"), "{tail}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(exists(&target, "kept", TIMEOUT).await.expect("exists"));
+    assert!(root.join("kept").is_dir());
+}

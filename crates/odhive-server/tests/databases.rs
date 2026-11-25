@@ -625,3 +625,212 @@ async fn uploads_without_a_length_are_cut_at_the_limit_and_stalls_time_out() {
     assert_eq!(body["error"], "upload_timeout");
     assert!(leftovers(&env).is_empty(), "{:?}", leftovers(&env));
 }
+
+async fn delete_db(api: &common::Api, db: &str, body: Value) -> (StatusCode, Value) {
+    api.call(
+        axum::http::Method::DELETE,
+        &format!("/api/v1/projects/shop/databases/{db}"),
+        Some(body),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn database_deletion_is_refused_before_anything_runs() {
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+
+    // Names that could break out of an argument or a query (URL-encoded).
+    for name in [
+        "x%3BDROP%20DATABASE%20postgres",
+        "x'y",
+        "two%20words",
+        "-x",
+        "x%22y",
+    ] {
+        let (status, body) = delete_db(&api, name, json!({ "confirm": name })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name:?}: {body}");
+        assert_eq!(body["error"], "invalid_name", "{name:?}: {body}");
+    }
+    // The name typed again, exactly.
+    for typed in ["", "shop", "Shop_main", " shop_main", "shop_main "] {
+        let (status, body) = delete_db(&api, "shop_main", json!({ "confirm": typed })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{typed:?}: {body}");
+        assert_eq!(body["error"], "not_confirmed", "{body}");
+    }
+    let (status, _) = delete_db(&api, "shop_main", json!({})).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "confirm is required"
+    );
+    let (status, _) = delete_db(&api, "shop_main", json!({ "confirm": "shop_main", "x": 1 })).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "unknown fields are refused"
+    );
+
+    let (status, body) = delete_db(&api, "shop_main", json!({ "confirm": "shop_main" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "no_venv");
+
+    let (status, body) = api
+        .call(
+            axum::http::Method::DELETE,
+            "/api/v1/projects/nope/databases/shop_main",
+            Some(json!({ "confirm": "shop_main" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "unknown_project", "{body}");
+
+    // A server that cannot be used is reported before a job starts.
+    env.make_runnable("shop", 18_369, 18_372);
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .expect("bind")
+        .port();
+    let (status, body) = api
+        .put(
+            "/api/v1/projects/shop/options",
+            json!({ "options": { "db_host": "127.0.0.1", "db_port": port.to_string() } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = delete_db(&api, "shop_main", json!({ "confirm": "shop_main" })).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "postgres_unavailable");
+    let (_, jobs) = api.get("/api/v1/jobs").await;
+    assert_eq!(jobs, json!([]), "no job was started");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_listed_database_is_deleted_with_its_filestore() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    point_at(&env, &api, &pg).await;
+    odoo_like_db(&pg, "old");
+    let filestore = env.project_dir("shop").join("data/filestore/old");
+    std::fs::create_dir_all(filestore.join("ab")).expect("mkdir");
+    std::fs::write(filestore.join("ab/cafe"), "x").expect("write");
+
+    // Only what the project lists: not `postgres`, not a missing database,
+    // not one its dbfilter hides.
+    for db in ["postgres", "template1", "missing"] {
+        let (status, body) = delete_db(&api, db, json!({ "confirm": db })).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{db}: {body}");
+        assert_eq!(body["error"], "database_not_found", "{body}");
+    }
+    let (status, body) = api
+        .put(
+            "/api/v1/projects/shop/options",
+            json!({ "options": { "dbfilter": "^shop_.*$" } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = delete_db(&api, "old", json!({ "confirm": "old" })).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "hidden by the filter: {body}"
+    );
+    let (status, body) = api
+        .put(
+            "/api/v1/projects/shop/options",
+            json!({ "options": { "dbfilter": "" } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, job) = delete_db(&api, "old", json!({ "confirm": "old" })).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    assert_eq!(job["kind"], "delete_database");
+    assert_eq!(job["project"], "shop");
+    assert_eq!(job["database"], "old");
+    let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(
+        done["result"]["database"],
+        json!({ "name": "old", "filestore_removed": true })
+    );
+    assert!(
+        done["steps"]
+            .as_array()
+            .expect("steps")
+            .iter()
+            .any(|s| s["job"] == "delete_database" && s["step"] == "drop"),
+        "{done}"
+    );
+    assert!(
+        pg.psql(
+            "postgres",
+            "SELECT datname FROM pg_database WHERE datname = 'old'"
+        )
+        .is_empty()
+    );
+    assert!(filestore.symlink_metadata().is_err());
+    let (_, list) = api.get("/api/v1/projects/shop/databases").await;
+    assert!(
+        !list["databases"]
+            .as_array()
+            .expect("databases")
+            .iter()
+            .any(|d| d["name"] == "old"),
+        "{list}"
+    );
+    let (status, body) = delete_db(&api, "old", json!({ "confirm": "old" })).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "deleted already: {body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_database_an_instance_runs_on_is_not_deleted() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    point_at(&env, &api, &pg).await;
+    // Instance `main` uses database `shop_main`.
+    odoo_like_db(&pg, "shop_main");
+    let (status, body) = api
+        .post("/api/v1/projects/shop/instances/main/start", None)
+        .await;
+    assert!(status.is_success(), "{body}");
+
+    let (status, body) = delete_db(&api, "shop_main", json!({ "confirm": "shop_main" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "database_in_use", "{body}");
+    assert!(
+        body["message"].as_str().is_some_and(|m| m.contains("main")),
+        "{body}"
+    );
+    assert_eq!(
+        pg.psql(
+            "postgres",
+            "SELECT datname FROM pg_database WHERE datname = 'shop_main'"
+        ),
+        ["shop_main"]
+    );
+
+    let (status, body) = api
+        .post("/api/v1/projects/shop/instances/main/stop", None)
+        .await;
+    assert!(status.is_success(), "{body}");
+    let (status, job) = delete_db(&api, "shop_main", json!({ "confirm": "shop_main" })).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(done["result"]["database"]["filestore_removed"], false);
+}

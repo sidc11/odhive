@@ -267,6 +267,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{name}/databases/{database}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Starts deleting a database the project lists, with its filestore, as
+         *     Odoo's database manager does (`odoo-bin db drop`: other connections are
+         *     ended, the database dropped, `data/filestore/<name>` removed). `confirm`
+         *     must be the database name, typed exactly. Refused while an instance of
+         *     the project runs on it (stop it first) or another job works on it.
+         *     Follow the job with `/jobs/{id}` or the WebSocket. There is no undo.
+         */
+        delete: operations["delete_project_database"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{name}/instances/{id}/fix/confirm": {
         parameters: {
             query?: never;
@@ -1014,6 +1038,38 @@ export interface components {
             /** @description The connection settings used (never the password). */
             settings: components["schemas"]["ConnectionSettings"];
         };
+        /** @description Confirms a database deletion. */
+        DeleteDatabase: {
+            /**
+             * @description The database name, typed again exactly.
+             * @example shop_main
+             */
+            confirm: string;
+        };
+        /** @description Progress of [`delete`]. */
+        DeleteEvent: {
+            /** @enum {string} */
+            event: "step";
+            /** @description The step. */
+            step: components["schemas"]["DeleteStep"];
+        } | {
+            /** @enum {string} */
+            event: "output";
+            /** @description The line. */
+            line: string;
+        };
+        /**
+         * @description A step of [`delete`].
+         * @enum {string}
+         */
+        DeleteStep: "drop" | "check";
+        /** @description What [`delete`] removed. */
+        DeletedDatabase: {
+            /** @description Whether a filestore folder existed and was removed. */
+            filestore_removed: boolean;
+            /** @description Database name. */
+            name: string;
+        };
         /**
          * @description What a dump file is.
          * @enum {string}
@@ -1520,6 +1576,13 @@ export interface components {
             kind: "restore_database";
             /** @description Project name. */
             project: string;
+        } | {
+            /** @description Database name. */
+            database: string;
+            /** @enum {string} */
+            kind: "delete_database";
+            /** @description Project name. */
+            project: string;
         };
         /** @description What a successful job produced. */
         JobResult: {
@@ -1542,6 +1605,11 @@ export interface components {
             database: components["schemas"]["RestoredDatabase"];
             /** @enum {string} */
             kind: "restore_database";
+        } | {
+            /** @description What was deleted. */
+            database: components["schemas"]["DeletedDatabase"];
+            /** @enum {string} */
+            kind: "delete_database";
         };
         /**
          * @description Where a job stands.
@@ -1561,6 +1629,9 @@ export interface components {
         }) | (components["schemas"]["RestoreEvent"] & {
             /** @enum {string} */
             job: "restore_database";
+        }) | (components["schemas"]["DeleteEvent"] & {
+            /** @enum {string} */
+            job: "delete_database";
         });
         /**
          * @description Severity of a record, in increasing order.
@@ -3040,6 +3111,71 @@ export interface operations {
             };
             /** @description The file is over the upload limit */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description PostgreSQL cannot be used */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    delete_project_database: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+                /** @description Database name */
+                database: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteDatabase"];
+            };
+        };
+        responses: {
+            /** @description Deletion started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Invalid name, or the confirmation is not the name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project, or the project does not list this database */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An instance runs on the database, a job works on it, the project has no venv or is being set up */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
