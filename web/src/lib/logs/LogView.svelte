@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte'
   import { entryCount, rowsText, selectedRowIds } from './copy'
+  import { buildExport, download, type ExportFormat } from './export'
   import { compileSearch, LEVEL_CHIPS, parseLoggers, rowFilter, rowMatcher, type LevelChip } from './filter'
   import { LogLines } from './lines'
   import LogRowView from './LogRowView.svelte'
@@ -12,10 +13,13 @@
   let {
     stream,
     label,
+    source,
     onopen,
   }: {
     stream: LogStream
     label: string
+    /** Instance of the log, for export file names (no export without it). */
+    source?: { project: string; instance: string }
     /** Opens a `file:line` of a traceback (no links without it). */
     onopen?: (link: FileLink) => void
   } = $props()
@@ -198,6 +202,35 @@
     return copyRows(selected ? lines.between(selected.from, selected.to) : [])
   }
 
+  /** Downloads the shown rows (or only the search matches); returns the entries exported, or null if it failed. */
+  function exportRows(format: ExportFormat, onlyMatching: boolean): number | null {
+    if (!source) return null
+    const matching = onlyMatching && pattern ? new Set(lines.matches) : null
+    const rows = matching ? lines.items.filter((row) => matching.has(row.id)) : lines.items
+    try {
+      const file = buildExport(
+        {
+          ...source,
+          rows,
+          filter: {
+            levels,
+            loggers: appliedLoggers,
+            search: pattern ? appliedQuery : '',
+            regex,
+            caseSensitive,
+            onlyMatching: matching !== null,
+          },
+          now: new Date(),
+        },
+        format,
+      )
+      download(file)
+      return file.entries
+    } catch {
+      return null
+    }
+  }
+
   // Track the selection in the log; selecting pauses follow, so new rows
   // don't scroll the selected ones away.
   $effect(() => {
@@ -342,6 +375,7 @@
   canCopySelection={selected !== null}
   oncopyvisible={copyVisible}
   oncopyselection={copySelection}
+  onexport={source ? exportRows : undefined}
 />
 <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-line bg-surface-raised">
   <!-- Focusable so the keyboard can scroll it. -->

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { EXPORT_FORMATS, type ExportFormat } from './export'
   import { LEVEL_CHIP_LABELS, LEVEL_CHIPS, MAX_QUERY, type LevelChip } from './filter'
 
   let {
@@ -17,6 +18,7 @@
     canCopySelection = false,
     oncopyvisible,
     oncopyselection,
+    onexport,
   }: {
     levels: Set<LevelChip>
     loggers: string
@@ -38,6 +40,8 @@
     /** Copy actions; resolve to the entries copied, or null if it failed. */
     oncopyvisible?: () => Promise<number | null>
     oncopyselection?: () => Promise<number | null>
+    /** Downloads the shown entries (only search matches if asked); returns how many, or null if it failed. */
+    onexport?: (format: ExportFormat, onlyMatching: boolean) => number | null
   } = $props()
 
   /** How long a copy result shows (ms). */
@@ -70,6 +74,59 @@
 
   const uid = $props.id()
   const errorId = `${uid}-search-error`
+  const exportId = `${uid}-export`
+
+  const EXPORT_TITLES: Record<ExportFormat, string> = {
+    log: 'Odoo log lines, as in the log file (UTC)',
+    txt: 'Readable text in local time, with the filters used',
+    json: 'Log records as JSON, with the filters used',
+  }
+
+  let exportOpen = $state(false)
+  let onlyMatching = $state(false)
+  let exportButton: HTMLButtonElement | undefined = $state()
+  let exportBox: HTMLDivElement | undefined = $state()
+  /** Result of the last export, shown in place of the Export label for a moment. */
+  let exported: string | null = $state(null)
+  let exportedTimer: ReturnType<typeof setTimeout> | undefined
+
+  const searching = $derived(query !== '' && error === null)
+
+  function runExport(format: ExportFormat): void {
+    if (!onexport) return
+    const count = onexport(format, searching && onlyMatching)
+    exported =
+      count === null ? 'Export failed' : `Exported ${count.toLocaleString()} ${count === 1 ? 'entry' : 'entries'}`
+    clearTimeout(exportedTimer)
+    exportedTimer = setTimeout(() => (exported = null), COPIED_MS)
+    closeExport(true)
+  }
+
+  function closeExport(refocus: boolean): void {
+    exportOpen = false
+    if (refocus) exportButton?.focus()
+  }
+
+  $effect(() => () => clearTimeout(exportedTimer))
+
+  // A press outside the export box closes it; Escape closes it and returns focus.
+  $effect(() => {
+    if (!exportOpen) return
+    const onpointerdown = (event: PointerEvent): void => {
+      if (event.target instanceof Node && exportBox?.contains(event.target)) return
+      closeExport(false)
+    }
+    document.addEventListener('pointerdown', onpointerdown)
+    return () => document.removeEventListener('pointerdown', onpointerdown)
+  })
+
+  function onexportkeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      closeExport(true)
+    }
+  }
 
   const CHIP_CLASSES: Record<LevelChip, string> = {
     debug: 'text-level-debug',
@@ -195,7 +252,7 @@
       onclick={onnext}><span aria-hidden="true">↓</span></button
     >
   </div>
-  <div class="flex items-center gap-1" role="group" aria-label="Copy">
+  <div class="flex items-center gap-1" role="group" aria-label="Copy and export">
     <button
       type="button"
       class="inline-flex min-h-8 items-center rounded border border-line px-2 text-xs text-fg-muted hover:bg-surface-sunken hover:text-fg disabled:opacity-50"
@@ -214,6 +271,46 @@
       disabled={!canCopySelection && copied?.which !== 'selection'}
       onclick={() => void copy('selection')}>{copyLabel('selection', 'Copy selection')}</button
     >
+    {#if onexport}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="relative" bind:this={exportBox} onkeydown={onexportkeydown}>
+        <button
+          bind:this={exportButton}
+          type="button"
+          class="inline-flex min-h-8 items-center gap-1 rounded border border-line px-2 text-xs text-fg-muted hover:bg-surface-sunken hover:text-fg disabled:opacity-50"
+          title="Download the entries the filters show"
+          aria-expanded={exportOpen}
+          aria-controls={exportId}
+          aria-live="polite"
+          disabled={!canCopyVisible && exported === null}
+          onclick={() => (exportOpen = !exportOpen)}
+          >{exported ?? 'Export'}<span aria-hidden="true">▾</span></button
+        >
+        {#if exportOpen}
+          <div
+            id={exportId}
+            class="absolute top-full right-0 z-20 mt-1 flex w-60 flex-col gap-1 rounded-md border border-line bg-surface-raised p-2 text-xs shadow-lg"
+            role="group"
+            aria-label="Export options"
+          >
+            <label class={`flex min-h-8 items-center gap-2 px-1 ${searching ? '' : 'text-fg-muted'}`}>
+              <input type="checkbox" bind:checked={onlyMatching} disabled={!searching} />
+              Only search matches
+            </label>
+            {#each EXPORT_FORMATS as format (format)}
+              <button
+                type="button"
+                class="flex min-h-8 flex-col items-start rounded px-2 py-1 text-left hover:bg-surface-sunken"
+                onclick={() => runExport(format)}
+                ><span class="font-mono text-fg">Download .{format}</span><span class="text-fg-muted"
+                  >{EXPORT_TITLES[format]}</span
+                ></button
+              >
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
   </div>
   {#if error}
     <p id={errorId} class="w-full text-xs text-level-error" role="alert">Invalid search: {error}</p>

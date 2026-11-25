@@ -1,9 +1,15 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { tick, type ComponentProps } from 'svelte'
 import { describe, expect, it, vi } from 'vitest'
+import { download } from './export'
 import LogView from './LogView.svelte'
 import { LogStream } from './stream.svelte'
 import { FakeConnection, msg, record, records } from './test-fixtures'
+
+vi.mock('./export', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./export')>()),
+  download: vi.fn(),
+}))
 
 function setup(props: Partial<ComponentProps<typeof LogView>> = {}) {
   const connection = new FakeConnection()
@@ -403,6 +409,98 @@ describe('LogView', () => {
       await tick()
       await fireEvent.click(screen.getByRole('button', { name: 'Copy visible' }))
       expect(await screen.findByRole('button', { name: 'Copy failed' })).toBeInTheDocument()
+    })
+  })
+
+  describe('export', () => {
+    const SOURCE = { project: 'shop', instance: 'main' }
+
+    function downloaded(): { name: string; type: string; text: string } {
+      const calls = vi.mocked(download).mock.calls
+      const file = calls.at(-1)?.[0]
+      if (!file) throw new Error('nothing downloaded')
+      return file
+    }
+
+    it('is offered only with a source', () => {
+      setup()
+      expect(screen.queryByRole('button', { name: /^Export/ })).toBeNull()
+    })
+
+    it('downloads the entries the filters show as .log', async () => {
+      vi.mocked(download).mockClear()
+      const { connection } = setup({ source: SOURCE })
+      const exportButton = screen.getByRole('button', { name: /^Export/ })
+      expect(exportButton).toBeDisabled()
+      connection.receive(msg.subscribed(1))
+      connection.receive(msg.logs([record(1, 'boot', { level: 'debug' }), record(2, 'ready'), record(3, 'later')]))
+      await tick()
+      await fireEvent.click(screen.getByRole('button', { name: 'DEBUG' }))
+      expect(exportButton).toHaveAttribute('aria-expanded', 'false')
+      await fireEvent.click(exportButton)
+      expect(exportButton).toHaveAttribute('aria-expanded', 'true')
+      // No search yet: nothing to narrow to.
+      expect(screen.getByRole('checkbox', { name: 'Only search matches' })).toBeDisabled()
+      await fireEvent.click(screen.getByRole('button', { name: /Download \.log/ }))
+
+      const file = downloaded()
+      expect(file.name).toMatch(/^shop-main-\d{8}-\d{6}\.log$/)
+      expect(file.text).toBe(
+        '2026-11-24 09:00:00,000 4242 INFO ? odoo.modules.loading: ready\n' +
+          '2026-11-24 09:00:00,000 4242 INFO ? odoo.modules.loading: later\n',
+      )
+      expect(exportButton).toHaveAttribute('aria-expanded', 'false')
+      expect(exportButton).toHaveFocus()
+      expect(exportButton).toHaveAccessibleName(/Exported 2 entries/)
+    })
+
+    it('can narrow to search matches and records the filter in .json', async () => {
+      vi.mocked(download).mockClear()
+      const { connection } = setup({ source: SOURCE })
+      connection.receive(msg.subscribed(1))
+      connection.receive(msg.logs([record(1, 'sale order 7'), record(2, 'ready'), record(3, 'sale order 9')]))
+      await tick()
+      await fireEvent.input(screen.getByRole('searchbox', { name: 'Search the log' }), {
+        target: { value: 'sale' },
+      })
+      await waitFor(() => expect(screen.getByTestId('log-search-status')).toHaveTextContent('2 matches'))
+      await fireEvent.click(screen.getByRole('button', { name: /^Export/ }))
+      const only = screen.getByRole('checkbox', { name: 'Only search matches' })
+      expect(only).toBeEnabled()
+      await fireEvent.click(only)
+      await fireEvent.click(screen.getByRole('button', { name: /Download \.json/ }))
+
+      const file = downloaded()
+      expect(file.type).toBe('application/json;charset=utf-8')
+      const parsed = JSON.parse(file.text) as {
+        filter: { search: string; only_matching: boolean }
+        entries: { seq: number }[]
+      }
+      expect(parsed.filter).toMatchObject({ search: 'sale', only_matching: true })
+      expect(parsed.entries.map((entry) => entry.seq)).toEqual([1, 3])
+
+      // Unticked: everything shown, the search only described.
+      await fireEvent.click(screen.getByRole('button', { name: /^Export/ }))
+      await fireEvent.click(screen.getByRole('checkbox', { name: 'Only search matches' }))
+      await fireEvent.click(screen.getByRole('button', { name: /Download \.txt/ }))
+      const text = downloaded().text
+      expect(text).toContain('Search (text): sale\n')
+      expect(text).toContain('Entries: 3\n')
+    })
+
+    it('closes on Escape and on a press outside', async () => {
+      const { connection, scroller } = setup({ source: SOURCE })
+      connection.receive(msg.subscribed(1))
+      connection.receive(msg.logs(records(1, 3)))
+      await tick()
+      const exportButton = screen.getByRole('button', { name: /^Export/ })
+      await fireEvent.click(exportButton)
+      await fireEvent.keyDown(screen.getByRole('button', { name: /Download \.log/ }), { key: 'Escape' })
+      expect(exportButton).toHaveAttribute('aria-expanded', 'false')
+      expect(exportButton).toHaveFocus()
+      await fireEvent.click(exportButton)
+      await fireEvent.pointerDown(scroller)
+      expect(screen.queryByRole('button', { name: /Download \.log/ })).toBeNull()
     })
   })
 })
