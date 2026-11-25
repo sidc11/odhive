@@ -1240,6 +1240,68 @@ export interface components {
         };
         /** @description An event, with the instance it belongs to. */
         ManagerEvent: components["schemas"]["PortOwner"] & components["schemas"]["InstanceEvent"];
+        /** @description The kinds of line OdHive writes into an instance's log. */
+        Mark: {
+            /** @enum {string} */
+            kind: "started";
+            /**
+             * Format: int32
+             * @description Process id.
+             */
+            pid: number;
+        } | {
+            /** @description Number of changed files. */
+            file_count: number;
+            /**
+             * @description Changed files, relative to their addons folder (at most
+             *     [`crate::reload::MAX_LISTED_FILES`]).
+             */
+            files: string[];
+            /** @enum {string} */
+            kind: "reload";
+            /** @description Modules updated with `-u`; empty = plain restart. */
+            update: string[];
+        } | {
+            /**
+             * Format: int32
+             * @description Install number since the instance was started (from 1).
+             */
+            attempt: number;
+            /** @enum {string} */
+            kind: "installing";
+            /**
+             * Format: int32
+             * @description Installs allowed per start.
+             */
+            max: number;
+            /** @description Missing module. */
+            module: string;
+            /** @description Package. */
+            package: string;
+        } | {
+            /** @enum {string} */
+            kind: "install_output";
+        } | {
+            /** @enum {string} */
+            kind: "installed";
+            /** @description Package. */
+            package: string;
+        } | {
+            /** @enum {string} */
+            kind: "install_failed";
+            /** @description Package. */
+            package: string;
+        } | {
+            /** @enum {string} */
+            kind: "install_cancelled";
+            /** @description Package. */
+            package: string;
+        };
+        /** @description What a line OdHive wrote into an instance's log reports, and when. */
+        Marker: components["schemas"]["Mark"] & {
+            /** @description When it was written (UTC). */
+            at: string;
+        };
         /** @description Settings of a project's first instance. */
         NewInstance: {
             /** @description Database; omitted = `<project>_<instance>`. */
@@ -1575,6 +1637,7 @@ export interface components {
         };
         /** @description An entry with its sequence number. */
         Record: components["schemas"]["Entry"] & {
+            mark?: components["schemas"]["Marker"] | null;
             /**
              * Format: int64
              * @description Position in the instance's log, from 1, never reused.

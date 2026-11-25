@@ -12,6 +12,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use odhive_core::events::{BusOptions, Delivery, LogEvent, Subscription};
+use odhive_core::logs::store::Mark;
 use odhive_core::logs::{self, LogSettings};
 use odhive_core::manager::{
     InstanceEvent, InstancePlan, Manager, ManagerError, ManagerEvent, ManagerOptions, Notice,
@@ -654,6 +655,10 @@ async fn output_goes_to_the_log_buffer_file_and_bus() {
             .message
             .starts_with("----- odhive: started pid")
     );
+    assert!(matches!(
+        page.records[0].mark.as_ref().map(|m| &m.mark),
+        Some(Mark::Started { pid }) if *pid > 0
+    ));
     assert_eq!(
         m.tail_log(&owner("main"), 1).expect("log")[0].seq,
         *seqs.last().expect("seq")

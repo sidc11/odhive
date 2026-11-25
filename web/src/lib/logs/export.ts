@@ -4,6 +4,7 @@
 import type { LogRecord } from '../api'
 import { entryText } from './copy'
 import { LEVEL_CHIP_LABELS, LEVEL_CHIPS, type LevelChip } from './filter'
+import { eventOf } from './marks'
 import { LEVEL_LABELS, type LogRow } from './rows'
 
 export const EXPORT_FORMATS = ['log', 'txt', 'json'] as const
@@ -92,6 +93,11 @@ export function filterLines(filter: ExportFilter): string[] {
 
 /** An entry as the viewer shows it, with the local date: `time LEVEL db logger: message`. */
 function readableEntry(record: LogRecord): string {
+  const event = eventOf(record)
+  if (record.mark && event) {
+    const icon = event.icon ? `${event.icon} ` : ''
+    return `${localTime(record.mark.at)} ${event.tag.padEnd(6)} ${icon}${event.text}`
+  }
   const parts: string[] = []
   const time = localTime(record.timestamp)
   if (time) parts.push(time)

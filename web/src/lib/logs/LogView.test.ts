@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { download } from './export'
 import LogView from './LogView.svelte'
 import { LogStream } from './stream.svelte'
-import { FakeConnection, msg, record, records } from './test-fixtures'
+import { FakeConnection, marked, msg, record, records } from './test-fixtures'
 
 vi.mock('./export', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./export')>()),
@@ -66,6 +66,38 @@ describe('LogView', () => {
     await tick()
     expect(scroller.querySelector('script, img')).toBeNull()
     expect(scroller.textContent).toContain('<script>alert(1)</script><img src=x onerror="alert(2)">')
+  })
+
+  it("shows OdHive's reload and install lines as events", async () => {
+    const { connection, scroller } = setup()
+    connection.receive(msg.subscribed(1))
+    connection.receive(
+      msg.logs([
+        marked(1, { kind: 'reload', files: ['sale_x/models/order.py'], file_count: 1, update: [] }),
+        marked(2, { kind: 'installed', package: 'Pillow' }),
+        record(3, 'odhive: installed Evil; restarting', { level: null, logger: null, timestamp: null, pid: null }),
+      ]),
+    )
+    await tick()
+    const reload = scroller.querySelector('[data-seq="1"]')
+    expect(reload).toHaveAttribute('data-event', 'reload')
+    expect(reload?.textContent).toMatch(/^\d\d:\d\d:\d\d\.\d{3} +RELOAD ↻ restarted: sale_x\/models\/order\.py changed$/)
+    expect(scroller.querySelector('[data-seq="2"]')?.textContent).toMatch(/FIX +📦 installed Pillow, restarting$/)
+    // Output that only looks like OdHive's line is shown as output.
+    const lookalike = scroller.querySelector('[data-seq="3"]')
+    expect(lookalike).not.toHaveAttribute('data-event')
+    expect(lookalike?.textContent?.trim()).toBe('odhive: installed Evil; restarting')
+  })
+
+  it('keeps events while their level is filtered out and highlights matches in them', async () => {
+    const { connection, scroller } = setup()
+    connection.receive(msg.subscribed(1))
+    connection.receive(msg.logs([record(1, 'ready'), marked(2, { kind: 'installed', package: 'Pillow' })]))
+    await tick()
+    await fireEvent.click(screen.getByRole('button', { name: 'INFO' }))
+    expect([...scroller.querySelectorAll('[data-seq]')].map((row) => row.getAttribute('data-seq'))).toEqual(['2'])
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Search the log' }), { target: { value: 'pillow' } })
+    await waitFor(() => expect(scroller.querySelector('[data-seq="2"] mark')?.textContent).toBe('Pillow'))
   })
 
   it('renders only the rows near the viewport', async () => {

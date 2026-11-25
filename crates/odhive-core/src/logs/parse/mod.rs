@@ -177,6 +177,46 @@ impl Timestamp {
         valid.then_some(ts)
     }
 
+    /// The current time (UTC); the Unix epoch if the clock is before it.
+    #[must_use]
+    pub fn now() -> Self {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        Self::from_unix_millis(ms)
+    }
+
+    /// The UTC time `ms` milliseconds after the Unix epoch (years past 9999
+    /// are clamped to the end of 9999).
+    #[must_use]
+    pub fn from_unix_millis(ms: u64) -> Self {
+        // 9999-12-31T23:59:59.999Z.
+        const MAX: u64 = 253_402_300_799_999;
+        let ms = ms.min(MAX);
+        let days = ms / 86_400_000;
+        let in_day = ms % 86_400_000;
+        // Days to civil date (H. Hinnant), for days >= 0.
+        let z = days + 719_468;
+        let era = z / 146_097;
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + u64::from(month <= 2);
+        let small = |n: u64| u8::try_from(n).unwrap_or(u8::MAX);
+        Self {
+            year: u16::try_from(year).unwrap_or(9999),
+            month: small(month),
+            day: small(day),
+            hour: small(in_day / 3_600_000),
+            minute: small(in_day / 60_000 % 60),
+            second: small(in_day / 1000 % 60),
+            millis: u16::try_from(in_day % 1000).unwrap_or(0),
+        }
+    }
+
     /// RFC 3339 form, e.g. `2026-11-22T06:27:41.016Z`.
     #[must_use]
     pub fn to_rfc3339(&self) -> String {

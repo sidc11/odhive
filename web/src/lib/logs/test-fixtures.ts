@@ -73,3 +73,19 @@ export const msg = {
   gap: (skipped: number): ServerMessage => ({ type: 'gap', ...target, skipped }),
   reset: (): ServerMessage => ({ type: 'reset', ...target }),
 }
+
+type Marker = NonNullable<LogRecord['mark']>
+/** A mark without its time (`Omit` per union member, so each kind keeps its fields). */
+export type MarkFields = Marker extends infer M ? (M extends Marker ? Omit<M, 'at'> : never) : never
+
+/** A line OdHive wrote itself, as the server sends it (no header). */
+export function marked(seq: number, mark: MarkFields, message = 'odhive: …'): LogRecord {
+  return {
+    ...record(seq, message),
+    level: null,
+    logger: null,
+    pid: null,
+    timestamp: null,
+    mark: { at: '2026-11-24T09:00:01.500Z', ...mark } as Marker,
+  }
+}

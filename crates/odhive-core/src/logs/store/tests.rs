@@ -3,7 +3,7 @@ use std::fs;
 use proptest::prelude::*;
 
 use super::*;
-use crate::logs::parse::parse_all;
+use crate::logs::parse::{Timestamp, parse_all};
 use crate::logs::{generation_path, read_tail};
 
 fn text(message: &str) -> Entry {
@@ -222,12 +222,26 @@ fn markers_end_the_pending_entry_and_stand_alone() {
     assert!(!log.has_file());
     log.push_line("2026-11-22 10:00:00,000 1 ERROR db odoo.x: boom");
     log.push_line("Traceback (most recent call last):");
-    let (done, err) = log.push_marker("----- odhive: started pid 7 -----");
+    let at = Timestamp::from_unix_millis(1_795_329_461_016);
+    let (done, err) = log.push_marker(
+        "----- odhive: started pid 7 -----",
+        Mark::Started { pid: 7 },
+        at,
+    );
     assert!(err.is_none());
     assert_eq!(done.len(), 2);
     assert!(done[0].entry.message.starts_with("boom\nTraceback"));
+    // Only OdHive's own line is marked.
+    assert_eq!(done[0].mark, None);
     assert!(done[1].entry.header.is_none());
     assert_eq!(done[1].entry.message, "----- odhive: started pid 7 -----");
+    assert_eq!(
+        done[1].mark,
+        Some(Marker {
+            at,
+            mark: Mark::Started { pid: 7 }
+        })
+    );
     assert!(!log.has_pending());
     // An unformatted line after the marker is its own entry, not merged.
     log.push_line("plain output");
@@ -297,4 +311,37 @@ fn a_failing_file_is_dropped_but_the_buffer_keeps_going() {
     log.flush();
     assert_eq!(log.buffer().len(), 3);
     assert_eq!(log.buffer().tail(1)[0].entry.message, "later");
+}
+
+#[test]
+fn marks_serialize_flat_and_only_when_set() {
+    let mut log = InstanceLog::in_memory(&LogSettings::default());
+    log.push_line("plain output");
+    let plain = log.flush().expect("entry");
+    let json = serde_json::to_value(&*plain).expect("json");
+    assert!(json.get("mark").is_none(), "{json}");
+    let at = Timestamp::from_unix_millis(1_795_329_461_016);
+    let mark = Mark::Reload {
+        files: vec!["sale_x/models/order.py".into()],
+        file_count: 1,
+        update: vec![],
+    };
+    let (done, _) = log.push_marker(
+        "odhive: sale_x/models/order.py changed; restarting",
+        mark,
+        at,
+    );
+    let json = serde_json::to_value(&*done[0]).expect("json");
+    assert_eq!(
+        json["mark"],
+        serde_json::json!({
+            "at": "2026-11-22T06:37:41.016Z",
+            "kind": "reload",
+            "files": ["sale_x/models/order.py"],
+            "file_count": 1,
+            "update": [],
+        })
+    );
+    let back: Record = serde_json::from_value(json).expect("round trip");
+    assert_eq!(back, *done[0]);
 }

@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use odhive_core::autofix::{AutofixMode, GiveUp, Trust, Trusted};
 use odhive_core::events::{Delivery, Subscription};
+use odhive_core::logs::store::Mark;
 use odhive_core::manager::{
     AutoFix, FixAction, InstanceEvent, InstancePlan, Manager, ManagerError, ManagerEvent,
     ManagerOptions, Notice,
@@ -235,15 +236,40 @@ async fn missing_trusted_module_is_installed_and_the_instance_restarts() {
     let fix = info.autofix.expect("autofix info");
     assert_eq!((fix.attempts, fix.active, fix.pending), (1, false, None));
 
-    // The installer's output and OdHive's notes are in the instance's log.
-    let text: Vec<String> = logs
-        .drain()
-        .iter()
-        .map(|e| e.record.entry.to_string())
-        .collect();
+    // The installer's output and OdHive's notes are in the instance's log,
+    // marked as OdHive's.
+    let records: Vec<_> = logs.drain().into_iter().map(|e| e.record).collect();
+    let text: Vec<String> = records.iter().map(|r| r.entry.to_string()).collect();
     let text = text.join("\n");
     assert!(text.contains("odhive: installing requests"), "{text}");
     assert!(text.contains("odhive: Installed requests"), "{text}");
+    let marks: Vec<&Mark> = records
+        .iter()
+        .filter_map(|r| r.mark.as_ref().map(|m| &m.mark))
+        .collect();
+    assert!(
+        marks.contains(&&Mark::Installing {
+            package: "requests".into(),
+            module: "requests".into(),
+            attempt: 1,
+            max: 3,
+        }),
+        "{marks:#?}"
+    );
+    assert!(marks.contains(&&Mark::InstallOutput), "{marks:#?}");
+    assert!(
+        marks.contains(&&Mark::Installed {
+            package: "requests".into()
+        }),
+        "{marks:#?}"
+    );
+    // The instance's own output is never marked.
+    assert!(
+        records
+            .iter()
+            .filter(|r| r.entry.header.is_some())
+            .all(|r| r.mark.is_none())
+    );
     m.stop(&owner()).await.expect("stop");
 }
 

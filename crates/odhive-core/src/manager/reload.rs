@@ -11,13 +11,14 @@
 //! While a missing dependency is being installed, acting waits.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use serde::Serialize;
 use tokio::task::JoinHandle;
 
 use super::{Inner, Notice, Slot};
+use crate::logs::store::Mark;
 use crate::ports::PortOwner;
 use crate::project::ReloadMode;
 use crate::reload::watch::{Watch, WatchOptions};
@@ -114,8 +115,8 @@ fn notify(inner: &Weak<Inner>, owner: &PortOwner, notice: Notice) {
 }
 
 async fn run(inner: Weak<Inner>, owner: PortOwner, me: Weak<ReloadState>, config: Reload) {
-    let (roots, opts) = (config.roots.clone(), config.watch);
-    let started = tokio::task::spawn_blocking(move || Watch::start(&roots, opts)).await;
+    let (watched, opts) = (config.roots.clone(), config.watch);
+    let started = tokio::task::spawn_blocking(move || Watch::start(&watched, opts)).await;
     let (mut watch, started) = match started {
         Ok(Ok(w)) => w,
         Ok(Err(e)) => {
@@ -135,6 +136,8 @@ async fn run(inner: Weak<Inner>, owner: PortOwner, me: Weak<ReloadState>, config
         Some(state) => state.lock().watching = true,
         None => return,
     }
+    // Canonical, like the paths of changed files.
+    let roots = started.roots.clone();
     notify(
         &inner,
         &owner,
@@ -158,7 +161,7 @@ async fn run(inner: Weak<Inner>, owner: PortOwner, me: Weak<ReloadState>, config
             );
         }
         if let Some(action) = reload::decide(config.mode, &batch) {
-            apply(&inner, &owner, &state, action, &batch).await;
+            apply(&inner, &owner, &state, action, &batch, &roots).await;
         }
     }
     if let Some(state) = me.upgrade() {
@@ -174,6 +177,7 @@ async fn apply(
     state: &Arc<ReloadState>,
     action: Action,
     batch: &Batch,
+    roots: &[PathBuf],
 ) {
     let (handle, log, status) = loop {
         let Some(me) = inner.upgrade() else {
@@ -229,17 +233,30 @@ async fn apply(
     if action.restarts()
         && let Some(log) = &log
     {
-        let what = match &action {
-            Action::Update { modules } => format!("restarting with -u {}", modules.join(",")),
-            _ => "restarting".to_owned(),
+        let update = match &action {
+            Action::Update { modules } => modules.clone(),
+            _ => Vec::new(),
         };
-        let files = match batch.file_count {
-            0 => "files".to_owned(),
-            1 => batch.files[0].display().to_string(),
-            n => format!("{n} files"),
+        let what = if update.is_empty() {
+            "restarting".to_owned()
+        } else {
+            format!("restarting with -u {}", update.join(","))
+        };
+        let files: Vec<String> = batch.files.iter().map(|f| shown_path(roots, f)).collect();
+        let changed = match (batch.file_count, files.first()) {
+            (1, Some(file)) => file.clone(),
+            (0, _) => "files".to_owned(),
+            (n, _) => format!("{n} files"),
         };
         // A file error was reported when the log was opened or first written.
-        let _ = log.marker(&format!("odhive: {files} changed; {what}"));
+        let _ = log.marker(
+            &format!("odhive: {changed} changed; {what}"),
+            Mark::Reload {
+                files,
+                file_count: batch.file_count,
+                update,
+            },
+        );
     }
     notify(
         inner,
@@ -255,5 +272,36 @@ async fn apply(
         if let Err(e) = handle.restart_with(action.args()).await {
             tracing::warn!(instance = %owner, error = %e, "reload restart failed");
         }
+    }
+}
+
+/// `path` relative to the addons folder it is in (`sale_x/models/order.py`),
+/// or as it is when no root contains it.
+fn shown_path(roots: &[PathBuf], path: &Path) -> String {
+    roots
+        .iter()
+        .filter_map(|root| path.strip_prefix(root).ok())
+        .min_by_key(|rel| rel.components().count())
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shown_paths_are_relative_to_the_innermost_root() {
+        let roots = [PathBuf::from("/p/addons"), PathBuf::from("/p/addons/extra")];
+        let shown = |p: &str| shown_path(&roots, Path::new(p));
+        assert_eq!(
+            shown("/p/addons/sale_x/models/order.py"),
+            "sale_x/models/order.py"
+        );
+        assert_eq!(shown("/p/addons/extra/m/__init__.py"), "m/__init__.py");
+        assert_eq!(shown("/elsewhere/m/a.py"), "/elsewhere/m/a.py");
+        // Component-wise: `/p/addons2` is not inside `/p/addons`.
+        assert_eq!(shown("/p/addons2/m/a.py"), "/p/addons2/m/a.py");
     }
 }

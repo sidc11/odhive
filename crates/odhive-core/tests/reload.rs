@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use odhive_core::events::{Delivery, Subscription};
+use odhive_core::logs::store::Mark;
 use odhive_core::manager::{
     InstanceEvent, InstancePlan, Manager, ManagerEvent, ManagerOptions, Notice, Reload,
 };
@@ -194,6 +195,25 @@ async fn touching_a_view_restarts_with_update_of_its_module() {
     let text = log_text(&m);
     assert_eq!(text.matches("Loading module m1 ").count(), 1, "{text}");
     assert!(text.contains("changed; restarting with -u m1"), "{text}");
+    let marks: Vec<Mark> = m
+        .read_log(&owner(), 1, 10_000)
+        .expect("log")
+        .records
+        .iter()
+        .filter_map(|r| r.mark.as_ref().map(|m| m.mark.clone()))
+        .filter(|m| matches!(m, Mark::Reload { .. }))
+        .collect();
+    // The latest one is for the view (macOS FSEvents may replay the
+    // project's creation as an earlier batch).
+    assert_eq!(
+        marks.last(),
+        Some(&Mark::Reload {
+            files: vec!["m1/views/x.xml".into()],
+            file_count: 1,
+            update: vec!["m1".into()],
+        }),
+        "{marks:#?}"
+    );
     let info = m.get(&owner()).expect("info").reload.expect("reload");
     assert!(info.watching);
 

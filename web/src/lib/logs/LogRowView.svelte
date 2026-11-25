@@ -1,5 +1,6 @@
 <script lang="ts">
   import { highlight } from './filter'
+  import { eventOf, TONE_CLASSES } from './marks'
   import { formatTime, LEVEL_LABELS, type LogRow } from './rows'
   import { decorate, fileLinks, firstLine, foldable, foldSummary, type FileLink } from './traceback'
 
@@ -33,6 +34,8 @@
   const COPIED_MS = 1500
 
   const markClass = $derived(current ? 'bg-match-current text-match-current-fg' : 'bg-match text-match-fg')
+  /** OdHive's own line (start, reload, install), shown as an event. */
+  const event = $derived(row.kind === 'entry' ? eventOf(row.record) : null)
   const fold = $derived(foldable(row))
   const folded = $derived(fold && !expanded)
   const links = $derived(row.kind === 'entry' && onopen && !folded ? fileLinks(row.record.message) : [])
@@ -75,7 +78,10 @@
 </script>
 
 <!-- One line of markup per row on purpose: whitespace at block edges is trimmed, so separators live inside the spans. -->
-{#if row.kind === 'entry'}
+{#if row.kind === 'entry' && event}
+  {@const record = row.record}
+  <div class={`border-l-2 border-accent pr-3 pl-2.5 whitespace-pre ${current ? 'bg-row-current' : ''}`} style:height={`${row.lines * lineHeight}px`} data-row-id={row.id} data-seq={record.seq} data-current={current || undefined} data-event={record.mark?.kind}><span class="text-fg-muted" title={record.mark?.at}>{`${formatTime(record.mark?.at).padEnd(12)} `}</span><span class="font-semibold text-accent">{`${event.tag.padEnd(6)} `}</span><span class={TONE_CLASSES[event.tone]}>{#if event.icon}<span aria-hidden="true">{`${event.icon} `}</span>{/if}{#each highlight(event.text, search) as part, i (i)}{#if part.match}<mark class={markClass}>{part.text}</mark>{:else}{part.text}{/if}{/each}</span></div>
+{:else if row.kind === 'entry'}
   {@const record = row.record}
   <div class={`px-3 whitespace-pre ${current ? 'bg-row-current' : ''}`} style:height={`${(folded ? 1 : row.lines) * lineHeight}px`} data-row-id={row.id} data-seq={record.seq} data-current={current || undefined} data-folded={folded || undefined}><span class="text-fg-muted" title={record.timestamp ?? undefined}>{`${formatTime(record.timestamp).padEnd(12)} `}</span>{#if record.level}<span class={LEVEL_CLASSES[record.level]}>{`${LEVEL_LABELS[record.level].padEnd(6)} `}</span>{/if}{#if record.db}<span class="text-fg-muted">{`${record.db} `}</span>{/if}{#if record.logger}<span class="text-fg-muted">{#each highlight(record.logger, search) as part, i (i)}{#if part.match}<mark class={markClass}>{part.text}</mark>{:else}{part.text}{/if}{/each}{LOGGER_END}</span>{/if}{#if fold}<button type="button" class={TOOL} aria-expanded={expanded} aria-label={expanded ? 'Fold traceback' : 'Unfold traceback'} title={expanded ? 'Fold traceback' : 'Unfold traceback'} onclick={() => ontoggle?.(row.id)}>{expanded ? '−' : '+'}</button>{SPACE}<button type="button" class={TOOL} title="Copy the traceback" aria-live="polite" onclick={copy}>{COPY_LABELS[copied]}</button>{SPACE}{/if}{#if folded}{#each highlight(firstLine(record.message), search) as part, i (i)}{#if part.match}<mark class={markClass}>{part.text}</mark>{:else}{part.text}{/if}{/each}<span class="text-fg-muted">{` · ${foldSummary(record, row.lines)}`}</span>{:else}{#each decorate(record.message, search, links) as piece, i (i)}{#if piece.link}{@const link = piece.link}<button type="button" class="cursor-pointer text-accent underline decoration-dotted underline-offset-2 select-text hover:decoration-solid" title={`Open ${link.path}:${link.line} in the editor`} data-path={link.path} data-line={link.line} onclick={() => onopen?.(link)}>{#each piece.parts as part, j (j)}{#if part.match}<mark class={markClass}>{part.text}</mark>{:else}{part.text}{/if}{/each}</button>{:else}{#each piece.parts as part, j (j)}{#if part.match}<mark class={markClass}>{part.text}</mark>{:else}{part.text}{/if}{/each}{/if}{/each}{/if}</div>
 {:else if row.kind === 'gap'}

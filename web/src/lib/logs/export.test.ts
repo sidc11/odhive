@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildExport, download, exportName, filterLines, localTime, type ExportFilter, type ExportInput } from './export'
 import { LEVEL_CHIPS, type LevelChip } from './filter'
 import type { LogRow } from './rows'
-import { record } from './test-fixtures'
+import { marked, record, type MarkFields } from './test-fixtures'
 
 const entry = (id: number, message = `entry ${id}`, extra = {}): LogRow => ({
   id,
@@ -133,6 +133,17 @@ describe('buildExport', () => {
       },
       entries: ROWS.flatMap((row) => (row.kind === 'entry' ? [row.record] : [])),
     })
+  })
+
+  it("writes OdHive's events as file lines (.log), as shown (.txt) and with their mark (.json)", () => {
+    const text = 'odhive: sale_x/models/order.py changed; restarting'
+    const mark: MarkFields = { kind: 'reload', files: ['sale_x/models/order.py'], file_count: 1, update: [] }
+    const rows: LogRow[] = [{ id: 1, kind: 'entry', record: marked(1, mark, text), lines: 1 }]
+    expect(buildExport(input(rows), 'log').text).toBe(`${text}\n`)
+    const shown = buildExport(input(rows), 'txt').text.split('\n').at(-2)
+    expect(shown).toBe(`${localTime('2026-11-24T09:00:01.500Z')} RELOAD ↻ restarted: sale_x/models/order.py changed`)
+    const json = JSON.parse(buildExport(input(rows), 'json').text) as { entries: { mark: unknown }[] }
+    expect(json.entries[0]?.mark).toEqual({ at: '2026-11-24T09:00:01.500Z', ...mark })
   })
 
   it('keeps markup and control text as data', () => {
