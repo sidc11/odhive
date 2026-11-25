@@ -1,11 +1,21 @@
 //! `GET /projects/{name}/postgres` and `/databases`: the project's
 //! PostgreSQL server and the databases on it.
 
+use std::io::Write as _;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::time::Duration;
+
+use axum::body::Body;
 use axum::http::StatusCode;
-use serde_json::json;
+use odhive_core::project::ProjectConfig;
+use odhive_server::security::{RequestLimits, UploadLimits};
+use odhive_server::{AppConfig, app};
+use serde_json::{Value, json};
 
 mod common;
 use common::Env;
+use common::pg::TempPg;
 
 #[tokio::test]
 async fn project_db_settings_are_used_and_the_password_never_shown() {
@@ -231,4 +241,387 @@ async fn database_creation_is_refused_before_anything_runs() {
         )
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+const RESTORE: &str = "/api/v1/projects/shop/databases/restore";
+
+/// Stand-ins for the PostgreSQL client tools: present, but do nothing.
+fn dummy_pg_tools(dir: &Path, names: &[&str]) {
+    std::fs::create_dir_all(dir).expect("mkdir");
+    for name in names {
+        let p = dir.join(name);
+        std::fs::write(&p, "#!/bin/sh\nexit 0\n").expect("write");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+}
+
+/// Staging folders left in the project's data folder.
+fn leftovers(env: &Env) -> Vec<String> {
+    std::fs::read_dir(env.project_dir("shop").join("data"))
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with(".odhive-restore-"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn restore_is_refused_before_anything_runs() {
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    let up = |query: &str| {
+        let api = &api;
+        let path = format!("{RESTORE}?{query}");
+        async move { api.upload(&path, Body::from("SELECT 1;"), None).await }
+    };
+
+    for name in [
+        "x;DROP DATABASE postgres",
+        "x'y",
+        "x\"y",
+        "two words",
+        "x;--",
+        "-x",
+        "_x",
+        "a",
+    ] {
+        let encoded: String = name
+            .bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
+                    (b as char).to_string()
+                } else {
+                    format!("%{b:02X}")
+                }
+            })
+            .collect();
+        let (status, body) = up(&format!("name={encoded}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name:?}: {body}");
+        assert!(
+            ["invalid_name", "invalid_request"].contains(&body["error"].as_str().unwrap_or("")),
+            "{name:?}: {body}"
+        );
+    }
+    let (status, _) = up("").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "name is required");
+    let (status, _) = up("name=shop_main&x=1").await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "unknown fields are refused"
+    );
+    let (status, _) = api
+        .upload(
+            "/api/v1/projects/nope/databases/restore?name=shop_main",
+            Body::empty(),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Declared too large: refused before the handler, whatever the rest.
+    let (status, body) = api
+        .upload(
+            &format!("{RESTORE}?name=shop_main"),
+            Body::empty(),
+            Some(UploadLimits::MAX_BYTES + 1),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    assert_eq!(body["error"], "body_too_large");
+    // Other routes keep the 1 MiB limit.
+    let (status, _) = api
+        .upload(
+            "/api/v1/projects/shop/databases",
+            Body::empty(),
+            Some(2 * 1024 * 1024),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+
+    let (status, body) = up("name=shop_main").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "no_venv");
+
+    env.make_runnable("shop", 18_169, 18_172);
+    let tools = env.project_dir("shop").join("pgbin");
+    dummy_pg_tools(&tools, &["psql", "createdb"]);
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .expect("bind")
+        .port();
+    let (status, body) = api
+        .put(
+            "/api/v1/projects/shop/options",
+            json!({ "options": {
+                "db_host": "127.0.0.1",
+                "db_port": port.to_string(),
+                "pg_path": tools.to_str().expect("utf-8"),
+            } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = up("name=shop_main").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "pg_tools_missing");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("pg_restore"))
+    );
+
+    dummy_pg_tools(&tools, &["pg_restore"]);
+    let (status, body) = up("name=shop_main").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "postgres_unavailable");
+
+    let (_, jobs) = api.get("/api/v1/jobs").await;
+    assert_eq!(jobs, json!([]), "no job was started");
+    assert!(leftovers(&env).is_empty());
+}
+
+/// Gives project `shop` a venv and points it (and the fake odoo-bin) at `pg`.
+async fn point_at(env: &Env, api: &common::Api, pg: &TempPg) {
+    env.make_runnable("shop", 18_269, 18_272);
+    let dir = env.project_dir("shop");
+    let mut p = ProjectConfig::load(&dir).expect("load");
+    let socket = pg.socket_dir.to_str().expect("utf-8").to_owned();
+    for (k, v) in [
+        ("PGHOST", socket.as_str()),
+        ("PGPORT", "5432"),
+        ("FAKE_PG_BIN", pg.bin.to_str().expect("utf-8")),
+    ] {
+        p.env.0.insert(k.into(), v.into());
+    }
+    p.save(&dir).expect("save");
+    let (status, body) = api
+        .put(
+            "/api/v1/projects/shop/options",
+            json!({ "options": {
+                "db_host": socket,
+                "db_port": "5432",
+                "pg_path": pg.bin.to_str().expect("utf-8"),
+            } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+fn odoo_like_db(pg: &TempPg, name: &str) {
+    pg.psql("postgres", &format!("CREATE DATABASE {name}"));
+    pg.psql(
+        name,
+        "CREATE TABLE ir_module_module (name text PRIMARY KEY, state text, \
+             latest_version text, write_date timestamp DEFAULT now()); \
+         INSERT INTO ir_module_module (name, state, latest_version) \
+             VALUES ('base', 'installed', '19.0.1.3'); \
+         CREATE TABLE ir_config_parameter (key text PRIMARY KEY, value text); \
+         CREATE TABLE res_partner (id serial PRIMARY KEY, name text); \
+         INSERT INTO res_partner (name) VALUES ('Azure'), ('Deco')",
+    );
+}
+
+fn zip_with(path: &Path, entries: &[(&str, &[u8])]) {
+    let mut w = zip::ZipWriter::new(std::fs::File::create(path).expect("create"));
+    for (name, data) in entries {
+        w.start_file(*name, zip::write::SimpleFileOptions::default())
+            .expect("start");
+        w.write_all(data).expect("write");
+    }
+    w.finish().expect("finish");
+}
+
+async fn upload_file(api: &common::Api, query: &str, file: &Path) -> (StatusCode, Value) {
+    let bytes = std::fs::read(file).expect("read");
+    let n = bytes.len() as u64;
+    api.upload(&format!("{RESTORE}?{query}"), Body::from(bytes), Some(n))
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_uploaded_dump_is_restored_and_listed() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    point_at(&env, &api, &pg).await;
+    odoo_like_db(&pg, "prod");
+    let work = tempfile::tempdir().expect("tempdir");
+    let dump = work.path().join("prod.dump");
+    pg.dump("prod", "c", &dump);
+
+    let (status, job) = upload_file(&api, "name=restored", &dump).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    assert_eq!(job["kind"], "restore_database");
+    assert_eq!(job["project"], "shop");
+    assert_eq!(job["database"], "restored");
+    let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    let db = &done["result"]["database"];
+    assert_eq!(db["name"], "restored");
+    assert_eq!(db["format"], "custom");
+    assert_eq!(db["neutralized"], true);
+    assert_eq!(db["new_uuid"], true);
+    assert!(
+        done["steps"]
+            .as_array()
+            .expect("steps")
+            .iter()
+            .any(|s| s["job"] == "restore_database" && s["step"] == "neutralize"),
+        "{done}"
+    );
+    assert_eq!(
+        pg.psql(
+            "restored",
+            "SELECT value FROM ir_config_parameter WHERE key = 'database.is_neutralized'"
+        ),
+        ["true"]
+    );
+    assert!(leftovers(&env).is_empty(), "{:?}", leftovers(&env));
+
+    let (status, list) = api.get("/api/v1/projects/shop/databases").await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let listed = list["databases"]
+        .as_array()
+        .expect("databases")
+        .iter()
+        .find(|d| d["name"] == "restored")
+        .cloned()
+        .unwrap_or_else(|| panic!("not listed: {list}"));
+    assert_eq!(listed["odoo_series"], "19.0");
+
+    // Not neutralized, kept UUID, when asked.
+    let (status, job) = upload_file(&api, "name=moved&neutralize=false&copy=false", &dump).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(done["result"]["database"]["neutralized"], false);
+    assert!(
+        pg.psql(
+            "moved",
+            "SELECT value FROM ir_config_parameter WHERE key = 'database.is_neutralized'"
+        )
+        .is_empty()
+    );
+
+    // Taken name.
+    let (status, body) = upload_file(&api, "name=restored", &dump).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "database_exists");
+
+    // Unsafe and unusable files are refused before a job starts.
+    let evil = work.path().join("evil.zip");
+    for (entry, code) in [
+        ("../../evil", "unsafe_archive"),
+        ("filestore/../../../evil", "unsafe_archive"),
+        ("/tmp/evil", "unsafe_archive"),
+    ] {
+        zip_with(&evil, &[("dump.sql", b"SELECT 1;\n"), (entry, b"pwned")]);
+        let (status, body) = upload_file(&api, "name=evil", &evil).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{entry}: {body}");
+        assert_eq!(body["error"], code, "{body}");
+    }
+    let gz = work.path().join("prod.sql.gz");
+    std::fs::write(&gz, b"\x1f\x8b\x08\x00rest").expect("write");
+    let (status, body) = upload_file(&api, "name=evil", &gz).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_dump");
+    assert!(body["message"].as_str().is_some_and(|m| m.contains("gzip")));
+    let (status, body) = api
+        .upload(&format!("{RESTORE}?name=evil"), Body::empty(), Some(0))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_dump");
+    let (_, jobs) = api.get("/api/v1/jobs").await;
+    assert_eq!(jobs.as_array().map(Vec::len), Some(2), "{jobs}");
+    assert!(
+        pg.psql(
+            "postgres",
+            "SELECT datname FROM pg_database WHERE datname = 'evil'"
+        )
+        .is_empty()
+    );
+    assert!(leftovers(&env).is_empty(), "{:?}", leftovers(&env));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn uploads_without_a_length_are_cut_at_the_limit_and_stalls_time_out() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let env = Env::new();
+    let mut api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    point_at(&env, &api, &pg).await;
+    let limits = RequestLimits {
+        upload: UploadLimits {
+            max_bytes: 1000,
+            idle: Duration::from_millis(300),
+        },
+        ..RequestLimits::default()
+    };
+    api.router = app(
+        AppConfig {
+            limits,
+            ..AppConfig::new(common::PORT)
+        },
+        api.service.clone(),
+    );
+
+    // Declared over the limit.
+    let (status, _) = api
+        .upload(
+            &format!("{RESTORE}?name=big"),
+            Body::from(vec![b'x'; 2000]),
+            Some(2000),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    // No length (chunked): cut while streaming.
+    let (status, body) = api
+        .upload(
+            &format!("{RESTORE}?name=big"),
+            Body::from(vec![b'x'; 2000]),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    // Under the limit is accepted (and fails later only for not being Odoo).
+    let (status, body) = api
+        .upload(
+            &format!("{RESTORE}?name=small"),
+            Body::from("SELECT 1;\n"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let done = api.wait_job(body["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert!(
+        done["error"].to_string().contains("not an Odoo database"),
+        "{done}"
+    );
+
+    let (status, body) = api
+        .upload(
+            &format!("{RESTORE}?name=stalled"),
+            Body::from_stream(futures_util::stream::pending::<
+                Result<axum::body::Bytes, std::io::Error>,
+            >()),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::REQUEST_TIMEOUT, "{body}");
+    assert_eq!(body["error"], "upload_timeout");
+    assert!(leftovers(&env).is_empty(), "{:?}", leftovers(&env));
 }

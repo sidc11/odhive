@@ -276,6 +276,21 @@ fn print_create_event(e: odhive_core::db::CreateEvent) {
     }
 }
 
+fn print_restore_event(e: odhive_core::db::RestoreEvent) {
+    use odhive_core::db::RestoreEvent;
+    match e {
+        RestoreEvent::Step { step } => say(format!("{step}…")),
+        RestoreEvent::Inspected {
+            format,
+            unpacked_bytes,
+            filestore_files,
+        } => say(format!(
+            "  {format:?} dump, {unpacked_bytes} bytes unpacked, {filestore_files} filestore files"
+        )),
+        RestoreEvent::Output { .. } => {}
+    }
+}
+
 /// Prints a job's progress until it ends; Ctrl+C cancels it.
 async fn follow_job(c: &Client, mut job: Job) -> anyhow::Result<Job> {
     let mut signals = Signals::new()?;
@@ -289,6 +304,7 @@ async fn follow_job(c: &Client, mut job: Job) -> anyhow::Result<Job> {
                 JobStep::Setup(e) => print_setup_event(e),
                 JobStep::Clone(e) => print_clone_event(&mut phase, e),
                 JobStep::CreateDatabase(e) => print_create_event(e),
+                JobStep::RestoreDatabase(e) => print_restore_event(e),
             }
         }
         steps = steps.max(job.steps.len());

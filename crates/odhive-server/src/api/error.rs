@@ -5,7 +5,8 @@ use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use odhive_core::config::ConfigError;
-use odhive_core::db::CreateError;
+use odhive_core::db::archive::ArchiveError;
+use odhive_core::db::{CreateError, RestoreError};
 use odhive_core::launch::LaunchError;
 use odhive_core::manager::ManagerError;
 use odhive_core::pidfile::PidFileError;
@@ -73,7 +74,7 @@ impl ApiError {
     }
 
     /// `413 Payload Too Large` for a body over `limit` bytes.
-    pub fn body_too_large(limit: usize) -> Self {
+    pub fn body_too_large(limit: u64) -> Self {
         Self::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "body_too_large",
@@ -251,6 +252,49 @@ impl From<CreateError> for ApiError {
             CreateError::Failed { .. } => {
                 Self::new(StatusCode::INTERNAL_SERVER_ERROR, "create_failed", msg)
             }
+        }
+    }
+}
+
+impl From<RestoreError> for ApiError {
+    fn from(e: RestoreError) -> Self {
+        let msg = e.to_string();
+        match e {
+            RestoreError::Request(e) => e.into(),
+            RestoreError::Exists(_) => Self::conflict("database_exists", msg),
+            RestoreError::FilestoreExists(_) => Self::conflict("filestore_exists", msg),
+            RestoreError::Server(_) => {
+                Self::new(StatusCode::SERVICE_UNAVAILABLE, "postgres_unavailable", msg)
+            }
+            RestoreError::MissingTool { .. } => Self::conflict("pg_tools_missing", msg),
+            RestoreError::PsqlTooOld { .. } => Self::conflict("psql_too_old", msg),
+            RestoreError::VersionMismatch { .. } => Self::conflict("version_mismatch", msg),
+            RestoreError::Archive(e) => e.into(),
+            RestoreError::NotOdoo => Self::bad_request("invalid_dump", msg),
+            RestoreError::NotNeutralized
+            | RestoreError::Spawn { .. }
+            | RestoreError::Failed { .. }
+            | RestoreError::Io { .. } => {
+                Self::new(StatusCode::INTERNAL_SERVER_ERROR, "restore_failed", msg)
+            }
+        }
+    }
+}
+
+impl From<ArchiveError> for ApiError {
+    fn from(e: ArchiveError) -> Self {
+        let msg = e.to_string();
+        match e {
+            ArchiveError::Empty
+            | ArchiveError::Compressed(_)
+            | ArchiveError::Unknown
+            | ArchiveError::NoDump
+            | ArchiveError::Zip(_) => Self::bad_request("invalid_dump", msg),
+            ArchiveError::Unsafe { .. }
+            | ArchiveError::TooManyEntries(_)
+            | ArchiveError::TooLarge(_)
+            | ArchiveError::Bomb { .. } => Self::bad_request("unsafe_archive", msg),
+            ArchiveError::Io { .. } | ArchiveError::Cancelled => Self::internal(msg),
         }
     }
 }

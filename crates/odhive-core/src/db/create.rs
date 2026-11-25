@@ -47,7 +47,7 @@ pub const MAX_LOGIN_LEN: usize = 128;
 pub const MAX_PASSWORD_LEN: usize = 1024;
 
 /// Output lines kept for an error message.
-const TAIL_LINES: usize = 40;
+pub(super) const TAIL_LINES: usize = 40;
 
 /// Environment variables [`FINALIZE_SCRIPT`] reads.
 const ENV_PASSWORD: &str = "ODHIVE_DB_PASSWORD";
@@ -57,7 +57,7 @@ const ENV_COUNTRY: &str = "ODHIVE_DB_COUNTRY";
 const ENV_MODULES: &str = "ODHIVE_DB_MODULES";
 
 /// What [`FINALIZE_SCRIPT`] prints once it committed.
-const READY_MARKER: &str = "odhive: database ready";
+pub(super) const READY_MARKER: &str = "odhive: database ready";
 
 /// Run by `odoo-bin shell` (on stdin) as the last step. Fixed text: every
 /// value comes from the environment.
@@ -345,7 +345,7 @@ pub struct OdooCommand {
 }
 
 impl OdooCommand {
-    fn command(&self, args: &[String]) -> Command {
+    pub(super) fn command(&self, args: &[String]) -> Command {
         let mut cmd = Command::new(&self.python);
         cmd.arg(&self.odoo_bin).args(args).current_dir(&self.cwd);
         for key in proc::PYTHON_ENV_OVERRIDES {
@@ -528,7 +528,11 @@ pub async fn create(
             on_event(CreateEvent::Step {
                 step: CreateStep::Cleanup,
             });
-            if let Err(why) = drop_database(odoo, &new.name, &mut on_event).await {
+            if let Err(why) = drop_database(odoo, &new.name, |line| {
+                on_event(CreateEvent::Output { line });
+            })
+            .await
+            {
                 tracing::warn!(db = %new.name, "could not remove the half-made database: {why}");
             }
             Err(e)
@@ -650,10 +654,10 @@ fn module_progress(line: &str) -> Option<CreateEvent> {
 }
 
 /// `odoo-bin db -c <conf> drop <name>`: the database and its filestore.
-async fn drop_database(
+pub(super) async fn drop_database(
     odoo: &OdooCommand,
     name: &str,
-    on_event: &mut impl FnMut(CreateEvent),
+    on_line: impl FnMut(String),
 ) -> Result<(), String> {
     let cmd = odoo.command(&[
         "db".into(),
@@ -662,11 +666,9 @@ async fn drop_database(
         "drop".into(),
         name.to_owned(),
     ]);
-    let done = proc::run_streaming(cmd, TAIL_LINES, |line| {
-        on_event(CreateEvent::Output { line });
-    })
-    .await
-    .map_err(|e| format!("{e:?}"))?;
+    let done = proc::run_streaming(cmd, TAIL_LINES, on_line)
+        .await
+        .map_err(|e| format!("{e:?}"))?;
     if done.status.success() {
         Ok(())
     } else {
@@ -676,7 +678,7 @@ async fn drop_database(
 
 /// Removes the database in a background task when dropped armed (the
 /// create was cancelled mid-way).
-struct DropGuard(Option<(OdooCommand, String)>);
+pub(super) struct DropGuard(pub(super) Option<(OdooCommand, String)>);
 
 impl Drop for DropGuard {
     fn drop(&mut self) {
@@ -684,13 +686,13 @@ impl Drop for DropGuard {
             return;
         };
         let Ok(rt) = tokio::runtime::Handle::try_current() else {
-            tracing::warn!(db = %name, "cancelled create left the database behind");
+            tracing::warn!(db = %name, "cancelled work left the database behind");
             return;
         };
         rt.spawn(async move {
             // The killed odoo-bin's connections close on their own; Odoo's
             // drop also ends any that are left.
-            if let Err(why) = drop_database(&odoo, &name, &mut |_| {}).await {
+            if let Err(why) = drop_database(&odoo, &name, |_| {}).await {
                 tracing::warn!(db = %name, "could not remove the cancelled database: {why}");
             }
         });

@@ -43,7 +43,7 @@ pub const MUTATION_HEADER: &str = "x-odhive";
 #[openapi(
     info(
         title = "OdHive API",
-        description = "Local API of OdHive, used by its web UI and CLI. Every request needs the session cookie `odhive_session` (set by `/login`) or `Authorization: Bearer <token>`, else 401. Every request other than GET/HEAD must also carry the header `X-OdHive: 1` and, from a browser, OdHive's own `Origin` (403 `forbidden_origin`; a request without `Origin` needs the bearer token). Bodies over 1 MiB get 413 `body_too_large`; a request not answered within 60 s gets 503 `timeout`. No CORS headers are ever sent.",
+        description = "Local API of OdHive, used by its web UI and CLI. Every request needs the session cookie `odhive_session` (set by `/login`) or `Authorization: Bearer <token>`, else 401. Every request other than GET/HEAD must also carry the header `X-OdHive: 1` and, from a browser, OdHive's own `Origin` (403 `forbidden_origin`; a request without `Origin` needs the bearer token). Bodies over 1 MiB get 413 `body_too_large` (uploads: over 32 GiB); a request not answered within 60 s gets 503 `timeout` (uploads: 408 `upload_timeout` after 60 s without data). No CORS headers are ever sent.",
         license(name = "Apache-2.0", identifier = "Apache-2.0")
     ),
     tags(
@@ -80,6 +80,7 @@ fn api_router() -> OpenApiRouter<Service> {
         .routes(routes!(environment::check))
         .routes(routes!(databases::health))
         .routes(routes!(databases::list, databases::create))
+        .routes(routes!(databases::restore))
         .routes(routes!(jobs::list))
         .routes(routes!(jobs::get))
         .routes(routes!(jobs::cancel))

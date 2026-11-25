@@ -547,3 +547,400 @@ async fn a_cancelled_create_removes_the_database() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
+
+// ---- restore ----
+
+/// A source database that looks like Odoo 19 to OdHive: `base` installed,
+/// a table with rows.
+async fn odoo_like_db(pg: &TempPg, name: &str) {
+    pg.sql(&format!("CREATE DATABASE {name}")).await;
+    sql_in(
+        pg,
+        name,
+        "CREATE TABLE ir_module_module (name text PRIMARY KEY, state text, \
+             latest_version text, write_date timestamp DEFAULT now()); \
+         INSERT INTO ir_module_module (name, state, latest_version) \
+             VALUES ('base', 'installed', '19.0.1.3'); \
+         CREATE TABLE ir_config_parameter (key text PRIMARY KEY, value text); \
+         CREATE TABLE res_partner (id serial PRIMARY KEY, name text); \
+         INSERT INTO res_partner (name) VALUES ('Azure'), ('Deco')",
+    )
+    .await;
+}
+
+/// `pg_dump` of `db` in `format` (`p`, `c` or `t`) to `out`.
+fn pg_dump(pg: &TempPg, db: &str, format: &str, out: &std::path::Path) {
+    let bin = TempPg::bin_dir().expect("pg bin");
+    let done = std::process::Command::new(bin.join("pg_dump"))
+        .args(["--no-owner", &format!("--format={format}"), "-f"])
+        .arg(out)
+        .arg(db)
+        .env("PGHOST", &pg.socket_dir)
+        .env("PGPORT", "5432")
+        .output()
+        .expect("pg_dump");
+    assert!(done.status.success(), "pg_dump: {done:?}");
+}
+
+/// An Odoo backup zip of `db`: `dump.sql`, `manifest.json`, a filestore.
+fn backup_zip(pg: &TempPg, db: &str, version: &str, out: &std::path::Path, dir: &std::path::Path) {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    let sql = dir.join(format!("{db}.plain.sql"));
+    pg_dump(pg, db, "p", &sql);
+    let mut w = zip::ZipWriter::new(std::fs::File::create(out).expect("create"));
+    let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    w.start_file("dump.sql", opts).expect("start");
+    w.write_all(&std::fs::read(&sql).expect("read"))
+        .expect("write");
+    w.start_file("manifest.json", opts).expect("start");
+    write!(
+        w,
+        r#"{{"odoo_dump": "1", "db_name": "{db}", "version": "{version}", "pg_version": "18.0"}}"#
+    )
+    .expect("write");
+    w.start_file("filestore/ab/ab12cd", opts).expect("start");
+    w.write_all(b"attachment bytes").expect("write");
+    w.finish().expect("finish");
+}
+
+struct RestoreSetup {
+    _dir: tempfile::TempDir,
+    root: std::path::PathBuf,
+    odoo: OdooCommand,
+    tools: PgTools,
+    target: PgTarget,
+}
+
+impl RestoreSetup {
+    async fn new(pg: &TempPg, extra: &[(&str, &str)]) -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().to_path_buf();
+        let odoo = fake_odoo(pg, &root, extra);
+        std::fs::write(
+            &odoo.conf,
+            format!("[options]\ndata_dir = {}\n", root.join("data").display()),
+        )
+        .expect("conf");
+        let bin = TempPg::bin_dir().expect("pg bin");
+        let tools = PgTools::find(None, Some(bin.as_os_str()), TIMEOUT)
+            .await
+            .expect("tools");
+        Self {
+            _dir: dir,
+            root,
+            odoo,
+            tools,
+            target: pg.target(None),
+        }
+    }
+
+    fn options(&self, series: &str) -> RestoreOptions {
+        let staging = self
+            .root
+            .join("data")
+            .join(format!(".staging-{}", rand_suffix()));
+        std::fs::create_dir_all(&staging).expect("staging");
+        RestoreOptions {
+            filestore_root: self.root.join("data").join("filestore"),
+            staging,
+            series: Some(series.into()),
+            template: "template0".into(),
+            limits: archive::ExtractLimits::default(),
+            timeout: TIMEOUT,
+        }
+    }
+
+    async fn restore(
+        &self,
+        dump: &std::path::Path,
+        req: &RestoreRequest,
+        series: &str,
+    ) -> (Result<RestoredDatabase, RestoreError>, Vec<RestoreEvent>) {
+        let mut events = Vec::new();
+        let r = restore(
+            &self.target,
+            &self.odoo,
+            &self.tools,
+            dump,
+            req,
+            &self.options(series),
+            |e| events.push(e),
+        )
+        .await;
+        (r, events)
+    }
+}
+
+fn rand_suffix() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    N.fetch_add(1, Ordering::Relaxed)
+}
+
+async fn param(pg: &TempPg, db: &str, key: &str) -> Vec<String> {
+    query_db(
+        pg,
+        db,
+        &format!("SELECT value FROM ir_config_parameter WHERE key = '{key}'"),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_backup_zip_is_restored_neutralized_with_its_filestore() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let s = RestoreSetup::new(&pg, &[]).await;
+    odoo_like_db(&pg, "prod").await;
+    let zip = s.root.join("prod.zip");
+    backup_zip(&pg, "prod", "19.0", &zip, &s.root);
+
+    let (r, events) = s
+        .restore(&zip, &RestoreRequest::new("prod_copy"), "19.0")
+        .await;
+    if !s.tools.psql_can_restrict() {
+        assert!(matches!(r, Err(RestoreError::PsqlTooOld { .. })), "{r:?}");
+        return;
+    }
+    let done = r.expect("restored");
+    assert_eq!(done.format, archive::DumpFormat::Zip);
+    assert_eq!(done.odoo_version.as_deref(), Some("19.0.1.3"));
+    assert!(done.neutralized && done.new_uuid);
+    assert_eq!(done.filestore_files, 1);
+    assert_eq!(done.source_name.as_deref(), Some("prod"));
+    let steps: Vec<RestoreStep> = events
+        .iter()
+        .filter_map(|e| match e {
+            RestoreEvent::Step { step } => Some(*step),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            RestoreStep::Inspect,
+            RestoreStep::Create,
+            RestoreStep::Load,
+            RestoreStep::Check,
+            RestoreStep::Neutralize,
+            RestoreStep::Filestore,
+            RestoreStep::Finalize
+        ]
+    );
+    assert_eq!(
+        query_db(&pg, "prod_copy", "SELECT name FROM res_partner ORDER BY id").await,
+        ["Azure", "Deco"]
+    );
+    assert_eq!(param(&pg, "prod_copy", NEUTRALIZED_KEY).await, ["true"]);
+    assert_eq!(param(&pg, "prod_copy", "database.uuid").await.len(), 1);
+    let file = s.root.join("data/filestore/prod_copy/ab/ab12cd");
+    assert_eq!(
+        std::fs::read(&file).expect("filestore"),
+        b"attachment bytes"
+    );
+    // Collation as Odoo creates it.
+    assert_eq!(
+        query_db(
+            &pg,
+            "postgres",
+            "SELECT datcollate::text FROM pg_database WHERE datname = 'prod_copy'"
+        )
+        .await,
+        ["C"]
+    );
+
+    // Again under the same name: refused before touching anything.
+    let (r, _) = s
+        .restore(&zip, &RestoreRequest::new("prod_copy"), "19.0")
+        .await;
+    assert!(matches!(r, Err(RestoreError::Exists(_))), "{r:?}");
+    // A leftover filestore folder blocks a name too.
+    std::fs::create_dir_all(s.root.join("data/filestore/leftover")).expect("mkdir");
+    let (r, _) = s
+        .restore(&zip, &RestoreRequest::new("leftover"), "19.0")
+        .await;
+    assert!(matches!(r, Err(RestoreError::FilestoreExists(_))), "{r:?}");
+    assert!(
+        !exists(&s.target, "leftover", TIMEOUT)
+            .await
+            .expect("exists")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn custom_and_tar_archives_and_sql_scripts_are_restored() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let s = RestoreSetup::new(&pg, &[]).await;
+    odoo_like_db(&pg, "prod").await;
+    for (format, file, want) in [
+        ("c", "prod.dump", archive::DumpFormat::Custom),
+        ("t", "prod.tar", archive::DumpFormat::Tar),
+        ("p", "prod.sql", archive::DumpFormat::Sql),
+    ] {
+        let dump = s.root.join(file);
+        pg_dump(&pg, "prod", format, &dump);
+        let name = format!("from_{format}");
+        let req = RestoreRequest {
+            name: name.clone(),
+            neutralize: false,
+            copy: false,
+        };
+        let (r, _) = s.restore(&dump, &req, "19.0").await;
+        if want == archive::DumpFormat::Sql && !s.tools.psql_can_restrict() {
+            assert!(matches!(r, Err(RestoreError::PsqlTooOld { .. })), "{r:?}");
+            continue;
+        }
+        let done = r.unwrap_or_else(|e| panic!("{file}: {e}"));
+        assert_eq!(done.format, want);
+        assert!(!done.neutralized && !done.new_uuid);
+        assert_eq!(
+            query_db(&pg, &name, "SELECT count(*)::text FROM res_partner").await,
+            ["2"],
+            "{file}"
+        );
+        // Neither neutralized nor given a new UUID.
+        assert!(
+            query_db(
+                &pg,
+                &name,
+                "SELECT key FROM ir_config_parameter WHERE key IN \
+                 ('database.is_neutralized', 'database.uuid')"
+            )
+            .await
+            .is_empty()
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_restores_remove_the_database_and_filestore() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    odoo_like_db(&pg, "prod").await;
+    let s = RestoreSetup::new(&pg, &[]).await;
+    if !s.tools.psql_can_restrict() {
+        eprintln!("skipped: psql cannot restrict meta-commands");
+        return;
+    }
+    let zip = s.root.join("prod.zip");
+    backup_zip(&pg, "prod", "19.0", &zip, &s.root);
+
+    // Another series, from the manifest: refused before creating anything.
+    let (r, events) = s.restore(&zip, &RestoreRequest::new("other"), "20.0").await;
+    assert!(
+        matches!(&r, Err(RestoreError::VersionMismatch { dump, project }) if dump == "19.0" && project == "20.0"),
+        "{r:?}"
+    );
+    assert!(!events.contains(&RestoreEvent::Step {
+        step: RestoreStep::Create
+    }));
+    assert!(!exists(&s.target, "other", TIMEOUT).await.expect("exists"));
+    // From the database itself when there is no manifest.
+    let custom = s.root.join("prod.dump");
+    pg_dump(&pg, "prod", "c", &custom);
+    let (r, _) = s
+        .restore(&custom, &RestoreRequest::new("other"), "20.0")
+        .await;
+    assert!(
+        matches!(r, Err(RestoreError::VersionMismatch { .. })),
+        "{r:?}"
+    );
+    assert!(!exists(&s.target, "other", TIMEOUT).await.expect("exists"));
+
+    // The registry does not load: database and filestore removed.
+    let broken = RestoreSetup::new(&pg, &[("FAKE_SHELL_BROKEN", "1")]).await;
+    let zip2 = broken.root.join("prod.zip");
+    std::fs::copy(&zip, &zip2).expect("copy");
+    let (r, events) = broken
+        .restore(&zip2, &RestoreRequest::new("broken"), "19.0")
+        .await;
+    assert!(
+        matches!(
+            r,
+            Err(RestoreError::Failed {
+                step: RestoreStep::Finalize,
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    assert!(events.contains(&RestoreEvent::Step {
+        step: RestoreStep::Cleanup
+    }));
+    assert!(
+        !exists(&broken.target, "broken", TIMEOUT)
+            .await
+            .expect("exists")
+    );
+    assert!(!broken.root.join("data/filestore/broken").exists());
+
+    // Neutralization that did not take is a failure, never a silent success.
+    let unneutral = RestoreSetup::new(&pg, &[("FAKE_NEUTRALIZE_BROKEN", "1")]).await;
+    let (r, _) = unneutral
+        .restore(&custom, &RestoreRequest::new("unneutral"), "19.0")
+        .await;
+    assert!(matches!(r, Err(RestoreError::NotNeutralized)), "{r:?}");
+    assert!(
+        !exists(&unneutral.target, "unneutral", TIMEOUT)
+            .await
+            .expect("exists")
+    );
+
+    // Not an Odoo database.
+    let sql = s.root.join("plain.sql");
+    std::fs::write(&sql, "CREATE TABLE t (x int);\n").expect("write");
+    let (r, _) = s
+        .restore(&sql, &RestoreRequest::new("notodoo"), "19.0")
+        .await;
+    assert!(matches!(r, Err(RestoreError::NotOdoo)), "{r:?}");
+    assert!(!exists(&s.target, "notodoo", TIMEOUT).await.expect("exists"));
+
+    // Bad names never reach a tool.
+    for bad in ["a;b", "x y", "x'--", "-x", "a\"b"] {
+        let (r, events) = s.restore(&sql, &RestoreRequest::new(bad), "19.0").await;
+        assert!(matches!(r, Err(RestoreError::Request(_))), "{bad:?}: {r:?}");
+        assert!(events.is_empty());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_cannot_run_psql_meta_commands() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let s = RestoreSetup::new(&pg, &[]).await;
+    if !s.tools.psql_can_restrict() {
+        eprintln!("skipped: psql cannot restrict meta-commands");
+        return;
+    }
+    let marker = s.root.join("pwned");
+    let sql = s.root.join("evil.sql");
+    std::fs::write(
+        &sql,
+        format!(
+            "\\! touch {}\n\\unrestrict guess\n\\! touch {}\n\
+             CREATE TABLE ir_module_module (name text, state text, latest_version text, write_date timestamp);\n\
+             INSERT INTO ir_module_module VALUES ('base', 'installed', '19.0.1.3', now());\n",
+            marker.display(),
+            marker.display()
+        ),
+    )
+    .expect("write");
+    let req = RestoreRequest {
+        neutralize: false,
+        ..RestoreRequest::new("evil")
+    };
+    let (r, _) = s.restore(&sql, &req, "19.0").await;
+    assert!(!marker.exists(), "a meta-command ran");
+    // The SQL itself still ran.
+    r.expect("restored");
+}
