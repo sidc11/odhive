@@ -17,7 +17,7 @@ pub(crate) struct TempPg {
 }
 
 impl TempPg {
-    fn bin_dir() -> Option<PathBuf> {
+    pub(crate) fn bin_dir() -> Option<PathBuf> {
         let path = std::env::var_os("PATH")?;
         if let Some(initdb) = crate::python::find_executable(&path, "initdb") {
             return initdb.parent().map(Path::to_path_buf);

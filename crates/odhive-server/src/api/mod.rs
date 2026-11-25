@@ -79,7 +79,7 @@ fn api_router() -> OpenApiRouter<Service> {
         .routes(routes!(pythons::list))
         .routes(routes!(environment::check))
         .routes(routes!(databases::health))
-        .routes(routes!(databases::list))
+        .routes(routes!(databases::list, databases::create))
         .routes(routes!(jobs::list))
         .routes(routes!(jobs::get))
         .routes(routes!(jobs::cancel))

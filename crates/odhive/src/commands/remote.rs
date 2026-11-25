@@ -265,6 +265,17 @@ async fn setup(c: &Client, name: &str, env: &EnvArgs, recreate: bool) -> anyhow:
     Ok(())
 }
 
+fn print_create_event(e: odhive_core::db::CreateEvent) {
+    use odhive_core::db::CreateEvent;
+    match e {
+        CreateEvent::Step { step } => say(format!("{step}…")),
+        CreateEvent::Module { name, index, total } => {
+            say(format!("  module {name} ({index}/{total})"));
+        }
+        CreateEvent::Output { .. } => {}
+    }
+}
+
 /// Prints a job's progress until it ends; Ctrl+C cancels it.
 async fn follow_job(c: &Client, mut job: Job) -> anyhow::Result<Job> {
     let mut signals = Signals::new()?;
@@ -277,6 +288,7 @@ async fn follow_job(c: &Client, mut job: Job) -> anyhow::Result<Job> {
             match step.clone() {
                 JobStep::Setup(e) => print_setup_event(e),
                 JobStep::Clone(e) => print_clone_event(&mut phase, e),
+                JobStep::CreateDatabase(e) => print_create_event(e),
             }
         }
         steps = steps.max(job.steps.len());

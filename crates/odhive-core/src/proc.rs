@@ -103,12 +103,27 @@ pub(crate) struct Finished {
 /// Dropping the returned future (cancel, timeout) kills the whole process
 /// group, so helpers the tool started (compilers, build backends) die too.
 pub(crate) async fn run_streaming(
+    cmd: Command,
+    tail_lines: usize,
+    on_line: impl FnMut(String),
+) -> Result<Finished, RunError> {
+    run_streaming_with_input(cmd, None, tail_lines, on_line).await
+}
+
+/// Like [`run_streaming`], but writes `input` to the child's stdin (then
+/// closes it) when given.
+pub(crate) async fn run_streaming_with_input(
     mut cmd: Command,
+    input: Option<Vec<u8>>,
     tail_lines: usize,
     mut on_line: impl FnMut(String),
 ) -> Result<Finished, RunError> {
     let mut child = cmd
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
@@ -118,6 +133,14 @@ pub(crate) async fn run_streaming(
     let mut group = GroupKill(group_of(&child));
     let stdout = child.stdout.take().expect("stdout is piped");
     let stderr = child.stderr.take().expect("stderr is piped");
+    let in_task = child.stdin.take().zip(input).map(|(mut stdin, bytes)| {
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            // A child that exits without reading closes the pipe: not an error here.
+            let _ = stdin.write_all(&bytes).await;
+            let _ = stdin.shutdown().await;
+        })
+    });
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let out_task = tokio::spawn(forward_lines(stdout, tx.clone()));
@@ -136,6 +159,9 @@ pub(crate) async fn run_streaming(
         task.await
             .map_err(|e| RunError::Io(io::Error::other(e)))?
             .map_err(RunError::Io)?;
+    }
+    if let Some(task) = in_task {
+        let _ = task.await;
     }
     let status = child.wait().await.map_err(RunError::Io)?;
     // Reaped: the pid may be reused from now on, so never signal it again.
@@ -202,6 +228,18 @@ mod tests {
         assert_eq!(done.status.code(), Some(3));
         assert_eq!(seen.len(), 8);
         assert_eq!(done.tail.lines().count(), 2);
+    }
+
+    #[tokio::test]
+    async fn input_is_written_to_stdin_then_closed() {
+        let mut cmd = Command::new("/bin/cat");
+        cmd.arg("-");
+        let mut seen = Vec::new();
+        let done = run_streaming_with_input(cmd, Some(b"a\nb\n".to_vec()), 5, |l| seen.push(l))
+            .await
+            .expect("run");
+        assert!(done.status.success());
+        assert_eq!(seen, ["a", "b"]);
     }
 
     #[tokio::test]
