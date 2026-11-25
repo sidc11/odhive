@@ -5,11 +5,13 @@
 //! may create databases. [`list()`] lists the databases Odoo would offer.
 //! [`create()`] creates one with the project's `odoo-bin`. [`restore()`]
 //! restores a dump (Odoo backup zip, `pg_dump` archive or SQL script).
-//! [`delete()`] drops one with its filestore.
+//! [`delete()`] drops one with its filestore. [`duplicate()`] copies one
+//! with its filestore.
 
 pub mod archive;
 mod create;
 mod delete;
+mod duplicate;
 mod list;
 mod restore;
 mod target;
@@ -25,6 +27,10 @@ pub use create::{
 };
 pub use delete::{
     DeleteError, DeleteEvent, DeleteStep, DeletedDatabase, check_confirmation, delete,
+};
+pub use duplicate::{
+    DuplicateError, DuplicateEvent, DuplicateRequest, DuplicateStep, DuplicatedDatabase, UUID_KEY,
+    duplicate,
 };
 pub use list::{Database, DatabaseList, list};
 pub use restore::{

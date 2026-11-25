@@ -82,6 +82,7 @@ fn api_router() -> OpenApiRouter<Service> {
         .routes(routes!(databases::list, databases::create))
         .routes(routes!(databases::restore))
         .routes(routes!(databases::delete))
+        .routes(routes!(databases::duplicate))
         .routes(routes!(jobs::list))
         .routes(routes!(jobs::get))
         .routes(routes!(jobs::cancel))

@@ -802,6 +802,97 @@
         }
       }
     },
+    "/api/v1/projects/{name}/databases/{database}/duplicate": {
+      "post": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Starts copying a database the project lists, with its filestore, as\nOdoo's database manager does (`odoo-bin db duplicate`: other connections\nto the source are ended, the copy made from it as a template, given a\nnew database UUID and neutralized when asked, `data/filestore/<source>`\ncopied). PostgreSQL copies only a database nobody is connected to, so\ninstances of the project running on the source are refused with\n`database_in_use` (it lists them) unless `stop_instances` is set: the job\nthen stops them first and starts the ones OdHive runs again afterwards.\nFollow the job with `/jobs/{id}` or the WebSocket. A failed or cancelled\ncopy is removed again; the source is never changed.",
+        "operationId": "duplicate_project_database",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "database",
+            "in": "path",
+            "description": "Database to copy",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DuplicateDatabase"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Copy started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project, or the project does not list this database",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instances run on the source, the copy or its filestore exists, a job works on either database, the project has no venv or is being set up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PostgreSQL cannot be used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{name}/instances/{id}/fix/confirm": {
       "post": {
         "tags": [
@@ -3187,6 +3278,113 @@
           "sql"
         ]
       },
+      "DuplicateDatabase": {
+        "type": "object",
+        "description": "Copies a database.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the copy: letters, digits, `_`, `.`, `-`, 2-63 characters,\nstarting with a letter or digit.",
+            "example": "shop_test"
+          },
+          "neutralize": {
+            "type": "boolean",
+            "description": "Run Odoo's neutralization on the copy (mail servers off, crons off,\n…). Default `false`."
+          },
+          "stop_instances": {
+            "type": "boolean",
+            "description": "Stop the project's instances running on the source first (and start\nthose run by OdHive again afterwards). Without it, running instances\nrefuse the copy with `database_in_use`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DuplicateEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A step started.",
+            "required": [
+              "step",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step"
+                ]
+              },
+              "step": {
+                "$ref": "#/components/schemas/DuplicateStep",
+                "description": "The step."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A line of `odoo-bin` output.",
+            "required": [
+              "line",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "output"
+                ]
+              },
+              "line": {
+                "type": "string",
+                "description": "The line."
+              }
+            }
+          }
+        ],
+        "description": "Progress of [`duplicate`]."
+      },
+      "DuplicateStep": {
+        "type": "string",
+        "description": "A step of [`duplicate`].",
+        "enum": [
+          "stop_instances",
+          "copy",
+          "check",
+          "cleanup",
+          "restart_instances"
+        ]
+      },
+      "DuplicatedDatabase": {
+        "type": "object",
+        "description": "What [`duplicate`] made.",
+        "required": [
+          "name",
+          "source",
+          "neutralized",
+          "filestore_copied"
+        ],
+        "properties": {
+          "filestore_copied": {
+            "type": "boolean",
+            "description": "Whether the source had a filestore, now copied."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the copy."
+          },
+          "neutralized": {
+            "type": "boolean",
+            "description": "Whether the copy was neutralized."
+          },
+          "source": {
+            "type": "string",
+            "description": "The database it was copied from."
+          }
+        }
+      },
       "Edition": {
         "type": "string",
         "description": "Odoo edition of a registered source tree.",
@@ -4586,6 +4784,36 @@
                 "description": "Project name."
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Copies a database of a project with its filestore.",
+            "required": [
+              "project",
+              "database",
+              "source",
+              "kind"
+            ],
+            "properties": {
+              "database": {
+                "type": "string",
+                "description": "Name of the copy."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "duplicate_database"
+                ]
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              },
+              "source": {
+                "type": "string",
+                "description": "The database copied."
+              }
+            }
           }
         ],
         "description": "What a job does."
@@ -4689,6 +4917,42 @@
                 "enum": [
                   "delete_database"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The copy.",
+            "required": [
+              "database",
+              "stopped",
+              "restarted",
+              "kind"
+            ],
+            "properties": {
+              "database": {
+                "$ref": "#/components/schemas/DuplicatedDatabase",
+                "description": "What was made."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "duplicate_database"
+                ]
+              },
+              "restarted": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Those started again afterwards (instances run from a terminal\nare not)."
+              },
+              "stopped": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Instances stopped because they ran on the source."
               }
             }
           }
@@ -4821,6 +5085,29 @@
               }
             ],
             "description": "Progress of a database deletion."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DuplicateEvent",
+                "description": "Progress of a database copy."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "job"
+                ],
+                "properties": {
+                  "job": {
+                    "type": "string",
+                    "enum": [
+                      "duplicate_database"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Progress of a database copy."
           }
         ],
         "description": "One step of a job's progress."

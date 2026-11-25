@@ -1051,3 +1051,306 @@ async fn a_failed_drop_keeps_the_database_and_filestore() {
     assert!(exists(&target, "kept", TIMEOUT).await.expect("exists"));
     assert!(root.join("kept").is_dir());
 }
+
+// ---- duplicate ----
+
+/// A fake-Odoo database `name` with a UUID and a filestore under
+/// `dir/filestore` (the conf's `data_dir` is `dir`, so Odoo copies it).
+async fn duplicate_setup(
+    pg: &TempPg,
+    dir: &std::path::Path,
+    extra: &[(&str, &str)],
+    name: &str,
+) -> (PgTarget, OdooCommand, std::path::PathBuf) {
+    let target = pg.target(None);
+    let odoo = fake_odoo(pg, dir, extra);
+    std::fs::write(
+        &odoo.conf,
+        format!("[options]\ndata_dir = {}\n", dir.display()),
+    )
+    .expect("conf");
+    create(&target, &odoo, &NewDatabase::new(name), TIMEOUT, |_| {})
+        .await
+        .expect("create");
+    sql_in(
+        pg,
+        name,
+        "CREATE TABLE ir_config_parameter (key text PRIMARY KEY, value text); \
+         INSERT INTO ir_config_parameter VALUES ('database.uuid', 'source-uuid')",
+    )
+    .await;
+    let root = dir.join("filestore");
+    std::fs::create_dir_all(root.join(name).join("ab")).expect("mkdir");
+    std::fs::write(root.join(name).join("ab/cafe"), "attachment").expect("write");
+    (target, odoo, root)
+}
+
+fn dup(source: &str, name: &str, neutralize: bool) -> DuplicateRequest {
+    DuplicateRequest {
+        source: source.into(),
+        name: name.into(),
+        neutralize,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_database_is_duplicated_with_its_filestore() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (target, odoo, root) = duplicate_setup(&pg, dir.path(), &[], "orig").await;
+    // A connection left open (an Odoo instance) does not block the copy.
+    let (client, conn) = tokio_postgres::Config::new()
+        .host_path(&pg.socket_dir)
+        .port(5432)
+        .dbname("orig")
+        .connect(tokio_postgres::NoTls)
+        .await
+        .expect("connect");
+    let held = tokio::spawn(conn);
+
+    let mut events = Vec::new();
+    let done = duplicate(
+        &target,
+        &odoo,
+        &dup("orig", "orig_copy", true),
+        &root,
+        TIMEOUT,
+        |e| events.push(e),
+    )
+    .await
+    .expect("duplicate");
+    assert_eq!(
+        done,
+        DuplicatedDatabase {
+            name: "orig_copy".into(),
+            source: "orig".into(),
+            neutralized: true,
+            filestore_copied: true,
+        }
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter_map(|e| match e {
+                DuplicateEvent::Step { step } => Some(*step),
+                DuplicateEvent::Output { .. } => None,
+            })
+            .collect::<Vec<_>>(),
+        [DuplicateStep::Copy, DuplicateStep::Check]
+    );
+    assert!(events.iter().any(
+        |e| matches!(e, DuplicateEvent::Output { line } if line.contains("Duplicate database"))
+    ));
+    drop(client);
+    let _ = held.await;
+
+    // Same tables and rows, new UUID, neutralized; the source is untouched.
+    let counts = "SELECT string_agg(t || '=' || n, ',' ORDER BY t) FROM ( \
+                  SELECT 'ir_module_module' t, count(*) n FROM ir_module_module UNION ALL \
+                  SELECT 'odhive_fake', count(*) FROM odhive_fake UNION ALL \
+                  SELECT 'tables', count(*) FROM pg_tables WHERE schemaname = 'public') c";
+    let source_counts = query_db(&pg, "orig", counts).await;
+    assert_eq!(query_db(&pg, "orig_copy", counts).await, source_counts);
+    assert!(
+        source_counts[0].contains("odhive_fake=5"),
+        "{source_counts:?}"
+    );
+    let uuid = param(&pg, "orig_copy", "database.uuid").await;
+    assert_eq!(uuid.len(), 1);
+    assert_ne!(uuid[0], "source-uuid");
+    assert_eq!(
+        param(&pg, "orig_copy", "database.is_neutralized").await,
+        ["true"]
+    );
+    assert_eq!(param(&pg, "orig", "database.uuid").await, ["source-uuid"]);
+    assert!(
+        param(&pg, "orig", "database.is_neutralized")
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("orig_copy/ab/cafe")).expect("copied"),
+        "attachment"
+    );
+    assert!(root.join("orig/ab/cafe").is_file());
+
+    // Refused before anything runs.
+    assert!(matches!(
+        duplicate(
+            &target,
+            &odoo,
+            &dup("orig", "orig_copy", false),
+            &root,
+            TIMEOUT,
+            |_| {}
+        )
+        .await,
+        Err(DuplicateError::Exists(_))
+    ));
+    assert!(matches!(
+        duplicate(
+            &target,
+            &odoo,
+            &dup("gone", "gone_copy", false),
+            &root,
+            TIMEOUT,
+            |_| {}
+        )
+        .await,
+        Err(DuplicateError::NotFound(_))
+    ));
+    std::fs::create_dir_all(root.join("orig_two")).expect("mkdir");
+    assert!(matches!(
+        duplicate(
+            &target,
+            &odoo,
+            &dup("orig", "orig_two", false),
+            &root,
+            TIMEOUT,
+            |_| {}
+        )
+        .await,
+        Err(DuplicateError::FilestoreExists(_))
+    ));
+    assert!(!exists(&target, "orig_two", TIMEOUT).await.expect("exists"));
+    for name in ["x;DROP DATABASE postgres", "a b", "-x", "a'b", ""] {
+        assert!(
+            duplicate(
+                &PgTarget::nowhere(),
+                &odoo,
+                &dup("orig", name, false),
+                &root,
+                TIMEOUT,
+                |_| {}
+            )
+            .await
+            .is_err_and(|e| matches!(e, DuplicateError::Name(_) | DuplicateError::Request(_))),
+            "{name:?}"
+        );
+    }
+
+    // Without neutralization and without a source filestore.
+    std::fs::remove_dir_all(root.join("orig")).expect("rm");
+    let plain = duplicate(
+        &target,
+        &odoo,
+        &dup("orig", "orig_plain", false),
+        &root,
+        TIMEOUT,
+        |_| {},
+    )
+    .await
+    .expect("duplicate");
+    assert!(!plain.neutralized && !plain.filestore_copied);
+    assert!(
+        param(&pg, "orig_plain", "database.is_neutralized")
+            .await
+            .is_empty()
+    );
+    assert!(root.join("orig_plain").symlink_metadata().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_duplicates_remove_the_copy() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (target, _, root) = duplicate_setup(&pg, dir.path(), &[], "src").await;
+    for (flag, step, why) in [
+        (
+            "FAKE_DUPLICATE_BROKEN",
+            DuplicateStep::Copy,
+            "broken on purpose",
+        ),
+        (
+            "FAKE_DUPLICATE_SAME_UUID",
+            DuplicateStep::Check,
+            "kept the source's database UUID",
+        ),
+    ] {
+        let odoo = fake_odoo(&pg, dir.path(), &[(flag, "1")]);
+        std::fs::write(
+            &odoo.conf,
+            format!("[options]\ndata_dir = {}\n", dir.path().display()),
+        )
+        .expect("conf");
+        let mut steps = Vec::new();
+        let err = duplicate(
+            &target,
+            &odoo,
+            &dup("src", "bad_copy", false),
+            &root,
+            TIMEOUT,
+            |e| {
+                if let DuplicateEvent::Step { step } = e {
+                    steps.push(step);
+                }
+            },
+        )
+        .await
+        .expect_err(flag);
+        match &err {
+            DuplicateError::Failed { step: s, tail, .. } => {
+                assert_eq!(*s, step, "{flag}");
+                assert!(tail.contains(why), "{flag}: {tail}");
+            }
+            other => panic!("{flag}: {other:?}"),
+        }
+        assert_eq!(steps.last(), Some(&DuplicateStep::Cleanup));
+        assert!(
+            !exists(&target, "bad_copy", TIMEOUT).await.expect("exists"),
+            "{flag}"
+        );
+        assert!(root.join("bad_copy").symlink_metadata().is_err(), "{flag}");
+        assert!(exists(&target, "src", TIMEOUT).await.expect("exists"));
+        assert!(root.join("src/ab/cafe").is_file());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancelled_duplicate_removes_the_copy() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (target, odoo, root) =
+        duplicate_setup(&pg, dir.path(), &[("FAKE_DUPLICATE_DELAY", "30")], "src").await;
+    {
+        let req = dup("src", "cancelled_copy", false);
+        let work = duplicate(&target, &odoo, &req, &root, TIMEOUT, |_| {});
+        tokio::pin!(work);
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            tokio::select! {
+                r = &mut work => panic!("finished: {r:?}"),
+                () = tokio::time::sleep(Duration::from_millis(100)) => {}
+            }
+            if exists(&target, "cancelled_copy", TIMEOUT)
+                .await
+                .expect("exists")
+            {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "no copy appeared");
+        }
+        // `work` is dropped here, as a cancelled job's work is.
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while exists(&target, "cancelled_copy", TIMEOUT)
+        .await
+        .expect("exists")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the cancelled copy is still there"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(exists(&target, "src", TIMEOUT).await.expect("exists"));
+}
