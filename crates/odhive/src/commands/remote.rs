@@ -299,6 +299,14 @@ fn print_delete_event(e: odhive_core::db::DeleteEvent) {
     }
 }
 
+fn print_duplicate_event(e: odhive_core::db::DuplicateEvent) {
+    use odhive_core::db::DuplicateEvent;
+    match e {
+        DuplicateEvent::Step { step } => say(format!("{step}…")),
+        DuplicateEvent::Output { .. } => {}
+    }
+}
+
 /// Prints a job's progress until it ends; Ctrl+C cancels it.
 async fn follow_job(c: &Client, mut job: Job) -> anyhow::Result<Job> {
     let mut signals = Signals::new()?;
@@ -314,6 +322,7 @@ async fn follow_job(c: &Client, mut job: Job) -> anyhow::Result<Job> {
                 JobStep::CreateDatabase(e) => print_create_event(e),
                 JobStep::RestoreDatabase(e) => print_restore_event(e),
                 JobStep::DeleteDatabase(e) => print_delete_event(e),
+                JobStep::DuplicateDatabase(e) => print_duplicate_event(e),
             }
         }
         steps = steps.max(job.steps.len());

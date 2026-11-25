@@ -291,6 +291,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{name}/databases/{database}/duplicate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Starts copying a database the project lists, with its filestore, as
+         *     Odoo's database manager does (`odoo-bin db duplicate`: other connections
+         *     to the source are ended, the copy made from it as a template, given a
+         *     new database UUID and neutralized when asked, `data/filestore/<source>`
+         *     copied). PostgreSQL copies only a database nobody is connected to, so
+         *     instances of the project running on the source are refused with
+         *     `database_in_use` (it lists them) unless `stop_instances` is set: the job
+         *     then stops them first and starts the ones OdHive runs again afterwards.
+         *     Follow the job with `/jobs/{id}` or the WebSocket. A failed or cancelled
+         *     copy is removed again; the source is never changed.
+         */
+        post: operations["duplicate_project_database"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{name}/instances/{id}/fix/confirm": {
         parameters: {
             query?: never;
@@ -1075,6 +1103,54 @@ export interface components {
          * @enum {string}
          */
         DumpFormat: "zip" | "custom" | "tar" | "sql";
+        /** @description Copies a database. */
+        DuplicateDatabase: {
+            /**
+             * @description Name of the copy: letters, digits, `_`, `.`, `-`, 2-63 characters,
+             *     starting with a letter or digit.
+             * @example shop_test
+             */
+            name: string;
+            /**
+             * @description Run Odoo's neutralization on the copy (mail servers off, crons off,
+             *     …). Default `false`.
+             */
+            neutralize?: boolean;
+            /**
+             * @description Stop the project's instances running on the source first (and start
+             *     those run by OdHive again afterwards). Without it, running instances
+             *     refuse the copy with `database_in_use`.
+             */
+            stop_instances?: boolean;
+        };
+        /** @description Progress of [`duplicate`]. */
+        DuplicateEvent: {
+            /** @enum {string} */
+            event: "step";
+            /** @description The step. */
+            step: components["schemas"]["DuplicateStep"];
+        } | {
+            /** @enum {string} */
+            event: "output";
+            /** @description The line. */
+            line: string;
+        };
+        /**
+         * @description A step of [`duplicate`].
+         * @enum {string}
+         */
+        DuplicateStep: "stop_instances" | "copy" | "check" | "cleanup" | "restart_instances";
+        /** @description What [`duplicate`] made. */
+        DuplicatedDatabase: {
+            /** @description Whether the source had a filestore, now copied. */
+            filestore_copied: boolean;
+            /** @description Name of the copy. */
+            name: string;
+            /** @description Whether the copy was neutralized. */
+            neutralized: boolean;
+            /** @description The database it was copied from. */
+            source: string;
+        };
         /**
          * @description Odoo edition of a registered source tree.
          * @enum {string}
@@ -1583,6 +1659,15 @@ export interface components {
             kind: "delete_database";
             /** @description Project name. */
             project: string;
+        } | {
+            /** @description Name of the copy. */
+            database: string;
+            /** @enum {string} */
+            kind: "duplicate_database";
+            /** @description Project name. */
+            project: string;
+            /** @description The database copied. */
+            source: string;
         };
         /** @description What a successful job produced. */
         JobResult: {
@@ -1610,6 +1695,18 @@ export interface components {
             database: components["schemas"]["DeletedDatabase"];
             /** @enum {string} */
             kind: "delete_database";
+        } | {
+            /** @description What was made. */
+            database: components["schemas"]["DuplicatedDatabase"];
+            /** @enum {string} */
+            kind: "duplicate_database";
+            /**
+             * @description Those started again afterwards (instances run from a terminal
+             *     are not).
+             */
+            restarted: string[];
+            /** @description Instances stopped because they ran on the source. */
+            stopped: string[];
         };
         /**
          * @description Where a job stands.
@@ -1632,6 +1729,9 @@ export interface components {
         }) | (components["schemas"]["DeleteEvent"] & {
             /** @enum {string} */
             job: "delete_database";
+        }) | (components["schemas"]["DuplicateEvent"] & {
+            /** @enum {string} */
+            job: "duplicate_database";
         });
         /**
          * @description Severity of a record, in increasing order.
@@ -3175,6 +3275,71 @@ export interface operations {
                 };
             };
             /** @description An instance runs on the database, a job works on it, the project has no venv or is being set up */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description PostgreSQL cannot be used */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    duplicate_project_database: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+                /** @description Database to copy */
+                database: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuplicateDatabase"];
+            };
+        };
+        responses: {
+            /** @description Copy started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Invalid name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project, or the project does not list this database */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Instances run on the source, the copy or its filestore exists, a job works on either database, the project has no venv or is being set up */
             409: {
                 headers: {
                     [name: string]: unknown;

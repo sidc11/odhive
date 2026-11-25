@@ -33,6 +33,12 @@ folder, libpq `PG*` variables say where the server is):
   db [-c CONF] drop NAME         dropdb --force NAME (ends other connections, like Odoo),
                                  remove <data_dir>/filestore/NAME (data_dir from CONF)
                                  (FAKE_DROP_BROKEN=1: drop nothing, exit 1)
+  db [-c CONF] duplicate [-n] SRC NEW
+                                 end other connections to SRC, createdb --template=SRC NEW,
+                                 set database.is_neutralized with -n, a new database.uuid,
+                                 copy <data_dir>/filestore/SRC (FAKE_DUPLICATE_BROKEN=1: copy,
+                                 then exit 1; FAKE_DUPLICATE_SAME_UUID=1: keep the UUID;
+                                 FAKE_DUPLICATE_DELAY=S: wait S seconds after the copy)
   neutralize -d NAME             set database.is_neutralized in ir_config_parameter
                                  (FAKE_NEUTRALIZE_BROKEN=1: set nothing but exit 0)
   -d NAME -i MODS --stop-after-init
@@ -183,7 +189,13 @@ def db_main(argv):
     init.add_argument("--country")
     drop = sub.add_parser("drop")
     drop.add_argument("database")
+    dup = sub.add_parser("duplicate")
+    dup.add_argument("-n", "--neutralize", action="store_true")
+    dup.add_argument("source")
+    dup.add_argument("target")
     args = p.parse_args(argv)
+    if args.cmd == "duplicate":
+        return duplicate(args)
     db = args.database
     if args.cmd == "drop":
         if os.environ.get("FAKE_DROP_BROKEN") == "1":
@@ -213,6 +225,35 @@ def db_main(argv):
              "('country', :'country'), ('demo', :'demo'), ('password', :'password');",
          login=args.username, lang=args.language, country=args.country or "",
          demo=str(args.with_demo), password=args.password)
+    return 0
+
+
+def duplicate(args):
+    src, new = args.source, args.target
+    log("INFO", "odoo.service.db", f"Duplicate database `{src}` to `{new}`.")
+    psql("postgres", "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                     "WHERE datname = :'d' AND pid <> pg_backend_pid();", d=src)
+    r = subprocess.run([pg_tool("createdb"), f"--template={src}", new],
+                       capture_output=True, text=True)
+    if r.returncode:
+        sys.exit(f"Couldn't duplicate {src}: {r.stderr.strip()}")
+    if args.neutralize:
+        psql(new, CONFIG_TABLE + "INSERT INTO ir_config_parameter VALUES "
+                  "('database.is_neutralized', 'true') ON CONFLICT (key) DO UPDATE SET value = 'true';")
+    if os.environ.get("FAKE_DUPLICATE_SAME_UUID") != "1":
+        psql(new, CONFIG_TABLE + "INSERT INTO ir_config_parameter VALUES ('database.uuid', :'u') "
+                  "ON CONFLICT (key) DO UPDATE SET value = :'u';", u=str(uuid.uuid4()))
+    data_dir = conf_value(args.config, "data_dir")
+    if data_dir:
+        src_fs = os.path.join(data_dir, "filestore", src)
+        new_fs = os.path.join(data_dir, "filestore", new)
+        if os.path.exists(src_fs) and not os.path.exists(new_fs):
+            shutil.copytree(src_fs, new_fs)
+    delay = float(os.environ.get("FAKE_DUPLICATE_DELAY", "0"))
+    if delay:
+        time.sleep(delay)
+    if os.environ.get("FAKE_DUPLICATE_BROKEN") == "1":
+        sys.exit(f"Couldn't finish duplicating {src}: broken on purpose")
     return 0
 
 

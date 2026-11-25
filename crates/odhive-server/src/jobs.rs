@@ -16,7 +16,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use odhive_core::config::SourceEntry;
 use odhive_core::db::{
-    CreateEvent, CreatedDatabase, DeleteEvent, DeletedDatabase, RestoreEvent, RestoredDatabase,
+    CreateEvent, CreatedDatabase, DeleteEvent, DeletedDatabase, DuplicateEvent, DuplicatedDatabase,
+    RestoreEvent, RestoredDatabase,
 };
 use odhive_core::events::{Subscription, Topic};
 use odhive_core::requirements::InstallEvent;
@@ -76,24 +77,49 @@ pub enum JobKind {
         /// Database name.
         database: String,
     },
+    /// Copies a database of a project with its filestore.
+    DuplicateDatabase {
+        /// Project name.
+        project: String,
+        /// Name of the copy.
+        database: String,
+        /// The database copied.
+        source: String,
+    },
 }
 
 impl JobKind {
-    /// The project whose database this job creates, restores or deletes.
+    /// The project whose database this job creates, restores, deletes or
+    /// copies.
     #[must_use]
     pub fn database_project(&self) -> Option<&str> {
         self.database().map(|(project, _)| project)
     }
 
-    /// Project and database this job creates, restores or deletes.
+    /// Project and database this job creates, restores, deletes or makes
+    /// as a copy.
     #[must_use]
     pub fn database(&self) -> Option<(&str, &str)> {
         match self {
             Self::CreateDatabase { project, database }
             | Self::RestoreDatabase { project, database }
-            | Self::DeleteDatabase { project, database } => Some((project, database)),
+            | Self::DeleteDatabase { project, database }
+            | Self::DuplicateDatabase {
+                project, database, ..
+            } => Some((project, database)),
             _ => None,
         }
+    }
+
+    /// Whether this job works on database `database` of `project`: the one
+    /// it creates, restores, deletes or makes, or the one it copies.
+    #[must_use]
+    pub fn touches(&self, project: &str, database: &str) -> bool {
+        if self.database() == Some((project, database)) {
+            return true;
+        }
+        matches!(self, Self::DuplicateDatabase { project: p, source, .. }
+            if p == project && source == database)
     }
 }
 
@@ -125,6 +151,8 @@ pub enum JobStep {
     RestoreDatabase(RestoreEvent),
     /// Progress of a database deletion.
     DeleteDatabase(DeleteEvent),
+    /// Progress of a database copy.
+    DuplicateDatabase(DuplicateEvent),
 }
 
 /// What a successful job produced.
@@ -155,6 +183,16 @@ pub enum JobResult {
     DeleteDatabase {
         /// What was deleted.
         database: DeletedDatabase,
+    },
+    /// The copy.
+    DuplicateDatabase {
+        /// What was made.
+        database: DuplicatedDatabase,
+        /// Instances stopped because they ran on the source.
+        stopped: Vec<String>,
+        /// Those started again afterwards (instances run from a terminal
+        /// are not).
+        restarted: Vec<String>,
     },
 }
 
@@ -488,7 +526,8 @@ fn output_line(step: &JobStep) -> Option<&str> {
         )
         | JobStep::CreateDatabase(CreateEvent::Output { line })
         | JobStep::RestoreDatabase(RestoreEvent::Output { line })
-        | JobStep::DeleteDatabase(DeleteEvent::Output { line }) => Some(line),
+        | JobStep::DeleteDatabase(DeleteEvent::Output { line })
+        | JobStep::DuplicateDatabase(DuplicateEvent::Output { line }) => Some(line),
         _ => None,
     }
 }
@@ -517,6 +556,31 @@ impl Reporter {
 mod tests {
     use super::*;
     use odhive_core::events::Delivery;
+
+    #[test]
+    fn a_copy_touches_its_source_and_the_copy() {
+        let kind = JobKind::DuplicateDatabase {
+            project: "shop".into(),
+            database: "shop_copy".into(),
+            source: "shop_main".into(),
+        };
+        assert_eq!(kind.database(), Some(("shop", "shop_copy")));
+        assert_eq!(kind.database_project(), Some("shop"));
+        assert!(kind.touches("shop", "shop_copy"));
+        assert!(kind.touches("shop", "shop_main"));
+        assert!(!kind.touches("shop", "other"));
+        assert!(!kind.touches("other", "shop_main"));
+        let delete = JobKind::DeleteDatabase {
+            project: "shop".into(),
+            database: "shop_main".into(),
+        };
+        assert!(delete.touches("shop", "shop_main"));
+        assert!(!delete.touches("shop", "shop_copy"));
+        let clone = JobKind::Clone {
+            version: "19.0".into(),
+        };
+        assert!(!clone.touches("shop", "shop_main"));
+    }
 
     fn setup_kind(p: &str) -> JobKind {
         JobKind::Setup { project: p.into() }

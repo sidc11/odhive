@@ -91,6 +91,15 @@ pub(crate) struct External {
     pub supervisor: Option<u32>,
 }
 
+/// An instance running on a database ([`Service::instances_on`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OnDatabase {
+    /// Instance id.
+    pub instance: String,
+    /// Run by this service (else from a terminal).
+    pub managed: bool,
+}
+
 /// How a stop request ended.
 #[derive(Debug, Clone)]
 pub(crate) enum Stopped {
@@ -207,6 +216,53 @@ impl Service {
         Ok(running)
     }
 
+    /// Instances of project `config` running on database `db`, here
+    /// (`managed`) or elsewhere, sorted by id. An instance without a known
+    /// database uses the one its config names.
+    pub(crate) fn instances_on(
+        &self,
+        config: &ProjectConfig,
+        db: &str,
+    ) -> ApiResult<Vec<OnDatabase>> {
+        let configured = |id: &str| {
+            config
+                .instances
+                .iter()
+                .find(|i| i.id == id)
+                .map(|i| i.db_name(&config.name))
+        };
+        let mut found: Vec<OnDatabase> = self
+            .inner
+            .manager
+            .list_project(&config.name)
+            .into_iter()
+            .filter(|i| {
+                let on = i.db.clone().or_else(|| configured(&i.owner.instance));
+                !i.is_done() && on.as_deref() == Some(db)
+            })
+            .map(|i| OnDatabase {
+                instance: i.owner.instance,
+                managed: true,
+            })
+            .collect();
+        for rec in launch::running_records(&self.run_dir())? {
+            let owner = rec.owner();
+            if rec.project != config.name || self.inner.manager.get(&owner).is_some() {
+                continue;
+            }
+            let on = rec.db.clone().or_else(|| configured(&owner.instance));
+            if on.as_deref() == Some(db) {
+                found.push(OnDatabase {
+                    instance: owner.instance,
+                    managed: false,
+                });
+            }
+        }
+        found.sort_by(|a, b| a.instance.cmp(&b.instance));
+        found.dedup_by(|a, b| a.instance == b.instance);
+        Ok(found)
+    }
+
     /// `409 setup_running` while project `name` is being set up.
     pub(crate) fn ensure_not_setting_up(&self, name: &str) -> ApiResult<()> {
         let kind = JobKind::Setup {
@@ -242,14 +298,15 @@ impl Service {
     /// `409 database_job_running` while database `database` of project
     /// `name` is being created, restored or deleted.
     pub(crate) fn ensure_database_idle(&self, name: &str, database: &str) -> ApiResult<()> {
-        let busy = self.inner.jobs.list().into_iter().find(|j| {
-            j.state == crate::jobs::JobState::Running && j.kind.database() == Some((name, database))
-        });
+        let busy =
+            self.inner.jobs.list().into_iter().find(|j| {
+                j.state == crate::jobs::JobState::Running && j.kind.touches(name, database)
+            });
         match busy {
             Some(job) => Err(ApiError::conflict(
                 "database_job_running",
                 format!(
-                    "database {database} of project {name} is being created, restored or deleted (job {})",
+                    "database {database} of project {name} is being created, restored, deleted or copied (job {})",
                     job.id
                 ),
             )),

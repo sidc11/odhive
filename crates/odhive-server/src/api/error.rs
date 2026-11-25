@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use odhive_core::config::ConfigError;
 use odhive_core::db::archive::ArchiveError;
-use odhive_core::db::{CreateError, DeleteError, RestoreError};
+use odhive_core::db::{CreateError, DeleteError, DuplicateError, RestoreError};
 use odhive_core::launch::LaunchError;
 use odhive_core::manager::ManagerError;
 use odhive_core::pidfile::PidFileError;
@@ -269,6 +269,27 @@ impl From<DeleteError> for ApiError {
             }
             DeleteError::Failed { .. } | DeleteError::Filestore { .. } => {
                 Self::new(StatusCode::INTERNAL_SERVER_ERROR, "delete_failed", msg)
+            }
+        }
+    }
+}
+
+impl From<DuplicateError> for ApiError {
+    fn from(e: DuplicateError) -> Self {
+        let msg = e.to_string();
+        match e {
+            DuplicateError::Name(_) => Self::bad_request("invalid_name", msg),
+            DuplicateError::Request(e) => e.into(),
+            DuplicateError::SameName(_) => Self::bad_request("invalid_request", msg),
+            DuplicateError::NotFound(_) => Self::not_found("database_not_found", msg),
+            DuplicateError::Exists(_) => Self::conflict("database_exists", msg),
+            DuplicateError::FilestoreExists(_) => Self::conflict("filestore_exists", msg),
+            DuplicateError::InUse { .. } => Self::conflict("database_in_use", msg),
+            DuplicateError::Server(_) => {
+                Self::new(StatusCode::SERVICE_UNAVAILABLE, "postgres_unavailable", msg)
+            }
+            DuplicateError::Spawn { .. } | DuplicateError::Failed { .. } => {
+                Self::new(StatusCode::INTERNAL_SERVER_ERROR, "duplicate_failed", msg)
             }
         }
     }

@@ -13,11 +13,14 @@ use axum::http::StatusCode;
 use odhive_core::conf::{DATA_DIR, MASK};
 use odhive_core::db::archive::{self, ExtractLimits};
 use odhive_core::db::{
-    self, DEFAULT_LANGUAGE, DEFAULT_LOGIN, DatabaseList, DbHealth, DeleteError, NewDatabase,
-    OdooCommand, PgTarget, PgTools, RestoreError, RestoreOptions, RestoreRequest,
+    self, DEFAULT_LANGUAGE, DEFAULT_LOGIN, DatabaseList, DbHealth, DeleteError, DuplicateError,
+    DuplicateEvent, DuplicateRequest, DuplicateStep, NewDatabase, OdooCommand, PgTarget, PgTools,
+    RestoreError, RestoreOptions, RestoreRequest,
 };
 use odhive_core::envcheck::Requirement;
 use odhive_core::launch;
+use odhive_core::ports::PortOwner;
+use odhive_core::project::ProjectConfig;
 use odhive_core::venv::{VENV_DIR, venv_python};
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
@@ -420,23 +423,10 @@ pub(super) async fn delete(
     if !python.is_file() {
         return Err(launch::LaunchError::NoVenv(dir.join(VENV_DIR), name.clone()).into());
     }
-    let configured = |id: &str| {
-        project
-            .config
-            .instances
-            .iter()
-            .find(|i| i.id == id)
-            .map(|i| i.db_name(&name))
-    };
     let running: Vec<String> = svc
-        .manager()
-        .list_project(&name)
+        .instances_on(&project.config, &database)?
         .into_iter()
-        .filter(|i| {
-            let db = i.db.clone().or_else(|| configured(&i.owner.instance));
-            !i.is_done() && db.as_deref() == Some(database.as_str())
-        })
-        .map(|i| i.owner.instance)
+        .map(|i| i.instance)
         .collect();
     if !running.is_empty() {
         return Err(DeleteError::InUse {
@@ -445,23 +435,10 @@ pub(super) async fn delete(
         }
         .into());
     }
-    // Only a database the project lists: owned by its role, not a
-    // template nor `postgres`, passing its `dbfilter`.
     let config = &project.config;
     let target = PgTarget::for_project(&config.odoo_options, &config.env);
     let opts = svc.env_options();
-    let listed = db::list(
-        &target,
-        config.odoo_options.get("dbfilter"),
-        &[],
-        opts.package_manager,
-        opts.timeout,
-    )
-    .await;
-    if let Some(check) = listed.error {
-        return Err(DeleteError::Server(check.summary).into());
-    }
-    if !listed.databases.iter().any(|d| d.name == database) {
+    if !lists(&svc, config, &target, &database).await? {
         return Err(DeleteError::NotFound(database).into());
     }
     let prepared = launch::prepare(&cfg, svc.paths(), &project, &[]).await?;
@@ -485,6 +462,177 @@ pub(super) async fn delete(
             })
             .await?;
             Ok(JobResult::DeleteDatabase { database })
+        })
+    })?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// Whether the project lists `database`: owned by its role, not a template
+/// nor `postgres`, passing its `dbfilter`.
+async fn lists(
+    svc: &Service,
+    config: &ProjectConfig,
+    target: &PgTarget,
+    database: &str,
+) -> ApiResult<bool> {
+    let opts = svc.env_options();
+    let listed = db::list(
+        target,
+        config.odoo_options.get("dbfilter"),
+        &[],
+        opts.package_manager,
+        opts.timeout,
+    )
+    .await;
+    if let Some(check) = listed.error {
+        return Err(DuplicateError::Server(check.summary).into());
+    }
+    Ok(listed.databases.iter().any(|d| d.name == database))
+}
+
+/// Copies a database.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DuplicateDatabase {
+    /// Name of the copy: letters, digits, `_`, `.`, `-`, 2-63 characters,
+    /// starting with a letter or digit.
+    #[schema(example = "shop_test")]
+    pub name: String,
+    /// Run Odoo's neutralization on the copy (mail servers off, crons off,
+    /// …). Default `false`.
+    #[serde(default)]
+    pub neutralize: bool,
+    /// Stop the project's instances running on the source first (and start
+    /// those run by OdHive again afterwards). Without it, running instances
+    /// refuse the copy with `database_in_use`.
+    #[serde(default)]
+    pub stop_instances: bool,
+}
+
+/// Starts copying a database the project lists, with its filestore, as
+/// Odoo's database manager does (`odoo-bin db duplicate`: other connections
+/// to the source are ended, the copy made from it as a template, given a
+/// new database UUID and neutralized when asked, `data/filestore/<source>`
+/// copied). PostgreSQL copies only a database nobody is connected to, so
+/// instances of the project running on the source are refused with
+/// `database_in_use` (it lists them) unless `stop_instances` is set: the job
+/// then stops them first and starts the ones OdHive runs again afterwards.
+/// Follow the job with `/jobs/{id}` or the WebSocket. A failed or cancelled
+/// copy is removed again; the source is never changed.
+#[utoipa::path(operation_id = "duplicate_project_database", post, path = "/projects/{name}/databases/{database}/duplicate", tag = "databases",
+    request_body = DuplicateDatabase,
+    params(
+        ("name" = String, Path, description = "Project name"),
+        ("database" = String, Path, description = "Database to copy"),
+    ),
+    responses(
+        (status = ACCEPTED, description = "Copy started", body = Job),
+        (status = BAD_REQUEST, description = "Invalid name", body = ErrorBody),
+        (status = NOT_FOUND, description = "No such project, or the project does not list this database", body = ErrorBody),
+        (status = CONFLICT, description = "Instances run on the source, the copy or its filestore exists, a job works on either database, the project has no venv or is being set up", body = ErrorBody),
+        (status = SERVICE_UNAVAILABLE, description = "PostgreSQL cannot be used", body = ErrorBody),
+    ))]
+pub(super) async fn duplicate(
+    State(svc): State<Service>,
+    Params((name, database)): Params<(String, String)>,
+    Body(req): Body<DuplicateDatabase>,
+) -> ApiResult<(StatusCode, Json<Job>)> {
+    let dup = DuplicateRequest {
+        source: database,
+        name: req.name,
+        neutralize: req.neutralize,
+    };
+    dup.check()?;
+    let (cfg, project) = svc.project(&name)?;
+    svc.ensure_not_setting_up(&name)?;
+    svc.ensure_database_idle(&name, &dup.source)?;
+    svc.ensure_database_idle(&name, &dup.name)?;
+    let (community, _) = project.config.resolve_sources(&cfg)?;
+    let dir = project.dir();
+    let python = venv_python(&dir.join(VENV_DIR));
+    if !python.is_file() {
+        return Err(launch::LaunchError::NoVenv(dir.join(VENV_DIR), name.clone()).into());
+    }
+    let config = &project.config;
+    let target = PgTarget::for_project(&config.odoo_options, &config.env);
+    let timeout = svc.env_options().timeout;
+    if !lists(&svc, config, &target, &dup.source).await? {
+        return Err(DuplicateError::NotFound(dup.source).into());
+    }
+    let users = svc.instances_on(config, &dup.source)?;
+    if !users.is_empty() && !req.stop_instances {
+        return Err(DuplicateError::InUse {
+            name: dup.source,
+            instances: users.into_iter().map(|u| u.instance).collect(),
+        }
+        .into());
+    }
+    if db::exists(&target, &dup.name, timeout).await? {
+        return Err(DuplicateError::Exists(dup.name).into());
+    }
+    let filestore_root = dir.join(DATA_DIR).join(FILESTORE_DIR);
+    if filestore_root.join(&dup.name).symlink_metadata().is_ok() {
+        return Err(DuplicateError::FilestoreExists(filestore_root.join(&dup.name)).into());
+    }
+    let prepared = launch::prepare(&cfg, svc.paths(), &project, &[]).await?;
+    let odoo = OdooCommand {
+        python,
+        odoo_bin: community.path.join("odoo-bin"),
+        conf: prepared.conf,
+        cwd: dir.to_path_buf(),
+        env: config.env.clone(),
+    };
+    let kind = JobKind::DuplicateDatabase {
+        project: name.clone(),
+        database: dup.name.clone(),
+        source: dup.source.clone(),
+    };
+    let job_svc = svc.clone();
+    let job = svc.jobs().spawn(kind, move |report| {
+        Box::pin(async move {
+            let svc = job_svc;
+            let step = |e: DuplicateEvent| report.step(JobStep::DuplicateDatabase(e));
+            let line = |line: String| step(DuplicateEvent::Output { line });
+            let mut stopped = Vec::new();
+            let mut to_restart = Vec::new();
+            if !users.is_empty() {
+                step(DuplicateEvent::Step {
+                    step: DuplicateStep::StopInstances,
+                });
+                for user in &users {
+                    let owner = PortOwner::new(&name, &user.instance);
+                    svc.stop(&owner).await?;
+                    line(format!("stopped instance {owner}"));
+                    stopped.push(user.instance.clone());
+                    if user.managed {
+                        to_restart.push(user.instance.clone());
+                    }
+                }
+            }
+            let copied = db::duplicate(&target, &odoo, &dup, &filestore_root, timeout, &step).await;
+            let mut restarted = Vec::new();
+            if !to_restart.is_empty() {
+                step(DuplicateEvent::Step {
+                    step: DuplicateStep::RestartInstances,
+                });
+                for id in to_restart {
+                    match svc.start(&name, &id, false).await {
+                        Ok(_) => {
+                            line(format!("started instance {name}/{id} again"));
+                            restarted.push(id);
+                        }
+                        Err(e) => line(format!(
+                            "could not start instance {name}/{id} again: {}",
+                            e.message
+                        )),
+                    }
+                }
+            }
+            Ok(JobResult::DuplicateDatabase {
+                database: copied?,
+                stopped,
+                restarted,
+            })
         })
     })?;
     Ok((StatusCode::ACCEPTED, Json(job)))

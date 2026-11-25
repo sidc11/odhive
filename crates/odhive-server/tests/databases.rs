@@ -834,3 +834,268 @@ async fn a_database_an_instance_runs_on_is_not_deleted() {
     assert_eq!(done["state"], "succeeded", "{done}");
     assert_eq!(done["result"]["database"]["filestore_removed"], false);
 }
+
+async fn duplicate_db(api: &common::Api, db: &str, body: Value) -> (StatusCode, Value) {
+    api.post(
+        &format!("/api/v1/projects/shop/databases/{db}/duplicate"),
+        Some(body),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn database_copies_are_refused_before_anything_runs() {
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+
+    // Names that could break out of an argument or a query.
+    for name in [
+        "x;DROP DATABASE postgres",
+        "x'y",
+        "two words",
+        "-x",
+        "x\"y",
+        "_x",
+        "x",
+    ] {
+        let (status, body) = duplicate_db(&api, "shop_main", json!({ "name": name })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name:?}: {body}");
+        assert!(
+            ["invalid_name", "invalid_request"].contains(&body["error"].as_str().unwrap_or("")),
+            "{name:?}: {body}"
+        );
+    }
+    for source in ["x%3BDROP%20DATABASE%20postgres", "x'y", "-x"] {
+        let (status, body) = duplicate_db(&api, source, json!({ "name": "copy" })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{source:?}: {body}");
+        assert_eq!(body["error"], "invalid_name", "{source:?}: {body}");
+    }
+    let (status, body) = duplicate_db(&api, "shop_main", json!({ "name": "shop_main" })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_request", "{body}");
+    let (status, _) = duplicate_db(&api, "shop_main", json!({})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "name is required");
+    let (status, _) = duplicate_db(&api, "shop_main", json!({ "name": "copy", "x": 1 })).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "unknown fields are refused"
+    );
+
+    let (status, body) = duplicate_db(&api, "shop_main", json!({ "name": "copy" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "no_venv");
+    let (status, body) = api
+        .post(
+            "/api/v1/projects/nope/databases/shop_main/duplicate",
+            Some(json!({ "name": "copy" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "unknown_project", "{body}");
+
+    // A server that cannot be used is reported before a job starts.
+    env.make_runnable("shop", 18_469, 18_472);
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .expect("bind")
+        .port();
+    let (status, body) = api
+        .put(
+            "/api/v1/projects/shop/options",
+            json!({ "options": { "db_host": "127.0.0.1", "db_port": port.to_string() } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = duplicate_db(&api, "shop_main", json!({ "name": "copy" })).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "postgres_unavailable");
+    let (_, jobs) = api.get("/api/v1/jobs").await;
+    assert_eq!(jobs, json!([]), "no job was started");
+}
+
+fn table_counts(pg: &TempPg, db: &str) -> Vec<String> {
+    pg.psql(
+        db,
+        "SELECT t || '=' || n FROM ( \
+             SELECT 'ir_module_module' t, count(*) n FROM ir_module_module UNION ALL \
+             SELECT 'res_partner', count(*) FROM res_partner UNION ALL \
+             SELECT 'tables', count(*) FROM pg_tables WHERE schemaname = 'public') c \
+         ORDER BY t",
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_listed_database_is_copied_with_its_filestore() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    point_at(&env, &api, &pg).await;
+    odoo_like_db(&pg, "prod");
+    pg.psql(
+        "prod",
+        "INSERT INTO ir_config_parameter VALUES ('database.uuid', 'prod-uuid')",
+    );
+    let data = env.project_dir("shop").join("data/filestore");
+    std::fs::create_dir_all(data.join("prod/ab")).expect("mkdir");
+    std::fs::write(data.join("prod/ab/cafe"), "attachment").expect("write");
+
+    for db in ["postgres", "template1", "missing"] {
+        let (status, body) = duplicate_db(&api, db, json!({ "name": "copy" })).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{db}: {body}");
+        assert_eq!(body["error"], "database_not_found", "{body}");
+    }
+    odoo_like_db(&pg, "taken");
+    let (status, body) = duplicate_db(&api, "prod", json!({ "name": "taken" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "database_exists", "{body}");
+    std::fs::create_dir_all(data.join("leftover")).expect("mkdir");
+    let (status, body) = duplicate_db(&api, "prod", json!({ "name": "leftover" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "filestore_exists", "{body}");
+
+    let (status, job) = duplicate_db(
+        &api,
+        "prod",
+        json!({ "name": "prod_test", "neutralize": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    assert_eq!(job["kind"], "duplicate_database");
+    assert_eq!(job["project"], "shop");
+    assert_eq!(job["database"], "prod_test");
+    assert_eq!(job["source"], "prod");
+    let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(
+        done["result"],
+        json!({
+            "kind": "duplicate_database",
+            "database": {
+                "name": "prod_test",
+                "source": "prod",
+                "neutralized": true,
+                "filestore_copied": true,
+            },
+            "stopped": [],
+            "restarted": [],
+        })
+    );
+    let steps: Vec<&str> = done["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .filter(|s| s["job"] == "duplicate_database" && s["event"] == "step")
+        .filter_map(|s| s["step"].as_str())
+        .collect();
+    assert_eq!(steps, ["copy", "check"], "{done}");
+
+    // Identical tables and rows; a new UUID; the source untouched.
+    assert_eq!(table_counts(&pg, "prod_test"), table_counts(&pg, "prod"));
+    assert_eq!(table_counts(&pg, "prod")[1], "res_partner=2");
+    let uuid = |db| {
+        pg.psql(
+            db,
+            "SELECT value FROM ir_config_parameter WHERE key = 'database.uuid'",
+        )
+    };
+    assert_eq!(uuid("prod"), ["prod-uuid"]);
+    assert_eq!(uuid("prod_test").len(), 1);
+    assert_ne!(uuid("prod_test"), ["prod-uuid"]);
+    assert!(
+        pg.psql(
+            "prod",
+            "SELECT value FROM ir_config_parameter WHERE key = 'database.is_neutralized'"
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        std::fs::read_to_string(data.join("prod_test/ab/cafe")).expect("copied"),
+        "attachment"
+    );
+    let (_, list) = api.get("/api/v1/projects/shop/databases").await;
+    assert!(
+        list["databases"]
+            .as_array()
+            .expect("databases")
+            .iter()
+            .any(|d| d["name"] == "prod_test"),
+        "{list}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn instances_on_the_source_are_stopped_only_when_asked() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    point_at(&env, &api, &pg).await;
+    // Instance `main` uses database `shop_main`.
+    odoo_like_db(&pg, "shop_main");
+    let (status, body) = api
+        .post("/api/v1/projects/shop/instances/main/start", None)
+        .await;
+    assert!(status.is_success(), "{body}");
+
+    // The warning: which instances run on it.
+    let (status, body) = duplicate_db(&api, "shop_main", json!({ "name": "shop_copy" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "database_in_use", "{body}");
+    assert!(
+        body["message"].as_str().is_some_and(|m| m.contains("main")),
+        "{body}"
+    );
+    let (_, jobs) = api.get("/api/v1/jobs").await;
+    assert_eq!(jobs, json!([]), "no job was started");
+
+    let (status, job) = duplicate_db(
+        &api,
+        "shop_main",
+        json!({ "name": "shop_copy", "stop_instances": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(done["result"]["stopped"], json!(["main"]), "{done}");
+    assert_eq!(done["result"]["restarted"], json!(["main"]), "{done}");
+    assert_eq!(done["result"]["database"]["neutralized"], false);
+    let steps: Vec<&str> = done["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .filter(|s| s["event"] == "step")
+        .filter_map(|s| s["step"].as_str())
+        .collect();
+    assert_eq!(
+        steps,
+        ["stop_instances", "copy", "check", "restart_instances"],
+        "{done}"
+    );
+    assert_eq!(
+        table_counts(&pg, "shop_copy"),
+        table_counts(&pg, "shop_main")
+    );
+    // `main` runs again.
+    let (status, body) = api
+        .post("/api/v1/projects/shop/instances/main/start", None)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "already_running", "{body}");
+    let (status, body) = api
+        .post("/api/v1/projects/shop/instances/main/stop", None)
+        .await;
+    assert!(status.is_success(), "{body}");
+}
