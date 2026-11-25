@@ -145,3 +145,56 @@ test('editing an option updates the preview, and saving writes that odoo.conf', 
   }
 })
 
+
+test('markup in option values and imported files renders as text', async ({ page, signIn, request, e2e }) => {
+  const XSS = '<script>alert(1)</script><img src=x onerror="alert(2)">'
+  const client = api(request, e2e)
+  let dialogs = 0
+  page.on('dialog', (dialog) => {
+    dialogs += 1
+    void dialog.dismiss()
+  })
+  try {
+    await signIn()
+    await page.goto('/projects/shop/config')
+    const main = page.locator('main')
+    const preview = page.getByRole('region', { name: 'odoo.conf preview' })
+    await expect(preview).toContainText('addons_path = ')
+
+    // A typed value shows up in the preview and the diff as text.
+    await page.getByRole('searchbox', { name: 'Search options' }).fill('dbfilter')
+    await page.getByLabel('dbfilter', { exact: true }).fill(XSS)
+    await expect(preview).toContainText(`dbfilter = ${XSS}`)
+    await page.getByRole('button', { name: 'Changes (1)' }).click()
+    const changes = page.getByRole('region', { name: 'Changes against the saved odoo.conf' })
+    await expect(changes.locator('[data-kind="add"]')).toHaveText([`+added: dbfilter = ${XSS}`])
+    await page.getByRole('button', { name: 'Preview', exact: true }).click()
+
+    // An imported file: markup in a custom option and in a section name (reported in the notes).
+    await page.getByTestId('import-file').setInputFiles({
+      name: 'odoo.conf',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(`[options]\ndbfilter = ${XSS}\nx_markup = ${XSS}\n\n[<img src=x onerror=alert(3)>]\nkey = 1\n`),
+    })
+    await expect(page.getByTestId('import-notes')).toContainText('section [<img src=x onerror=alert(3)>]')
+    await expect(changes).toContainText(`added: x_markup = ${XSS}`)
+    await page.getByRole('button', { name: 'Preview', exact: true }).click()
+    await expect(preview).toContainText(`x_markup = ${XSS}`)
+    expect(await main.locator('script, img').count()).toBe(0)
+
+    await page.getByRole('button', { name: 'Save' }).click()
+    await expect(page.getByText('Saved to odoo.conf.')).toBeVisible()
+
+    // Read back from the server after a reload: still text, in the field and the preview.
+    await page.reload()
+    await expect(preview).toContainText(`dbfilter = ${XSS}`)
+    await page.getByRole('searchbox', { name: 'Search options' }).fill('dbfilter')
+    await expect(page.getByLabel('dbfilter', { exact: true })).toHaveValue(XSS)
+
+    expect(await main.locator('script, img').count()).toBe(0)
+    expect(dialogs).toBe(0)
+  } finally {
+    const reset = await client.put(OPTIONS, { options: {} })
+    expect(reset.status(), await reset.text()).toBe(200)
+  }
+})
