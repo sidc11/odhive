@@ -222,7 +222,7 @@ impl Service {
     }
 
     /// `409 database_job_running` while a database of project `name` is
-    /// being created or restored.
+    /// being created, restored or deleted.
     pub(crate) fn ensure_no_database_job(&self, name: &str) -> ApiResult<()> {
         let busy = self.inner.jobs.list().into_iter().find(|j| {
             j.state == crate::jobs::JobState::Running && j.kind.database_project() == Some(name)
@@ -231,7 +231,25 @@ impl Service {
             Some(job) => Err(ApiError::conflict(
                 "database_job_running",
                 format!(
-                    "a database of project {name} is being created or restored (job {})",
+                    "a database of project {name} is being created, restored or deleted (job {})",
+                    job.id
+                ),
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// `409 database_job_running` while database `database` of project
+    /// `name` is being created, restored or deleted.
+    pub(crate) fn ensure_database_idle(&self, name: &str, database: &str) -> ApiResult<()> {
+        let busy = self.inner.jobs.list().into_iter().find(|j| {
+            j.state == crate::jobs::JobState::Running && j.kind.database() == Some((name, database))
+        });
+        match busy {
+            Some(job) => Err(ApiError::conflict(
+                "database_job_running",
+                format!(
+                    "database {database} of project {name} is being created, restored or deleted (job {})",
                     job.id
                 ),
             )),

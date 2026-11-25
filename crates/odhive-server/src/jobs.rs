@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use odhive_core::config::SourceEntry;
-use odhive_core::db::{CreateEvent, CreatedDatabase, RestoreEvent, RestoredDatabase};
+use odhive_core::db::{
+    CreateEvent, CreatedDatabase, DeleteEvent, DeletedDatabase, RestoreEvent, RestoredDatabase,
+};
 use odhive_core::events::{Subscription, Topic};
 use odhive_core::requirements::InstallEvent;
 use odhive_core::setup::{EnvReport, SetupEvent};
@@ -67,16 +69,29 @@ pub enum JobKind {
         /// Database name.
         database: String,
     },
+    /// Deletes a database of a project with its filestore.
+    DeleteDatabase {
+        /// Project name.
+        project: String,
+        /// Database name.
+        database: String,
+    },
 }
 
 impl JobKind {
-    /// The project whose database this job creates or restores.
+    /// The project whose database this job creates, restores or deletes.
     #[must_use]
     pub fn database_project(&self) -> Option<&str> {
+        self.database().map(|(project, _)| project)
+    }
+
+    /// Project and database this job creates, restores or deletes.
+    #[must_use]
+    pub fn database(&self) -> Option<(&str, &str)> {
         match self {
-            Self::CreateDatabase { project, .. } | Self::RestoreDatabase { project, .. } => {
-                Some(project)
-            }
+            Self::CreateDatabase { project, database }
+            | Self::RestoreDatabase { project, database }
+            | Self::DeleteDatabase { project, database } => Some((project, database)),
             _ => None,
         }
     }
@@ -108,6 +123,8 @@ pub enum JobStep {
     CreateDatabase(CreateEvent),
     /// Progress of a database restore.
     RestoreDatabase(RestoreEvent),
+    /// Progress of a database deletion.
+    DeleteDatabase(DeleteEvent),
 }
 
 /// What a successful job produced.
@@ -133,6 +150,11 @@ pub enum JobResult {
     RestoreDatabase {
         /// What was restored.
         database: RestoredDatabase,
+    },
+    /// The deleted database.
+    DeleteDatabase {
+        /// What was deleted.
+        database: DeletedDatabase,
     },
 }
 
@@ -465,7 +487,8 @@ fn output_line(step: &JobStep) -> Option<&str> {
             | SetupEvent::Install(InstallEvent::Output { line }),
         )
         | JobStep::CreateDatabase(CreateEvent::Output { line })
-        | JobStep::RestoreDatabase(RestoreEvent::Output { line }) => Some(line),
+        | JobStep::RestoreDatabase(RestoreEvent::Output { line })
+        | JobStep::DeleteDatabase(DeleteEvent::Output { line }) => Some(line),
         _ => None,
     }
 }

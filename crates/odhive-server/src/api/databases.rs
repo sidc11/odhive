@@ -13,8 +13,8 @@ use axum::http::StatusCode;
 use odhive_core::conf::{DATA_DIR, MASK};
 use odhive_core::db::archive::{self, ExtractLimits};
 use odhive_core::db::{
-    self, DEFAULT_LANGUAGE, DEFAULT_LOGIN, DatabaseList, DbHealth, NewDatabase, OdooCommand,
-    PgTarget, PgTools, RestoreError, RestoreOptions, RestoreRequest,
+    self, DEFAULT_LANGUAGE, DEFAULT_LOGIN, DatabaseList, DbHealth, DeleteError, NewDatabase,
+    OdooCommand, PgTarget, PgTools, RestoreError, RestoreOptions, RestoreRequest,
 };
 use odhive_core::envcheck::Requirement;
 use odhive_core::launch;
@@ -371,6 +371,120 @@ pub(super) async fn restore(
             })
             .await?;
             Ok(JobResult::RestoreDatabase { database })
+        })
+    })?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// Confirms a database deletion.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteDatabase {
+    /// The database name, typed again exactly.
+    #[schema(example = "shop_main")]
+    pub confirm: String,
+}
+
+/// Starts deleting a database the project lists, with its filestore, as
+/// Odoo's database manager does (`odoo-bin db drop`: other connections are
+/// ended, the database dropped, `data/filestore/<name>` removed). `confirm`
+/// must be the database name, typed exactly. Refused while an instance of
+/// the project runs on it (stop it first) or another job works on it.
+/// Follow the job with `/jobs/{id}` or the WebSocket. There is no undo.
+#[utoipa::path(operation_id = "delete_project_database", delete, path = "/projects/{name}/databases/{database}", tag = "databases",
+    request_body = DeleteDatabase,
+    params(
+        ("name" = String, Path, description = "Project name"),
+        ("database" = String, Path, description = "Database name"),
+    ),
+    responses(
+        (status = ACCEPTED, description = "Deletion started", body = Job),
+        (status = BAD_REQUEST, description = "Invalid name, or the confirmation is not the name", body = ErrorBody),
+        (status = NOT_FOUND, description = "No such project, or the project does not list this database", body = ErrorBody),
+        (status = CONFLICT, description = "An instance runs on the database, a job works on it, the project has no venv or is being set up", body = ErrorBody),
+        (status = SERVICE_UNAVAILABLE, description = "PostgreSQL cannot be used", body = ErrorBody),
+    ))]
+pub(super) async fn delete(
+    State(svc): State<Service>,
+    Params((name, database)): Params<(String, String)>,
+    Body(req): Body<DeleteDatabase>,
+) -> ApiResult<(StatusCode, Json<Job>)> {
+    odhive_core::names::validate_db_name(&database).map_err(DeleteError::from)?;
+    db::check_confirmation(&database, &req.confirm)?;
+    let (cfg, project) = svc.project(&name)?;
+    svc.ensure_not_setting_up(&name)?;
+    svc.ensure_database_idle(&name, &database)?;
+    let (community, _) = project.config.resolve_sources(&cfg)?;
+    let dir = project.dir();
+    let python = venv_python(&dir.join(VENV_DIR));
+    if !python.is_file() {
+        return Err(launch::LaunchError::NoVenv(dir.join(VENV_DIR), name.clone()).into());
+    }
+    let configured = |id: &str| {
+        project
+            .config
+            .instances
+            .iter()
+            .find(|i| i.id == id)
+            .map(|i| i.db_name(&name))
+    };
+    let running: Vec<String> = svc
+        .manager()
+        .list_project(&name)
+        .into_iter()
+        .filter(|i| {
+            let db = i.db.clone().or_else(|| configured(&i.owner.instance));
+            !i.is_done() && db.as_deref() == Some(database.as_str())
+        })
+        .map(|i| i.owner.instance)
+        .collect();
+    if !running.is_empty() {
+        return Err(DeleteError::InUse {
+            name: database,
+            instances: running,
+        }
+        .into());
+    }
+    // Only a database the project lists: owned by its role, not a
+    // template nor `postgres`, passing its `dbfilter`.
+    let config = &project.config;
+    let target = PgTarget::for_project(&config.odoo_options, &config.env);
+    let opts = svc.env_options();
+    let listed = db::list(
+        &target,
+        config.odoo_options.get("dbfilter"),
+        &[],
+        opts.package_manager,
+        opts.timeout,
+    )
+    .await;
+    if let Some(check) = listed.error {
+        return Err(DeleteError::Server(check.summary).into());
+    }
+    if !listed.databases.iter().any(|d| d.name == database) {
+        return Err(DeleteError::NotFound(database).into());
+    }
+    let prepared = launch::prepare(&cfg, svc.paths(), &project, &[]).await?;
+    let odoo = OdooCommand {
+        python,
+        odoo_bin: community.path.join("odoo-bin"),
+        conf: prepared.conf,
+        cwd: dir.to_path_buf(),
+        env: config.env.clone(),
+    };
+    let filestore_root = dir.join(DATA_DIR).join(FILESTORE_DIR);
+    let timeout = opts.timeout;
+    let kind = JobKind::DeleteDatabase {
+        project: name,
+        database: database.clone(),
+    };
+    let job = svc.jobs().spawn(kind, move |report| {
+        Box::pin(async move {
+            let database = db::delete(&target, &odoo, &database, &filestore_root, timeout, |e| {
+                report.step(JobStep::DeleteDatabase(e));
+            })
+            .await?;
+            Ok(JobResult::DeleteDatabase { database })
         })
     })?;
     Ok((StatusCode::ACCEPTED, Json(job)))
