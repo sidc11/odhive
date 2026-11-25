@@ -1066,6 +1066,128 @@
         }
       }
     },
+    "/api/v1/projects/{name}/options": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "The project's `odoo.conf` options (secret values left out).",
+        "operationId": "get_project_options",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectOptions"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Replaces the project's `odoo.conf` options. Values are checked against\nthe project's option schema; options it does not know (read by\nthird-party modules) are accepted. Running instances keep the old\noptions until they restart. Refused while the project is being set up.",
+        "operationId": "put_project_options",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectOptions"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A setup of the project runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid option: bad key or value, a managed or command-line only option, a secret outside secrets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{name}/schema": {
       "get": {
         "tags": [
@@ -4326,6 +4448,43 @@
           }
         }
       },
+      "OptionsUpdate": {
+        "type": "object",
+        "description": "New options for a project.",
+        "required": [
+          "options"
+        ],
+        "properties": {
+          "options": {
+            "type": "object",
+            "description": "Every non-secret option (replaces the saved ones; a key left out\nreturns to Odoo's default). Must not contain secret keys.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "example": {
+              "list_db": "False",
+              "log_level": "debug"
+            }
+          },
+          "secrets": {
+            "type": "object",
+            "description": "Secrets to change: a value sets it, `null` removes it. Secrets not\nlisted keep their value.",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "Origin": {
         "oneOf": [
           {
@@ -4542,6 +4701,49 @@
           "path": {
             "type": "string",
             "description": "Project folder."
+          }
+        }
+      },
+      "ProjectOptions": {
+        "type": "object",
+        "description": "A project's options, without secret values.",
+        "required": [
+          "options",
+          "secrets_set",
+          "secret_keys",
+          "managed_keys"
+        ],
+        "properties": {
+          "managed_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Keys OdHive writes itself (addons path, data dir, ports, database,\nworkers, log file); they cannot be set here."
+          },
+          "options": {
+            "type": "object",
+            "description": "Option key → value as written in `odoo.conf`; secrets left out.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "secret_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Keys whose values are secrets."
+          },
+          "secrets_set": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Secret keys that have a value."
           }
         }
       },

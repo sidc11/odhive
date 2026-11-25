@@ -79,6 +79,14 @@ export function buildCommands(state: ProjectsState, deps: CommandDeps): Command[
       hint: project.odoo_version ? `Odoo ${project.odoo_version}` : 'Project',
       run: () => navigate(routeHref({ name: 'project', project: project.name })),
     })
+    actionCommands.push({
+      id: `config:${project.name}`,
+      group: 'Actions',
+      title: `Odoo options of ${project.name}`,
+      hint: 'Edit odoo.conf',
+      keywords: ['config', 'conf', 'odoo.conf', 'settings', 'options'],
+      run: () => navigate(routeHref({ name: 'config', project: project.name })),
+    })
     for (const view of project.instances) {
       const name = `${project.name}/${view.id}`
       const status = instanceState(view)

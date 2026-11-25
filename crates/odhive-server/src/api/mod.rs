@@ -12,6 +12,7 @@ pub mod environment;
 pub mod error;
 pub mod instances;
 mod jobs;
+pub mod options;
 pub mod projects;
 pub mod pythons;
 pub mod settings;
@@ -67,6 +68,7 @@ fn api_router() -> OpenApiRouter<Service> {
         .routes(routes!(projects::list, projects::create))
         .routes(routes!(projects::get, projects::remove))
         .routes(routes!(projects::schema))
+        .routes(routes!(options::get, options::put))
         .routes(routes!(projects::setup))
         .routes(routes!(editor::open))
         .routes(routes!(pythons::list))

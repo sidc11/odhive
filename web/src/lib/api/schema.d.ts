@@ -365,6 +365,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{name}/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The project's `odoo.conf` options (secret values left out). */
+        get: operations["get_project_options"];
+        /**
+         * Replaces the project's `odoo.conf` options. Values are checked against
+         *     the project's option schema; options it does not know (read by
+         *     third-party modules) are accepted. Running instances keep the old
+         *     options until they restart. Refused while the project is being set up.
+         */
+        put: operations["put_project_options"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{name}/schema": {
         parameters: {
             query?: never;
@@ -1518,6 +1541,27 @@ export interface components {
             /** @description Series reported by Odoo, e.g. `19.0`. */
             series: string;
         };
+        /** @description New options for a project. */
+        OptionsUpdate: {
+            /**
+             * @description Every non-secret option (replaces the saved ones; a key left out
+             *     returns to Odoo's default). Must not contain secret keys.
+             * @example {
+             *       "list_db": "False",
+             *       "log_level": "debug"
+             *     }
+             */
+            options: {
+                [key: string]: string;
+            };
+            /**
+             * @description Secrets to change: a value sets it, `null` removes it. Secrets not
+             *     listed keep their value.
+             */
+            secrets?: {
+                [key: string]: string | null;
+            };
+        };
         /** @description Where a requirement came from. */
         Origin: {
             /** @enum {string} */
@@ -1598,6 +1642,22 @@ export interface components {
             odoo_version?: string | null;
             /** @description Project folder. */
             path: string;
+        };
+        /** @description A project's options, without secret values. */
+        ProjectOptions: {
+            /**
+             * @description Keys OdHive writes itself (addons path, data dir, ports, database,
+             *     workers, log file); they cannot be set here.
+             */
+            managed_keys: string[];
+            /** @description Option key → value as written in `odoo.conf`; secrets left out. */
+            options: {
+                [key: string]: string;
+            };
+            /** @description Keys whose values are secrets. */
+            secret_keys: string[];
+            /** @description Secret keys that have a value. */
+            secrets_set: string[];
         };
         /** @description The Python range (inclusive, by `major.minor`) an Odoo source supports. */
         PySupport: {
@@ -2786,6 +2846,101 @@ export interface operations {
                 };
             };
             /** @description Not an absolute path, or a bad line number */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_project_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectOptions"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    put_project_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectOptions"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A setup of the project runs */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Invalid option: bad key or value, a managed or command-line only option, a secret outside secrets */
             422: {
                 headers: {
                     [name: string]: unknown;

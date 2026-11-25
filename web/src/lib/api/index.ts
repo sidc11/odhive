@@ -44,6 +44,8 @@ export type AutofixMode = Schemas['AutofixMode']
 /** Per-instance settings edited in the settings drawer. */
 export type InstanceSettings = Schemas['InstanceSettings']
 export type InstanceSettingsInfo = Schemas['InstanceSettingsInfo']
+export type ProjectOptions = Schemas['ProjectOptions']
+export type OptionsUpdate = Schemas['OptionsUpdate']
 export type LogPage = Schemas['LogPage']
 export type LogRecord = Schemas['Record']
 

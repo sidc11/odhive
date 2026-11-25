@@ -756,6 +756,99 @@ async fn instance_settings_are_saved_and_used_at_the_next_start() {
 }
 
 #[tokio::test]
+async fn project_options_are_checked_saved_and_secrets_never_returned() {
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    let dir = env.project_dir("shop");
+    let url = "/api/v1/projects/shop/options";
+
+    let (status, body) = api.get(url).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["options"], json!({}));
+    assert_eq!(body["secrets_set"], json!([]));
+    assert!(
+        body["managed_keys"]
+            .as_array()
+            .is_some_and(|k| k.contains(&json!("addons_path"))),
+        "{body}"
+    );
+
+    let before = std::fs::read_to_string(dir.join("odhive.toml")).expect("read");
+    for (req, error) in [
+        (
+            json!({ "options": { "http_port": "9000" } }),
+            "managed_option",
+        ),
+        (json!({ "options": { "save": "True" } }), "cli_only_option"),
+        (
+            json!({ "options": { "limit_time_cpu": "soon" } }),
+            "invalid_option",
+        ),
+        (
+            json!({ "options": { "admin_passwd": "x" } }),
+            "secret_in_options",
+        ),
+        (
+            json!({ "options": {}, "secrets": { "log_level": "debug" } }),
+            "not_secret",
+        ),
+        (json!({ "options": {}, "extra": 1 }), "bad_body"),
+    ] {
+        let (status, body) = api.put(url, req.clone()).await;
+        assert_eq!(
+            (status, body["error"].as_str()),
+            (StatusCode::UNPROCESSABLE_ENTITY, Some(error)),
+            "{req} → {body}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.join("odhive.toml")).expect("read"),
+        before
+    );
+
+    let (status, body) = api
+        .put(
+            url,
+            json!({
+                "options": { "log_level": "debug", "x_module_key": "on" },
+                "secrets": { "admin_passwd": "s3cret-value" },
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let expected = json!({ "log_level": "debug", "x_module_key": "on" });
+    assert_eq!(body["options"], expected);
+    assert_eq!(body["secrets_set"], json!(["admin_passwd"]));
+    let (_, read) = api.get(url).await;
+    assert_eq!(read, body);
+    for shown in [&body, &read, &api.get("/api/v1/projects/shop").await.1] {
+        assert!(!shown.to_string().contains("s3cret-value"), "{shown}");
+    }
+
+    // A secret not named in the update keeps its value; null removes it.
+    let (_, body) = api
+        .put(url, json!({ "options": { "list_db": "False" } }))
+        .await;
+    assert_eq!(body["secrets_set"], json!(["admin_passwd"]));
+    let saved = odhive_core::project::ProjectConfig::load(&dir).expect("load");
+    assert_eq!(saved.odoo_options.get("admin_passwd"), Some("s3cret-value"));
+    assert_eq!(saved.odoo_options.get("log_level"), None, "replaced");
+    assert_eq!(saved.odoo_options.get("list_db"), Some("False"));
+    let (_, body) = api
+        .put(
+            url,
+            json!({ "options": {}, "secrets": { "admin_passwd": null } }),
+        )
+        .await;
+    assert_eq!(body["secrets_set"], json!([]));
+
+    let (status, body) = api.get("/api/v1/projects/nope/options").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[tokio::test]
 async fn projects_show_the_git_branch_of_their_addons() {
     let env = Env::new();
     let api = env.app();

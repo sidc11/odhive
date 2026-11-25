@@ -5,7 +5,10 @@ import type {
   EnvCheckReport,
   InstanceInfo,
   InstanceView,
+  OdooOption,
   Project,
+  ProjectOptions,
+  SchemaInfo,
   ServerMessage,
   Status,
 } from './lib/api'
@@ -142,5 +145,56 @@ export function envReport(overrides: Partial<Record<EnvCheck['id'], Partial<EnvC
       fix: null,
       ...overrides[id],
     })),
+  }
+}
+
+/** An option of the Odoo option schema (a string option in "Common options" unless changed). */
+export function odooOption(key: string, extra: Partial<OdooOption> = {}): OdooOption {
+  return {
+    key,
+    type: 'string',
+    flags: [`--${key.replace(/_/g, '-')}`],
+    default: null,
+    help: null,
+    group: 'Common options',
+    metavar: null,
+    file_loadable: true,
+    file_exportable: true,
+    secret: false,
+    ...extra,
+  } as OdooOption
+}
+
+/** A small option schema: secrets, a choice, an int, a bool, a managed and a command-line only option. */
+export const configSchema: SchemaInfo = {
+  source: 'introspected',
+  schema: {
+    series: '19.0',
+    options: [
+      odooOption('admin_passwd', { group: null, flags: [], secret: true, default: 'admin' }),
+      odooOption('db_password', { group: 'Database related options', secret: true }),
+      odooOption('db_host', { group: 'Database related options', help: 'specify the database host' }),
+      odooOption('log_level', {
+        type: 'choice',
+        choices: ['info', 'debug', 'warn'],
+        default: 'info',
+        group: 'Logging Configuration',
+      } as Partial<OdooOption>),
+      odooOption('limit_time_cpu', { type: 'int', default: 60, group: 'Advanced options' }),
+      odooOption('list_db', { type: 'bool', default: true, group: 'Advanced options' }),
+      odooOption('http_port', { type: 'int', group: 'HTTP Service Configuration' }),
+      odooOption('save', { type: 'bool', file_loadable: false }),
+    ],
+  },
+}
+
+/** Saved options of `configSchema`'s project. */
+export function projectOptions(extra: Partial<ProjectOptions> = {}): ProjectOptions {
+  return {
+    options: { log_level: 'debug', x_module: 'on' },
+    secrets_set: ['admin_passwd'],
+    secret_keys: ['admin_passwd', 'db_password', 'smtp_password', 'proxy_access_token'],
+    managed_keys: ['addons_path', 'data_dir', 'http_port', 'db_name'],
+    ...extra,
   }
 }
