@@ -30,4 +30,4 @@
   $effect(() => () => pool.release(stream))
 </script>
 
-<LogView {stream} label={`Log of ${project}/${instance}`} onopen={(link) => void open(link)} />
+<LogView {stream} label={`Log of ${project}/${instance}`} source={{ project, instance }} onopen={(link) => void open(link)} />

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs'
+import type { Download, Page } from '@playwright/test'
 import { join } from 'node:path'
 import type { APIRequestContext } from '@playwright/test'
 import type { E2eState } from './env'
@@ -297,6 +298,82 @@ test('the split view follows logs side by side on one subscription', async ({ pa
     await page.getByRole('button', { name: 'Close log of shop/ghost' }).click()
     await expect(page).toHaveURL(/\/logs\/shop\/main$/)
     await expect(page.getByRole('region', { name: 'shop/main', exact: true })).toHaveCount(1)
+  } finally {
+    await client.post('/api/v1/projects/shop/instances/main/stop')
+    await client.put(SETTINGS, saved.settings)
+  }
+})
+
+/** Clicks a download in the Export box and returns the file's name and text. */
+async function exportAs(page: Page, format: 'log' | 'txt' | 'json'): Promise<{ name: string; text: string }> {
+  await page.getByRole('button', { name: /^Export/ }).click()
+  const [file]: [Download, unknown] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: new RegExp(String.raw`Download \.${format}`) }).click(),
+  ])
+  const path = await file.path()
+  return { name: file.suggestedFilename(), text: readFileSync(path, 'utf8') }
+}
+
+test('the shown entries export as .log, .txt and .json', async ({ page, signIn, request, e2e }) => {
+  const client = api(request, e2e)
+  const saved = (await (await client.get(SETTINGS)).json()) as { settings: Record<string, unknown> }
+  const put = await client.put(SETTINGS, { ...saved.settings, extra_args: ['--flood', '200', '--simulate', 'traceback'] })
+  expect(put.status(), await put.text()).toBe(200)
+
+  try {
+    await signIn()
+    await page.goto('/projects/shop/instances/main')
+    const log = page.getByRole('region', { name: 'Log of shop/main' })
+    const start = await client.post('/api/v1/projects/shop/instances/main/start')
+    expect(start.status(), await start.text()).toBe(200)
+    await expect(log.getByText(/ValueError: Expected singleton/)).toBeVisible({ timeout: 30_000 })
+
+    // .log: Odoo's own lines, the traceback in full.
+    const all = await exportAs(page, 'log')
+    expect(all.name).toMatch(/^shop-main-\d{8}-\d{6}\.log$/)
+    expect(all.text).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} \d+ INFO \S+ odoo\.flood: flood line 200$/m)
+    expect(all.text).toMatch(/ ERROR \S+ \S+: Exception during request handling\.\nTraceback \(most recent call last\):\n/)
+    expect(all.text.endsWith('\n')).toBe(true)
+    await expect(page.getByRole('button', { name: /^Exported \d+ entries/ })).toBeVisible()
+
+    // The open Export box passes contrast in both themes.
+    await page.getByRole('button', { name: /^Export/ }).click()
+    await expect(page.getByRole('group', { name: 'Export options' })).toBeVisible()
+    for (const scheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: scheme })
+      expect(await seriousViolations(page), `export, ${scheme}`).toEqual([])
+    }
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('group', { name: 'Export options' })).toBeHidden()
+
+    // .json with only the search matches: flood line 10 and 100–109.
+    await page.getByRole('searchbox', { name: 'Search the log' }).fill('flood line 10')
+    await expect(page.getByTestId('log-search-status')).toHaveText('11 matches')
+    await page.getByRole('button', { name: /^Export/ }).click()
+    await page.getByRole('checkbox', { name: 'Only search matches' }).check()
+    await page.keyboard.press('Escape')
+    const matching = await exportAs(page, 'json')
+    const parsed = JSON.parse(matching.text) as {
+      project: string
+      filter: { search: string; only_matching: boolean }
+      entries: { message: string }[]
+    }
+    expect(parsed.project).toBe('shop')
+    expect(parsed.filter).toMatchObject({ search: 'flood line 10', only_matching: true })
+    expect(parsed.entries.map((entry) => entry.message)).toEqual([
+      'flood line 10',
+      ...Array.from({ length: 10 }, (_, i) => `flood line ${100 + i}`),
+    ])
+
+    // .txt without INFO: only the traceback is left, the filter in the header.
+    await page.getByRole('searchbox', { name: 'Search the log' }).fill('')
+    await page.getByRole('button', { name: 'INFO', exact: true }).click()
+    const errors = await exportAs(page, 'txt')
+    expect(errors.text).toContain('OdHive log export: shop/main\n')
+    expect(errors.text).toContain('Levels: DEBUG WARN ERROR CRIT\n')
+    expect(errors.text).toContain('ValueError: Expected singleton')
+    expect(errors.text).not.toContain('flood line')
   } finally {
     await client.post('/api/v1/projects/shop/instances/main/stop')
     await client.put(SETTINGS, saved.settings)
