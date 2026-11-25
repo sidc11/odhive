@@ -73,3 +73,15 @@ export const msg = {
   gap: (skipped: number): ServerMessage => ({ type: 'gap', ...target, skipped }),
   reset: (): ServerMessage => ({ type: 'reset', ...target }),
 }
+
+/** A line OdHive wrote itself, as the server sends it (no header). */
+export function marked(seq: number, mark: Omit<NonNullable<LogRecord['mark']>, 'at'>, message = 'odhive: …'): LogRecord {
+  return {
+    ...record(seq, message),
+    level: null,
+    logger: null,
+    pid: null,
+    timestamp: null,
+    mark: { at: '2026-11-24T09:00:01.500Z', ...mark } as NonNullable<LogRecord['mark']>,
+  }
+}

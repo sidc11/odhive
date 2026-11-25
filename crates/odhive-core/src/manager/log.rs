@@ -24,7 +24,8 @@ use super::fix::Watcher;
 use super::{Inner, Notice};
 use crate::events::{LogEvent, Topic};
 use crate::logs::LogSettings;
-use crate::logs::store::{InstanceLog, Page, Record};
+use crate::logs::parse::Timestamp;
+use crate::logs::store::{InstanceLog, Mark, Page, Record};
 use crate::ports::PortOwner;
 use crate::syslib::{self, Hint, Library};
 
@@ -172,21 +173,26 @@ impl LogSlot {
 
     /// A new process was started: writes the start marker.
     pub fn started(&self, pid: u32) -> Option<io::Error> {
-        self.write_marker(&format!("----- odhive: started pid {pid} -----"), true)
+        self.write_marker(
+            &format!("----- odhive: started pid {pid} -----"),
+            Mark::Started { pid },
+            true,
+        )
     }
 
-    /// A line OdHive writes itself. Never handed to the watcher.
-    pub fn marker(&self, text: &str) -> Option<io::Error> {
-        self.write_marker(text, false)
+    /// A line OdHive writes itself, reporting `mark`. Never handed to the
+    /// watcher.
+    pub fn marker(&self, text: &str, mark: Mark) -> Option<io::Error> {
+        self.write_marker(text, mark, false)
     }
 
-    fn write_marker(&self, text: &str, new_run: bool) -> Option<io::Error> {
+    fn write_marker(&self, text: &str, mark: Mark, new_run: bool) -> Option<io::Error> {
         let mut state = self.lock();
         // The pending output entry is completed first; it belongs to the run.
         if let Some(record) = state.log.flush() {
             self.output(&mut state, record);
         }
-        let (records, error) = state.log.push_marker(text);
+        let (records, error) = state.log.push_marker(text, mark, Timestamp::now());
         for record in records {
             self.publish(record);
         }

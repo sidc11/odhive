@@ -311,6 +311,20 @@ fn timestamp_formats() {
 }
 
 #[test]
+fn timestamp_from_unix_millis() {
+    let at = |ms| Timestamp::from_unix_millis(ms).to_rfc3339();
+    assert_eq!(at(0), "1970-01-01T00:00:00.000Z");
+    assert_eq!(at(951_782_400_000), "2000-02-29T00:00:00.000Z");
+    assert_eq!(at(1_795_329_461_016), "2026-11-22T06:37:41.016Z");
+    assert_eq!(at(4_107_542_399_999), "2100-02-28T23:59:59.999Z");
+    assert_eq!(at(u64::MAX), "9999-12-31T23:59:59.999Z");
+    let now = Timestamp::now();
+    assert!(now.year >= 2026, "{now}");
+    // The parser reads what the clock gives.
+    assert_eq!(Timestamp::parse(&now.to_string()), Some(now));
+}
+
+#[test]
 fn serializes_flat_json() {
     let entry = one(&format!(
         "{LINE_20}\nTraceback (most recent call last):\n  File \"/a.py\", line 4, in f\nKeyError: 'x'"

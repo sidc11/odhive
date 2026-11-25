@@ -1,6 +1,7 @@
 // Filters and search of the log viewer: which rows are shown (levels,
 // loggers) and which shown rows match the search (text or regex).
 import type { LogRecord } from '../api'
+import { alwaysShown, shownMessage } from './marks'
 import type { LogRow } from './rows'
 
 /** Level chips; RUNBOT entries and lines without a header go with INFO. */
@@ -46,12 +47,12 @@ export function parseLoggers(text: string): LoggerFilter {
   return { include, exclude }
 }
 
-/** Rows shown with these levels and logger filter; markers always are. */
+/** Rows shown with these levels and logger filter; markers and OdHive's events always are. */
 export function rowFilter(levels: ReadonlySet<LevelChip>, loggers: LoggerFilter): (row: LogRow) => boolean {
   const all = LEVEL_CHIPS.every((chip) => levels.has(chip))
   if (all && loggers.include.length === 0 && loggers.exclude.length === 0) return () => true
   return (row) => {
-    if (row.kind !== 'entry') return true
+    if (row.kind !== 'entry' || alwaysShown(row.record)) return true
     const { level, logger } = row.record
     if (!all && !levels.has(chipOf(level))) return false
     const name = (logger ?? '').toLowerCase()
@@ -97,7 +98,7 @@ export function compileSearch(query: string, { regex, caseSensitive }: SearchOpt
   }
 }
 
-/** Whether a row matches the search: a non-empty match in its logger or message. */
+/** Whether a row matches the search: a non-empty match in its logger or shown message. */
 export function rowMatcher(pattern: RegExp): (row: LogRow) => boolean {
   const test = new RegExp(pattern.source, pattern.flags.replace('g', ''))
   const hit = (text: string | null | undefined): boolean => {
@@ -108,7 +109,7 @@ export function rowMatcher(pattern: RegExp): (row: LogRow) => boolean {
     // An empty match (`x*`): look for a real one.
     return firstSegmentMatch(text, pattern)
   }
-  return (row) => row.kind === 'entry' && (hit(row.record.message) || hit(row.record.logger))
+  return (row) => row.kind === 'entry' && (hit(shownMessage(row.record)) || hit(row.record.logger))
 }
 
 function firstSegmentMatch(text: string, pattern: RegExp): boolean {

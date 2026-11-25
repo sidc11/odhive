@@ -3474,6 +3474,205 @@
         ],
         "description": "An event, with the instance it belongs to."
       },
+      "Mark": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A process was started.",
+            "required": [
+              "pid",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "started"
+                ]
+              },
+              "pid": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Process id.",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Smart Reload restarts the instance because files changed.",
+            "required": [
+              "files",
+              "file_count",
+              "update",
+              "kind"
+            ],
+            "properties": {
+              "file_count": {
+                "type": "integer",
+                "description": "Number of changed files.",
+                "minimum": 0
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Changed files, relative to their addons folder (at most\n[`crate::reload::MAX_LISTED_FILES`])."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "reload"
+                ]
+              },
+              "update": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Modules updated with `-u`; empty = plain restart."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A missing package is being installed.",
+            "required": [
+              "package",
+              "module",
+              "attempt",
+              "max",
+              "kind"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Install number since the instance was started (from 1).",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "installing"
+                ]
+              },
+              "max": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Installs allowed per start.",
+                "minimum": 0
+              },
+              "module": {
+                "type": "string",
+                "description": "Missing module."
+              },
+              "package": {
+                "type": "string",
+                "description": "Package."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An output line of the installer.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "install_output"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The package was installed; the instance restarts.",
+            "required": [
+              "package",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "installed"
+                ]
+              },
+              "package": {
+                "type": "string",
+                "description": "Package."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The install failed.",
+            "required": [
+              "package",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "install_failed"
+                ]
+              },
+              "package": {
+                "type": "string",
+                "description": "Package."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The install was cancelled.",
+            "required": [
+              "package",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "install_cancelled"
+                ]
+              },
+              "package": {
+                "type": "string",
+                "description": "Package."
+              }
+            }
+          }
+        ],
+        "description": "The kinds of line OdHive writes into an instance's log."
+      },
+      "Marker": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Mark",
+            "description": "What it reports."
+          },
+          {
+            "type": "object",
+            "required": [
+              "at"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "description": "When it was written (UTC)."
+              }
+            }
+          }
+        ],
+        "description": "What a line OdHive wrote into an instance's log reports, and when."
+      },
       "NewInstance": {
         "type": "object",
         "description": "Settings of a project's first instance.",
@@ -4478,6 +4677,17 @@
               "seq"
             ],
             "properties": {
+              "mark": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Marker",
+                    "description": "Set on lines OdHive wrote itself (never on the instance's output)."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "seq": {
                 "type": "integer",
                 "format": "int64",

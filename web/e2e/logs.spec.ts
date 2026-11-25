@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import type { Download, Page } from '@playwright/test'
 import { join } from 'node:path'
 import type { APIRequestContext } from '@playwright/test'
@@ -77,10 +77,12 @@ test('the log viewer streams entries as text and follows the end', async ({ page
     await expect(info).toHaveAttribute('aria-pressed', 'false')
     await expect(log.getByText(/flood line/)).toHaveCount(0)
     await expect(log.getByText(/ValueError: Expected singleton/)).toBeVisible()
-    // Logger filter: hiding its logger leaves nothing.
+    // Logger filter: hiding its logger leaves only OdHive's start event.
     const loggers = page.getByRole('textbox', { name: 'Logger' })
     await loggers.fill('-odoo.http')
-    await expect(log.getByText('No entries match the level and logger filters.')).toBeVisible()
+    await expect(log.getByText(/ValueError: Expected singleton/)).toHaveCount(0)
+    await expect(log.locator('[data-row-id]')).toHaveCount(1)
+    await expect(log.locator('[data-event="started"]')).toBeVisible()
     await loggers.fill('')
     await info.click()
     await expect(log.getByText(/flood line 3000\b/)).toBeVisible()
@@ -108,6 +110,56 @@ test('the log viewer streams entries as text and follows the end', async ({ page
   } finally {
     await client.post('/api/v1/projects/shop/instances/main/stop')
     await client.put(SETTINGS, saved.settings)
+  }
+})
+
+test('a Smart Reload restart shows inline as an event', async ({ page, signIn, request, e2e }) => {
+  const client = api(request, e2e)
+  const project = (await (await client.get('/api/v1/projects/shop')).json()) as {
+    path: string
+    instances: { id: string; live: { reload?: { watching: boolean } } | null }[]
+  }
+  // A module that exists before the start (a new one is only reported).
+  const module = join(project.path, 'addons/sale_x')
+  mkdirSync(join(module, 'models'), { recursive: true })
+  writeFileSync(join(module, '__manifest__.py'), "{'name': 'Sale X'}\n")
+  writeFileSync(join(module, 'models/order.py'), '# v1\n')
+
+  try {
+    await signIn()
+    await page.goto('/projects/shop/instances/main')
+    const log = page.getByRole('region', { name: 'Log of shop/main' })
+    const start = await client.post('/api/v1/projects/shop/instances/main/start')
+    expect(start.status(), await start.text()).toBe(200)
+    await expect(log.locator('[data-event="started"]')).toContainText(/START +▶ started \(pid \d+\)/, {
+      timeout: 30_000,
+    })
+    await expect
+      .poll(
+        async () => {
+          const now = (await (await client.get('/api/v1/projects/shop')).json()) as typeof project
+          return now.instances.find((i) => i.id === 'main')?.live?.reload?.watching ?? false
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true)
+
+    writeFileSync(join(module, 'models/order.py'), '# v2\n')
+    const reload = log.locator('[data-event="reload"]')
+    await expect(reload).toContainText('RELOAD ↻ restarted: sale_x/models/order.py changed', { timeout: 30_000 })
+    // The restarted process starts after it.
+    await expect(log.locator('[data-event="started"]')).toHaveCount(2, { timeout: 30_000 })
+
+    // Kept with INFO off (they are context), and readable in both themes.
+    await page.getByRole('button', { name: 'INFO', exact: true }).click()
+    await expect(reload).toBeVisible()
+    for (const scheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: scheme })
+      expect(await seriousViolations(page), `events, ${scheme}`).toEqual([])
+    }
+  } finally {
+    await client.post('/api/v1/projects/shop/instances/main/stop')
+    rmSync(module, { recursive: true, force: true })
   }
 })
 

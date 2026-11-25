@@ -24,6 +24,7 @@ use crate::autofix::{
     self, Action, Attempts, AutofixMode, Candidate, GiveUp, MAX_ATTEMPTS, Trust, Trusted,
 };
 use crate::logs::parse::Entry;
+use crate::logs::store::Mark;
 use crate::ports::PortOwner;
 use crate::requirements::{self, InstallEvent, InstallOptions};
 
@@ -307,12 +308,13 @@ pub(super) async fn apply(
             .filter(|e| e.fix.as_ref().is_some_and(|f| Arc::ptr_eq(f, fix)))
             .and_then(|e| e.log.clone())
     });
-    let marker = |text: &str| {
+    let marker = |text: &str, mark: Mark| {
         if let Some(log) = &log {
             // A file error was reported when the log was opened or first written.
-            let _ = log.marker(&format!("odhive: {text}"));
+            let _ = log.marker(&format!("odhive: {text}"), mark);
         }
     };
+    let package = || candidate.package.clone();
     notify(
         inner,
         owner,
@@ -324,14 +326,22 @@ pub(super) async fn apply(
             max: MAX_ATTEMPTS,
         },
     );
-    marker(&format!(
-        "installing {} for missing module {:?} (attempt {attempt}/{MAX_ATTEMPTS})",
-        candidate.package, candidate.module
-    ));
+    marker(
+        &format!(
+            "installing {} for missing module {:?} (attempt {attempt}/{MAX_ATTEMPTS})",
+            candidate.package, candidate.module
+        ),
+        Mark::Installing {
+            package: package(),
+            module: candidate.module.clone(),
+            attempt,
+            max: MAX_ATTEMPTS,
+        },
+    );
     let plan = candidate.plan();
     let install = requirements::install(&plan, &fix.config.install, |e| {
         if let InstallEvent::Output { line } = e {
-            marker(&line);
+            marker(&line, Mark::InstallOutput);
         }
     });
     let result = tokio::select! {
@@ -340,7 +350,10 @@ pub(super) async fn apply(
     };
     let restart = match result {
         None => {
-            marker("install cancelled");
+            marker(
+                "install cancelled",
+                Mark::InstallCancelled { package: package() },
+            );
             None
         }
         Some(Err(e)) => {
@@ -349,7 +362,10 @@ pub(super) async fn apply(
                 requirements::RequirementsError::Failed { hint, .. } => hint.map(|h| *h),
                 _ => None,
             };
-            marker(&format!("install of {} failed", candidate.package));
+            marker(
+                &format!("install of {} failed", candidate.package),
+                Mark::InstallFailed { package: package() },
+            );
             notify(
                 inner,
                 owner,
@@ -362,7 +378,10 @@ pub(super) async fn apply(
             None
         }
         Some(Ok(())) => {
-            marker(&format!("installed {}; restarting", candidate.package));
+            marker(
+                &format!("installed {}; restarting", candidate.package),
+                Mark::Installed { package: package() },
+            );
             notify(
                 inner,
                 owner,

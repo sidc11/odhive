@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use super::parse::{Entry, Location, Parser};
+use super::parse::{Entry, Location, Parser, Timestamp};
 use super::{LogFile, LogSettings, log_path};
 
 /// Size limits of a [`LogBuffer`].
@@ -44,6 +44,69 @@ pub struct Record {
     /// The entry.
     #[serde(flatten)]
     pub entry: Entry,
+    /// Set on lines OdHive wrote itself (never on the instance's output).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<Marker>,
+}
+
+/// What a line OdHive wrote into an instance's log reports, and when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct Marker {
+    /// When it was written (UTC).
+    #[schema(value_type = String)]
+    pub at: Timestamp,
+    /// What it reports.
+    #[serde(flatten)]
+    pub mark: Mark,
+}
+
+/// The kinds of line OdHive writes into an instance's log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Mark {
+    /// A process was started.
+    Started {
+        /// Process id.
+        pid: u32,
+    },
+    /// Smart Reload restarts the instance because files changed.
+    Reload {
+        /// Changed files, relative to their addons folder (at most
+        /// [`crate::reload::MAX_LISTED_FILES`]).
+        files: Vec<String>,
+        /// Number of changed files.
+        file_count: usize,
+        /// Modules updated with `-u`; empty = plain restart.
+        update: Vec<String>,
+    },
+    /// A missing package is being installed.
+    Installing {
+        /// Package.
+        package: String,
+        /// Missing module.
+        module: String,
+        /// Install number since the instance was started (from 1).
+        attempt: u32,
+        /// Installs allowed per start.
+        max: u32,
+    },
+    /// An output line of the installer.
+    InstallOutput,
+    /// The package was installed; the instance restarts.
+    Installed {
+        /// Package.
+        package: String,
+    },
+    /// The install failed.
+    InstallFailed {
+        /// Package.
+        package: String,
+    },
+    /// The install was cancelled.
+    InstallCancelled {
+        /// Package.
+        package: String,
+    },
 }
 
 /// Entries read from a [`LogBuffer`].
@@ -80,6 +143,24 @@ pub fn entry_size(entry: &Entry) -> usize {
         + entry.message.len()
         + locations
         + exceptions
+}
+
+/// Heap memory a [`Marker`] holds.
+fn mark_size(marker: &Marker) -> usize {
+    match &marker.mark {
+        Mark::Reload { files, update, .. } => files
+            .iter()
+            .chain(update)
+            .map(|s| size_of::<String>() + s.len())
+            .sum(),
+        Mark::Installing {
+            package, module, ..
+        } => package.len() + module.len(),
+        Mark::Installed { package }
+        | Mark::InstallFailed { package }
+        | Mark::InstallCancelled { package } => package.len(),
+        Mark::Started { .. } | Mark::InstallOutput => 0,
+    }
 }
 
 /// A bounded ring buffer of [`Record`]s.
@@ -120,10 +201,16 @@ impl LogBuffer {
 
     /// Adds `entry`, evicting the oldest entries while over a limit.
     pub fn push(&mut self, entry: Entry) -> Arc<Record> {
-        let size = entry_size(&entry);
+        self.push_marked(entry, None)
+    }
+
+    /// Adds `entry` with its [`Record::mark`].
+    pub fn push_marked(&mut self, entry: Entry, mark: Option<Marker>) -> Arc<Record> {
+        let size = entry_size(&entry) + mark.as_ref().map_or(0, mark_size);
         let record = Arc::new(Record {
             seq: self.next_seq,
             entry,
+            mark,
         });
         self.next_seq += 1;
         self.records.push_back((Arc::clone(&record), size));
@@ -270,14 +357,21 @@ impl InstanceLog {
         Pushed { record, file_error }
     }
 
-    /// Records a line OdHive writes itself, e.g. a start marker. It ends the
-    /// pending entry and is never merged into one.
-    pub fn push_marker(&mut self, text: &str) -> (Vec<Arc<Record>>, Option<io::Error>) {
+    /// Records a line OdHive writes itself, e.g. a start marker, written at
+    /// `at`. It ends the pending entry and is never merged into one. The
+    /// file gets only `text`; the buffered entry also carries `mark`.
+    pub fn push_marker(
+        &mut self,
+        text: &str,
+        mark: Mark,
+        at: Timestamp,
+    ) -> (Vec<Arc<Record>>, Option<io::Error>) {
         let file_error = self.write(text);
         let mut done: Vec<Arc<Record>> = self.flush().into_iter().collect();
         let mut parser = Parser::new();
         let entries = parser.push(text).into_iter().chain(parser.flush());
-        done.extend(entries.map(|e| self.buffer.push(e)));
+        let marker = Marker { at, mark };
+        done.extend(entries.map(|e| self.buffer.push_marked(e, Some(marker.clone()))));
         (done, file_error)
     }
 

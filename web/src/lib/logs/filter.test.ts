@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { chipOf, compileSearch, highlight, LEVEL_CHIPS, parseLoggers, rowFilter, rowMatcher, type LevelChip } from './filter'
 import type { LogRow } from './rows'
-import { record } from './test-fixtures'
+import { marked, record } from './test-fixtures'
 
 function entry(id: number, extra: Parameters<typeof record>[2] = {}, message = `entry ${id}`): LogRow {
   return { id, kind: 'entry', record: record(id, message, extra), lines: 1 }
@@ -31,6 +31,31 @@ describe('level filter', () => {
     expect(filter(entry(4, { level: 'runbot' }))).toBe(false)
     expect(filter({ id: 5, kind: 'gap', skipped: 3, lines: 1 })).toBe(true)
     expect(filter({ id: 6, kind: 'reset', lines: 1 })).toBe(true)
+  })
+})
+
+describe("OdHive's events", () => {
+  const event = (id: number, mark: Parameters<typeof marked>[1], message?: string): LogRow => ({
+    id,
+    kind: 'entry',
+    record: marked(id, mark, message),
+    lines: 1,
+  })
+
+  it('are shown whatever the level and logger filters', () => {
+    const filter = rowFilter(new Set<LevelChip>(['error']), parseLoggers('addons.sale'))
+    expect(filter(event(1, { kind: 'reload', files: ['m/a.py'], file_count: 1, update: [] }))).toBe(true)
+    expect(filter(event(2, { kind: 'installed', package: 'Pillow' }))).toBe(true)
+    expect(filter(event(3, { kind: 'started', pid: 1 }))).toBe(true)
+    // The installer's output goes with INFO and has no logger.
+    expect(filter(event(4, { kind: 'install_output' }))).toBe(false)
+    expect(rowFilter(ALL, NONE)(event(4, { kind: 'install_output' }))).toBe(true)
+  })
+
+  it('are searched in the text they show', () => {
+    const row = event(1, { kind: 'installed', package: 'Pillow' }, 'odhive: installed Pillow; restarting')
+    expect(rowMatcher(pattern('Pillow, restarting'))(row)).toBe(true)
+    expect(rowMatcher(pattern('; restarting'))(row)).toBe(false)
   })
 })
 
