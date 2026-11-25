@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import type { ApiClient } from '../lib/api/client'
   import { ConfigForm } from '../lib/config/form.svelte'
   import OptionField from '../lib/config/OptionField.svelte'
+  import { ConfPreview } from '../lib/config/preview.svelte'
+  import { download } from '../lib/logs/export'
   import { routeHref, router } from '../lib/router.svelte'
   import { api as defaultApi } from '../lib/stores'
 
@@ -11,13 +13,42 @@
     api = defaultApi,
   }: {
     project: string
-    api?: Pick<ApiClient, 'projectSchema' | 'getProjectOptions' | 'putProjectOptions'>
+    api?: Pick<
+      ApiClient,
+      'projectSchema' | 'getProjectOptions' | 'putProjectOptions' | 'previewProjectOptions' | 'importProjectOptions'
+    >
   } = $props()
 
   // The page is keyed by project (App.svelte), so one form per mount.
   // svelte-ignore state_referenced_locally
   const form = new ConfigForm(api, project)
   void form.load()
+  // svelte-ignore state_referenced_locally
+  const preview = new ConfPreview(api, project)
+  onDestroy(() => preview.dispose())
+
+  // A new preview whenever the options change (and once loaded, then after a save).
+  $effect(() => {
+    if (form.status !== 'ready') return
+    const update = form.update
+    if (form.problemCount > 0) preview.hold('The preview waits until the marked options are fixed.')
+    else preview.request(update)
+  })
+
+  let previewTab: 'file' | 'changes' = $state('file')
+  let fileInput: HTMLInputElement | undefined = $state()
+
+  async function importChosen(event: Event & { currentTarget: HTMLInputElement }): Promise<void> {
+    const input = event.currentTarget
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    if (await form.importFile(file)) previewTab = 'changes'
+  }
+
+  function downloadPreview(): void {
+    download({ name: 'odoo.conf', type: 'text/plain;charset=utf-8', text: preview.text })
+  }
 
   /** Sections the user folded; a search shows every section. */
   let folded: string[] = $state([])
@@ -54,12 +85,31 @@
   const button =
     'inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md border border-line px-3 text-sm font-medium hover:bg-surface-sunken disabled:cursor-not-allowed disabled:opacity-50'
   const primary = `${button} border-transparent bg-accent text-accent-fg hover:bg-accent hover:opacity-90`
+  const tab = 'inline-flex min-h-8 items-center rounded-md px-2.5 text-sm hover:bg-surface-sunken'
+  const tabOn = 'bg-accent-soft font-medium'
 </script>
 
 <svelte:window {onbeforeunload} />
 
 <div class="flex flex-col gap-1">
-  <h1 class="text-2xl font-semibold">Odoo options</h1>
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <h1 class="text-2xl font-semibold">Odoo options</h1>
+    {#if form.status === 'ready'}
+      <input
+        bind:this={fileInput}
+        type="file"
+        accept=".conf,.cfg,.ini,text/plain"
+        class="hidden"
+        tabindex="-1"
+        aria-hidden="true"
+        onchange={importChosen}
+        data-testid="import-file"
+      />
+      <button type="button" class={button} disabled={form.importing} onclick={() => fileInput?.click()}>
+        {form.importing ? 'Importing…' : 'Import odoo.conf…'}
+      </button>
+    {/if}
+  </div>
   <p class="text-sm text-fg-muted">
     <a href={routeHref({ name: 'project', project })} class="underline" onclick={router.link}>{project}</a>
     {#if form.series}· Odoo {form.series}{/if} · written to odoo.conf at each start
@@ -89,7 +139,86 @@
     </div>
   {/if}
 
-  <form class="mt-4 flex flex-col gap-4" onsubmit={save} novalidate>
+  {#if form.importError}
+    <p class="mt-4 text-sm text-state-crashed" role="alert">Import failed: {form.importError}</p>
+  {/if}
+  {#if form.importNotes.length > 0}
+    <div class="mt-4 rounded-md border border-line bg-surface-sunken p-3 text-sm" role="status" data-testid="import-notes">
+      <div class="flex items-start gap-2">
+        <p class="flex-1">Imported into the form; review the changes and save. Not taken over:</p>
+        <button type="button" class="{button} min-h-8 px-2" onclick={() => (form.importNotes = [])}>Dismiss</button>
+      </div>
+      <ul class="mt-2 list-disc pl-5 text-fg-muted">
+        {#each form.importNotes as note, index (index)}
+          <li class="break-words">{note}</li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
+
+  <div class="mt-4 grid grid-cols-[minmax(0,1fr)] items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,32rem)]">
+  <aside
+    class="flex min-w-0 flex-col rounded-lg border border-line bg-surface-raised xl:sticky xl:top-18 xl:order-2 xl:max-h-[calc(100dvh-10rem)]"
+    aria-labelledby="preview-title"
+  >
+    <div class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2">
+      <h2 id="preview-title" class="font-semibold">odoo.conf</h2>
+      <div class="flex gap-1" role="group" aria-label="Show">
+        <button type="button" class="{tab} {previewTab === 'file' ? tabOn : ''}" aria-pressed={previewTab === 'file'} onclick={() => (previewTab = 'file')}
+          >Preview</button
+        >
+        <button
+          type="button"
+          class="{tab} {previewTab === 'changes' ? tabOn : ''}"
+          aria-pressed={previewTab === 'changes'}
+          onclick={() => (previewTab = 'changes')}>Changes ({preview.changes})</button
+        >
+      </div>
+      <button type="button" class="{button} ml-auto min-h-8 px-2" disabled={preview.text === ''} onclick={downloadPreview}>Download</button>
+    </div>
+    <p class="px-4 pt-2 text-xs text-fg-muted">
+      As the next start writes it to <span class="font-mono break-all">{form.confPath}</span>; secret values are masked.
+    </p>
+    <p class="px-4 pt-1 text-xs empty:hidden {preview.error ? 'text-state-crashed' : 'text-fg-muted'}" aria-live="polite">
+      {#if preview.error}{preview.error}{:else if preview.pending}Updating…{/if}
+    </p>
+    <!-- Scrollable, so it takes focus for keyboard scrolling (axe scrollable-region-focusable). -->
+    {#if previewTab === 'file'}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <pre
+        class="max-h-72 min-h-24 overflow-auto px-4 py-3 font-mono text-xs leading-5 xl:max-h-none"
+        tabindex="0"
+        role="region"
+        aria-label="odoo.conf preview"
+        data-testid="conf-preview">{preview.text}</pre>
+    {:else}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div
+        class="max-h-72 min-h-24 overflow-auto px-4 py-3 font-mono text-xs leading-5 xl:max-h-none"
+        tabindex="0"
+        role="region"
+        aria-label="Changes against the saved odoo.conf"
+        data-testid="conf-diff"
+      >
+        {#if preview.changes === 0}
+          <p class="font-sans text-sm text-fg-muted">No changes against the saved options.</p>
+        {:else}
+          {#each preview.diff as line, index (index)}
+            <div
+              class="whitespace-pre {line.kind === 'add' ? 'text-state-running' : line.kind === 'del' ? 'text-state-crashed' : 'text-fg-muted'}"
+              data-kind={line.kind}
+            >
+              <span aria-hidden="true">{line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' '}</span><span class="sr-only"
+                >{line.kind === 'add' ? 'added: ' : line.kind === 'del' ? 'removed: ' : ''}</span
+              >{line.text}
+            </div>
+          {/each}
+        {/if}
+      </div>
+    {/if}
+  </aside>
+
+  <form class="flex min-w-0 flex-col gap-4 xl:order-1" onsubmit={save} novalidate>
     <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
       <label for="options-search" class="sr-only">Search options</label>
       <input
@@ -210,7 +339,7 @@
     >
       <div class="flex-1 text-sm" role="status">
         {#if form.savedNow}
-          Saved. Running instances use the new options after a restart.
+          Saved to odoo.conf. Running instances use the new options after a restart.
         {:else if form.tried && form.problemCount > 0}
           <span class="text-state-crashed">Fix {form.problemCount === 1 ? 'the marked option' : `the ${form.problemCount} marked options`} first.</span>
         {:else if form.dirty}
@@ -228,4 +357,5 @@
       </div>
     </footer>
   </form>
+  </div>
 {/if}

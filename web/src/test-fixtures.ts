@@ -195,6 +195,7 @@ export function projectOptions(extra: Partial<ProjectOptions> = {}): ProjectOpti
     secrets_set: ['admin_passwd'],
     secret_keys: ['admin_passwd', 'db_password', 'smtp_password', 'proxy_access_token'],
     managed_keys: ['addons_path', 'data_dir', 'http_port', 'db_name'],
+    conf_path: '/home/dev/OdHive/projects/shop/odoo.conf',
     ...extra,
   }
 }

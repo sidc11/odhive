@@ -849,6 +849,113 @@ async fn project_options_are_checked_saved_and_secrets_never_returned() {
 }
 
 #[tokio::test]
+async fn options_preview_save_writes_odoo_conf_and_import_reads_one() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    let dir = env.project_dir("shop");
+    let conf = dir.join("odoo.conf");
+    let update = json!({
+        "options": { "log_level": "debug" },
+        "secrets": { "admin_passwd": "s3cret-value" },
+    });
+
+    // A preview renders what a start writes, masks secrets, writes nothing.
+    let (status, preview) = api
+        .post(
+            "/api/v1/projects/shop/options/preview",
+            Some(update.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let text = preview["text"].as_str().expect("text");
+    for line in [
+        "log_level = debug",
+        "admin_passwd = ********",
+        "http_interface = 127.0.0.1",
+        "data_dir = ",
+    ] {
+        assert!(text.contains(line), "{line} missing: {text}");
+    }
+    assert!(!preview.to_string().contains("s3cret-value"));
+    assert!(
+        !preview["saved"]
+            .as_str()
+            .expect("saved")
+            .contains("log_level")
+    );
+    assert!(
+        !conf.exists()
+            || !std::fs::read_to_string(&conf)
+                .expect("read")
+                .contains("debug")
+    );
+    let (status, body) = api
+        .post(
+            "/api/v1/projects/shop/options/preview",
+            Some(json!({ "options": { "list_db": "maybe" } })),
+        )
+        .await;
+    assert_eq!(
+        (status, body["error"].as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid_option"))
+    );
+
+    // Saving writes odoo.conf (0600): the preview with the real secret.
+    let (status, body) = api.put("/api/v1/projects/shop/options", update).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["conf_path"], conf.display().to_string());
+    let written = std::fs::read_to_string(&conf).expect("odoo.conf");
+    assert_eq!(written, text.replace("********", "s3cret-value"));
+    let mode = std::fs::metadata(&conf).expect("meta").permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let (_, preview) = api
+        .post(
+            "/api/v1/projects/shop/options/preview",
+            Some(json!({ "options": { "log_level": "debug" } })),
+        )
+        .await;
+    assert_eq!(preview["text"], preview["saved"], "nothing changed");
+
+    // An import reads options and reports what belongs elsewhere.
+    let file = "[options]\nlog_level = warn\nlist_db = False\nhttp_port = 8070\n\
+                db_password = pw\naddons_path = /opt/extra\nx_custom = 1\n[queue_job]\nchannels = root:2\n";
+    let (status, imported) = api
+        .post(
+            "/api/v1/projects/shop/options/import",
+            Some(json!({ "text": file })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{imported}");
+    assert_eq!(
+        imported["options"],
+        json!({ "log_level": "warn", "list_db": "False", "x_custom": "1" })
+    );
+    assert_eq!(imported["secrets"], json!({ "db_password": "pw" }));
+    let warnings = imported["warnings"].to_string();
+    for part in ["http_port = 8070", "/opt/extra", "[queue_job]", "x_custom"] {
+        assert!(warnings.contains(part), "{part} missing: {warnings}");
+    }
+    // Nothing was saved by the import.
+    let saved = odhive_core::project::ProjectConfig::load(&dir).expect("load");
+    assert_eq!(saved.odoo_options.get("log_level"), Some("debug"));
+    let (status, body) = api
+        .post(
+            "/api/v1/projects/shop/options/import",
+            Some(json!({ "text": "log_level = warn\n" })),
+        )
+        .await;
+    assert_eq!(
+        (status, body["error"].as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some("bad_conf")),
+        "{body}"
+    );
+}
+
+#[tokio::test]
 async fn projects_show_the_git_branch_of_their_addons() {
     let env = Env::new();
     let api = env.app();

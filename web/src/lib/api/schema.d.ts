@@ -375,13 +375,55 @@ export interface paths {
         /** The project's `odoo.conf` options (secret values left out). */
         get: operations["get_project_options"];
         /**
-         * Replaces the project's `odoo.conf` options. Values are checked against
+         * Replaces the project's `odoo.conf` options and writes `odoo.conf`
+         *     (mode `0600`) the way the next start will. Values are checked against
          *     the project's option schema; options it does not know (read by
          *     third-party modules) are accepted. Running instances keep the old
          *     options until they restart. Refused while the project is being set up.
          */
         put: operations["put_project_options"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{name}/options/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reads an existing `odoo.conf` into options the form can save. Ports,
+         *     database and workers belong to instances, addons paths and other
+         *     sections to the project; they are reported, not imported.
+         */
+        post: operations["import_project_options"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{name}/options/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Renders `odoo.conf` for options not saved yet (checked like a save),
+         *     next to the saved file. Secret values are masked; nothing is written.
+         */
+        post: operations["preview_project_options"];
         delete?: never;
         options?: never;
         head?: never;
@@ -692,6 +734,13 @@ export interface components {
          * @enum {string}
          */
         Compat: "supported" | "too_old" | "too_new";
+        /** @description `odoo.conf` rendered from options not saved yet, and from the saved ones. */
+        ConfPreview: {
+            /** @description The file the saved options give, secret values masked. */
+            saved: string;
+            /** @description The file the update would give, secret values masked. */
+            text: string;
+        };
         /** @description A project to create. */
         CreateProject: {
             /**
@@ -978,6 +1027,30 @@ export interface components {
             manager?: components["schemas"]["PackageManager"] | null;
             /** @description Extra advice. */
             note?: string | null;
+        };
+        /** @description An existing `odoo.conf` to import. */
+        ImportConf: {
+            /** @description The file's contents. */
+            text: string;
+        };
+        /**
+         * @description Options read from an imported `odoo.conf`, for the form to review
+         *     before saving. Nothing is saved by the import.
+         */
+        ImportedOptions: {
+            /** @description Non-secret options (values equal to Odoo's default left out). */
+            options: {
+                [key: string]: string;
+            };
+            /**
+             * @description Secret values found in the file (sent back to the browser that
+             *     sent them, so they can be saved).
+             */
+            secrets: {
+                [key: string]: string;
+            };
+            /** @description What was not imported, and why. */
+            warnings: string[];
         };
         /** @description Progress of [`install`]. */
         InstallEvent: {
@@ -1645,6 +1718,8 @@ export interface components {
         };
         /** @description A project's options, without secret values. */
         ProjectOptions: {
+            /** @description The `odoo.conf` OdHive writes for the project. */
+            conf_path: string;
             /**
              * @description Keys OdHive writes itself (addons path, data dir, ports, database,
              *     workers, log file); they cannot be set here.
@@ -2941,6 +3016,114 @@ export interface operations {
                 };
             };
             /** @description Invalid option: bad key or value, a managed or command-line only option, a secret outside secrets */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    import_project_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportConf"];
+            };
+        };
+        responses: {
+            /** @description Read */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportedOptions"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not an odoo.conf: syntax error or no [options] section */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    preview_project_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Rendered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfPreview"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Invalid option, as for a save */
             422: {
                 headers: {
                     [name: string]: unknown;

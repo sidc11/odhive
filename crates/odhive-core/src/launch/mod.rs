@@ -5,7 +5,6 @@
 //! Instances are addressed as `<project>` (every instance) or
 //! `<project>#<instance>` ([`Target`]).
 
-use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::DirBuilderExt;
@@ -19,7 +18,7 @@ use thiserror::Error;
 
 use crate::autofix::Trusted;
 use crate::conf::{self, ConfContext, ConfError, DATA_DIR};
-use crate::config::{AppPaths, GlobalConfig, ProjectEntry};
+use crate::config::{AppPaths, GlobalConfig, ProjectEntry, SourceEntry};
 use crate::fsutil::DIR_MODE;
 use crate::logs::LOGS_DIR;
 use crate::manager::{AutoFix, InstancePlan, ManagerError, Reload};
@@ -294,29 +293,19 @@ pub async fn prepare(
     )
     .await?;
 
-    let mut ctx = ConfContext::for_project(&project.config, dir, community, enterprise);
-    let skipped_addons: Vec<PathBuf> = project
-        .config
-        .resolved_addons_paths(dir)
-        .into_iter()
-        .filter(|p| !has_modules(p))
-        .collect();
-    let skip: HashSet<&PathBuf> = skipped_addons.iter().collect();
-    ctx.addons_paths.retain(|p| !skip.contains(p));
+    let StartConf {
+        ctx,
+        config,
+        skipped_addons,
+    } = start_conf(&project.config, dir, community, enterprise);
     // Smart Reload watches the custom folders Odoo loads modules from.
     let watched: Vec<PathBuf> = project
         .config
         .resolved_addons_paths(dir)
         .into_iter()
-        .filter(|p| !skip.contains(p))
+        .filter(|p| !skipped_addons.contains(p))
         .collect();
 
-    let mut config = project.config.clone();
-    config
-        .odoo_options
-        .0
-        .entry("http_interface".into())
-        .or_insert_with(|| DEFAULT_HTTP_INTERFACE.into());
     let conf = conf::write_conf(&config, dir, &ctx, Some(&loaded.schema))?;
 
     let mut trusted_error = None;
@@ -375,6 +364,47 @@ pub async fn prepare(
         skipped_addons,
         trusted_error,
     })
+}
+
+/// What a start writes into `odoo.conf`: the project's options with
+/// [`DEFAULT_HTTP_INTERFACE`] unless set, and the addons path without the
+/// project's folders that hold no module yet (Odoo refuses those).
+#[derive(Debug, Clone)]
+pub struct StartConf {
+    /// Generated paths.
+    pub ctx: ConfContext,
+    /// The project with the start defaults applied.
+    pub config: ProjectConfig,
+    /// Custom addons folders left out of `addons_path`.
+    pub skipped_addons: Vec<PathBuf>,
+}
+
+/// See [`StartConf`].
+#[must_use]
+pub fn start_conf(
+    project: &ProjectConfig,
+    dir: &Path,
+    community: &SourceEntry,
+    enterprise: Option<&SourceEntry>,
+) -> StartConf {
+    let mut ctx = ConfContext::for_project(project, dir, community, enterprise);
+    let skipped_addons: Vec<PathBuf> = project
+        .resolved_addons_paths(dir)
+        .into_iter()
+        .filter(|p| !has_modules(p))
+        .collect();
+    ctx.addons_paths.retain(|p| !skipped_addons.contains(p));
+    let mut config = project.clone();
+    config
+        .odoo_options
+        .0
+        .entry("http_interface".into())
+        .or_insert_with(|| DEFAULT_HTTP_INTERFACE.into());
+    StartConf {
+        ctx,
+        config,
+        skipped_addons,
+    }
 }
 
 /// Whether `dir` holds at least one module (a subfolder with a manifest).

@@ -201,6 +201,14 @@ export class ApiClient {
     return this.call('PUT', `/projects/${segment(name)}/options`, { body })
   }
 
+  previewProjectOptions(name: string, body: Body<'preview_project_options'>): Promise<Ok<'preview_project_options', 200>> {
+    return this.post(`/projects/${segment(name)}/options/preview`, body)
+  }
+
+  importProjectOptions(name: string, body: Body<'import_project_options'>): Promise<Ok<'import_project_options', 200>> {
+    return this.post(`/projects/${segment(name)}/options/import`, body)
+  }
+
   // Instances
 
   listInstances(): Promise<Ok<'list_instances', 200>> {

@@ -1,11 +1,14 @@
 // State of the config builder: the project's option schema and saved
 // options, the values being edited, and saving them through
 // `PUT /projects/{name}/options`.
-import type { OdooOption, OptionsUpdate, ProjectOptions, SchemaInfo } from '../api'
+import type { ImportedOptions, OdooOption, OptionsUpdate, ProjectOptions, SchemaInfo } from '../api'
 import { ApiRequestError, type ApiClient } from '../api/client'
 import { editableOptions, keyProblem, matchesSearch, sections, valueProblem, type Section } from './fields'
 
-type ConfigApi = Pick<ApiClient, 'projectSchema' | 'getProjectOptions' | 'putProjectOptions'>
+type ConfigApi = Pick<ApiClient, 'projectSchema' | 'getProjectOptions' | 'putProjectOptions' | 'importProjectOptions'>
+
+/** Largest `odoo.conf` the import reads (the API takes bodies up to 1 MiB). */
+export const MAX_IMPORT_BYTES = 512 * 1024
 
 /** An option the schema does not know (read by a third-party module). */
 export interface CustomRow {
@@ -43,6 +46,12 @@ export class ConfigForm {
   secretKeys = $state.raw<string[]>([])
   /** Secrets that have a saved value. */
   secretsSet = $state.raw<string[]>([])
+  /** The `odoo.conf` OdHive writes for the project. */
+  confPath = $state('')
+  importing = $state(false)
+  /** What the last import did not take over (or why it failed). */
+  importNotes = $state.raw<string[]>([])
+  importError = $state<string | null>(null)
 
   /** Value per schema option key; '' = not set (Odoo's default). */
   values = $state<Record<string, string>>({})
@@ -88,6 +97,11 @@ export class ConfigForm {
       else if (edit.action === 'remove' && this.secretsSet.includes(key)) out[key] = null
     }
     return out
+  }
+
+  /** The request body of a save (and of a preview). */
+  get update(): OptionsUpdate {
+    return { options: this.current, secrets: this.secretChanges }
   }
 
   get dirty(): boolean {
@@ -197,6 +211,7 @@ export class ConfigForm {
         secrets_set: this.secretsSet,
         secret_keys: this.secretKeys,
         managed_keys: this.managedKeys,
+        conf_path: this.confPath,
       },
       false,
     )
@@ -208,6 +223,7 @@ export class ConfigForm {
     this.managedKeys = saved.managed_keys
     this.secretKeys = saved.secret_keys
     this.secretsSet = saved.secrets_set
+    this.confPath = saved.conf_path
     this.saved = saved.options
     const known = this.options.map((o) => o.key)
     const values: Record<string, string> = {}
@@ -221,6 +237,48 @@ export class ConfigForm {
     // After a save the rows stay as typed (same keys, minus blank ones), so focus is not lost.
     if (!keepRows) this.customRows = custom.map(([key, value]) => ({ id: this.nextRow++, key, value }))
     else this.customRows = this.customRows.filter((row) => row.key.trim() !== '')
+  }
+
+  /**
+   * Replaces the form's options with those of an `odoo.conf` (not saved
+   * yet). Secrets in the file replace saved ones; others are kept.
+   */
+  applyImport(imported: ImportedOptions): void {
+    const known = this.options.map((o) => o.key)
+    const values: Record<string, string> = {}
+    const custom: CustomRow[] = []
+    for (const [key, value] of Object.entries(imported.options)) {
+      if (known.includes(key)) values[key] = value
+      else custom.push({ id: this.nextRow++, key, value })
+    }
+    this.values = values
+    this.customRows = custom
+    const secrets: Record<string, SecretEdit> = {}
+    for (const [key, value] of Object.entries(imported.secrets)) secrets[key] = { action: 'set', value }
+    this.secrets = secrets
+    this.importNotes = imported.warnings
+    this.justSaved = false
+  }
+
+  /** Reads `file` as an `odoo.conf` into the form; `true` when it was read. */
+  async importFile(file: Pick<File, 'size' | 'text'>): Promise<boolean> {
+    this.importError = null
+    this.importNotes = []
+    if (file.size > MAX_IMPORT_BYTES) {
+      this.importError = `The file is larger than ${MAX_IMPORT_BYTES / 1024} KiB; an odoo.conf is much smaller.`
+      return false
+    }
+    this.importing = true
+    try {
+      const text = await file.text()
+      this.applyImport(await this.api.importProjectOptions(this.project, { text }))
+      return true
+    } catch (error) {
+      this.importError = message(error)
+      return false
+    } finally {
+      this.importing = false
+    }
   }
 
   async load(): Promise<void> {
@@ -249,10 +307,7 @@ export class ConfigForm {
     this.saving = true
     this.saveError = null
     try {
-      const saved = await this.api.putProjectOptions(this.project, {
-        options: this.current,
-        secrets: this.secretChanges,
-      })
+      const saved = await this.api.putProjectOptions(this.project, this.update)
       this.fill(saved, true)
       this.justSaved = true
       this.tried = false
