@@ -1,5 +1,5 @@
 //! Background jobs: work that takes too long for one request (cloning a
-//! source, setting up a project's Python environment).
+//! source, setting up a project's Python environment, creating a database).
 //!
 //! A request starts a job and gets its [`Job`] back at once. Progress is
 //! published as [`JobEvent`]s (sent over the WebSocket) and kept on the job
@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use odhive_core::config::SourceEntry;
+use odhive_core::db::{CreateEvent, CreatedDatabase};
 use odhive_core::events::{Subscription, Topic};
 use odhive_core::requirements::InstallEvent;
 use odhive_core::setup::{EnvReport, SetupEvent};
@@ -52,6 +53,13 @@ pub enum JobKind {
         /// Project name.
         project: String,
     },
+    /// Creates an Odoo database for a project.
+    CreateDatabase {
+        /// Project name.
+        project: String,
+        /// Database name.
+        database: String,
+    },
 }
 
 /// Where a job stands.
@@ -76,6 +84,8 @@ pub enum JobStep {
     Clone(CloneEvent),
     /// Progress of a project setup.
     Setup(SetupEvent),
+    /// Progress of a database creation.
+    CreateDatabase(CreateEvent),
 }
 
 /// What a successful job produced.
@@ -91,6 +101,11 @@ pub enum JobResult {
     Setup {
         /// What was set up.
         report: EnvReport,
+    },
+    /// The new database.
+    CreateDatabase {
+        /// What was created.
+        database: CreatedDatabase,
     },
 }
 
@@ -391,13 +406,20 @@ impl Jobs {
             return;
         }
         let steps = &mut slot.job.steps;
-        // git prints progress many times per phase: keep the latest only.
+        // git prints progress many times per phase, Odoo once per module:
+        // keep the latest only.
         let replaces = matches!(
             (steps.last(), &step),
             (
                 Some(JobStep::Clone(CloneEvent::Progress { phase: a, .. })),
                 JobStep::Clone(CloneEvent::Progress { phase: b, .. }),
             ) if a == b
+        ) || matches!(
+            (steps.last(), &step),
+            (
+                Some(JobStep::CreateDatabase(CreateEvent::Module { .. })),
+                JobStep::CreateDatabase(CreateEvent::Module { .. }),
+            )
         );
         if replaces {
             steps.pop();
@@ -414,7 +436,8 @@ fn output_line(step: &JobStep) -> Option<&str> {
         JobStep::Setup(
             SetupEvent::Venv(VenvEvent::Output { line })
             | SetupEvent::Install(InstallEvent::Output { line }),
-        ) => Some(line),
+        )
+        | JobStep::CreateDatabase(CreateEvent::Output { line }) => Some(line),
         _ => None,
     }
 }
@@ -538,6 +561,51 @@ mod tests {
         assert_eq!(kinds.first(), Some(&"started"));
         assert_eq!(kinds.last(), Some(&"finished"));
         assert_eq!(kinds.iter().filter(|k| **k == "step").count(), 3);
+    }
+
+    #[tokio::test]
+    async fn database_creation_keeps_the_latest_module_step() {
+        let jobs = Jobs::new();
+        let kind = JobKind::CreateDatabase {
+            project: "shop".into(),
+            database: "shop_main".into(),
+        };
+        let (go_tx, go_rx) = oneshot::channel::<()>();
+        let job = jobs
+            .spawn(kind, |r| {
+                Box::pin(async move {
+                    let step = |s| JobStep::CreateDatabase(s);
+                    r.step(step(CreateEvent::Step {
+                        step: odhive_core::db::CreateStep::InstallModules,
+                    }));
+                    for index in 1..=3 {
+                        r.step(step(CreateEvent::Module {
+                            name: format!("m{index}"),
+                            index,
+                            total: 3,
+                        }));
+                        r.step(step(CreateEvent::Output {
+                            line: format!("loading m{index}"),
+                        }));
+                    }
+                    let _ = go_rx.await;
+                    Err(ApiError::internal("stop"))
+                })
+            })
+            .expect("spawn");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let now = jobs.get(job.id).expect("job");
+        assert_eq!(now.steps.len(), 2, "{:?}", now.steps);
+        assert!(matches!(
+            now.steps.last(),
+            Some(JobStep::CreateDatabase(CreateEvent::Module {
+                index: 3,
+                ..
+            }))
+        ));
+        assert_eq!(now.output.len(), 3);
+        let _ = go_tx.send(());
+        wait_done(&jobs, job.id).await;
     }
 
     struct Dropped(Arc<Mutex<bool>>);

@@ -3,7 +3,9 @@
 //! [`health`] checks the server the project's Odoo connects to (with the
 //! project's `db_*` options): reachable, server version, whether the role
 //! may create databases. [`list()`] lists the databases Odoo would offer.
+//! [`create()`] creates one with the project's `odoo-bin`.
 
+mod create;
 mod list;
 mod target;
 
@@ -11,6 +13,11 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+pub use create::{
+    CreateError, CreateEvent, CreateStep, CreatedDatabase, DEFAULT_LANGUAGE, DEFAULT_LOGIN,
+    FINALIZE_SCRIPT, MAX_MODULES, NewDatabase, OdooCommand, create, exists, missing_modules,
+    validate_new_db_name,
+};
 pub use list::{Database, DatabaseList, list};
 pub use target::{ConnectionSettings, PgTarget, SOCKET_DIRS, SslMode};
 

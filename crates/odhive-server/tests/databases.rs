@@ -127,3 +127,108 @@ async fn database_list_reports_an_unusable_server_and_echoes_the_filter() {
     let (status, _) = api.get("/api/v1/projects/nope/databases").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn database_creation_is_refused_before_anything_runs() {
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    let create = |body: serde_json::Value| {
+        let api = &api;
+        async move {
+            api.post("/api/v1/projects/shop/databases", Some(body))
+                .await
+        }
+    };
+
+    // Names that could break out of an argument or a query.
+    for name in [
+        "x;DROP DATABASE postgres",
+        "x'y",
+        "x\"y",
+        "two words",
+        "x;--",
+        "--x",
+        "-x",
+        "_x",
+        "a",
+        "",
+    ] {
+        let (status, body) = create(json!({ "name": name, "password": "pw" })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name:?}: {body}");
+        assert!(
+            ["invalid_name", "invalid_request"].contains(&body["error"].as_str().unwrap_or("")),
+            "{name:?}: {body}"
+        );
+    }
+    for (field, value) in [
+        ("language", json!("en-US")),
+        ("country", json!("BEL")),
+        ("login", json!(" admin")),
+        ("modules", json!(["../../etc"])),
+        ("modules", json!(["sale,stock"])),
+    ] {
+        let mut body = json!({ "name": "shop_main", "password": "pw" });
+        body[field] = value;
+        let (status, body) = create(body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{field}: {body}");
+        assert_eq!(body["error"], "invalid_request", "{body}");
+    }
+    let (status, _) = create(json!({ "name": "shop_main" })).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "password is required"
+    );
+    let (status, _) = create(json!({ "name": "shop_main", "password": "pw", "x": 1 })).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "unknown fields are refused"
+    );
+
+    // No venv yet.
+    let (status, body) = create(json!({ "name": "shop_main", "password": "pw" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "no_venv");
+
+    // Modules must exist in the project's addons paths.
+    env.make_runnable("shop", 18_069, 18_072);
+    let (status, body) = create(json!({
+        "name": "shop_main",
+        "password": "pw",
+        "modules": ["sale", "base"],
+    }))
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "unknown_modules");
+    assert!(body["message"].as_str().is_some_and(|m| m.contains("sale")));
+
+    // A server that cannot be used is reported before a job starts.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .expect("bind")
+        .port();
+    let (status, body) = api
+        .put(
+            "/api/v1/projects/shop/options",
+            json!({ "options": { "db_host": "127.0.0.1", "db_port": port.to_string() } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = create(json!({ "name": "shop_main", "password": "Very-s3cret" })).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "postgres_unavailable");
+    assert!(!body.to_string().contains("Very-s3cret"));
+    let (_, jobs) = api.get("/api/v1/jobs").await;
+    assert_eq!(jobs, json!([]), "no job was started");
+
+    let (status, _) = api
+        .post(
+            "/api/v1/projects/nope/databases",
+            Some(json!({ "name": "shop_main", "password": "pw" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

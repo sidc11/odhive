@@ -5,6 +5,7 @@ use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use odhive_core::config::ConfigError;
+use odhive_core::db::CreateError;
 use odhive_core::launch::LaunchError;
 use odhive_core::manager::ManagerError;
 use odhive_core::pidfile::PidFileError;
@@ -231,6 +232,24 @@ impl From<LaunchError> for ApiError {
             LaunchError::Schema(e) => e.into(),
             LaunchError::Conf(_) | LaunchError::PidFile(_) | LaunchError::Io { .. } => {
                 Self::internal(msg)
+            }
+        }
+    }
+}
+
+impl From<CreateError> for ApiError {
+    fn from(e: CreateError) -> Self {
+        let msg = e.to_string();
+        match e {
+            CreateError::Name(_) => Self::bad_request("invalid_name", msg),
+            CreateError::Invalid { .. } => Self::bad_request("invalid_request", msg),
+            CreateError::Exists(_) => Self::conflict("database_exists", msg),
+            CreateError::Server(_) => {
+                Self::new(StatusCode::SERVICE_UNAVAILABLE, "postgres_unavailable", msg)
+            }
+            CreateError::Spawn { .. } => Self::internal(msg),
+            CreateError::Failed { .. } => {
+                Self::new(StatusCode::INTERNAL_SERVER_ERROR, "create_failed", msg)
             }
         }
     }

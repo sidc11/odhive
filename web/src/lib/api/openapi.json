@@ -494,6 +494,86 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Starts creating a database with the project's `odoo-bin`, as Odoo's\ndatabase manager does: `db init` (language, country, admin login, demo\ndata), then `-i <modules> --stop-after-init`, then a check that it all\ntook and the admin password. Follow it with `/jobs/{id}` or the\nWebSocket. A failed or cancelled creation removes the database again.",
+        "operationId": "create_project_database",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDatabase"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Creation started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unknown module",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The database exists, the project has no venv, or it is being set up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PostgreSQL cannot be used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/projects/{name}/instances/{id}/fix/confirm": {
@@ -2399,6 +2479,138 @@
           }
         }
       },
+      "CreateDatabase": {
+        "type": "object",
+        "description": "A database to create.",
+        "required": [
+          "name",
+          "password"
+        ],
+        "properties": {
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Two-letter country code of the main company (sets its currency too)."
+          },
+          "demo": {
+            "type": "boolean",
+            "description": "Install demo data."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Language, e.g. `fr_BE`; also the admin's. Default `en_US`."
+          },
+          "login": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Admin login. Default `admin`."
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Modules to install besides `base` (technical names)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Database name: letters, digits, `_`, `.`, `-`, 2-63 characters,\nstarting with a letter or digit.",
+            "example": "shop_main"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "description": "Admin password. Never part of a command line, a log or an answer."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A step started.",
+            "required": [
+              "step",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step"
+                ]
+              },
+              "step": {
+                "$ref": "#/components/schemas/CreateStep",
+                "description": "The step."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Odoo started installing a module (`Loading module x (i/n)`).",
+            "required": [
+              "name",
+              "index",
+              "total",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "module"
+                ]
+              },
+              "index": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Its position, from 1.",
+                "minimum": 0
+              },
+              "name": {
+                "type": "string",
+                "description": "Module name."
+              },
+              "total": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Modules Odoo loads in this step.",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A line of `odoo-bin` output.",
+            "required": [
+              "line",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "output"
+                ]
+              },
+              "line": {
+                "type": "string",
+                "description": "The line."
+              }
+            }
+          }
+        ],
+        "description": "Progress of [`create`]."
+      },
       "CreateProject": {
         "type": "object",
         "description": "A project to create.",
@@ -2451,6 +2663,59 @@
           }
         },
         "additionalProperties": false
+      },
+      "CreateStep": {
+        "type": "string",
+        "description": "A step of [`create`].",
+        "enum": [
+          "initialize",
+          "install_modules",
+          "finalize",
+          "cleanup"
+        ]
+      },
+      "CreatedDatabase": {
+        "type": "object",
+        "description": "What [`create`] made.",
+        "required": [
+          "name",
+          "language",
+          "demo",
+          "login",
+          "modules"
+        ],
+        "properties": {
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Country of the main company."
+          },
+          "demo": {
+            "type": "boolean",
+            "description": "Whether demo data was installed."
+          },
+          "language": {
+            "type": "string",
+            "description": "Language."
+          },
+          "login": {
+            "type": "string",
+            "description": "Admin login."
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra modules installed."
+          },
+          "name": {
+            "type": "string",
+            "description": "Database name."
+          }
+        }
       },
       "Database": {
         "type": "object",
@@ -3924,6 +4189,31 @@
                 "description": "Project name."
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Creates an Odoo database for a project.",
+            "required": [
+              "project",
+              "database",
+              "kind"
+            ],
+            "properties": {
+              "database": {
+                "type": "string",
+                "description": "Database name."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "create_database"
+                ]
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              }
+            }
           }
         ],
         "description": "What a job does."
@@ -3967,6 +4257,26 @@
               "report": {
                 "$ref": "#/components/schemas/EnvReport",
                 "description": "What was set up."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The new database.",
+            "required": [
+              "database",
+              "kind"
+            ],
+            "properties": {
+              "database": {
+                "$ref": "#/components/schemas/CreatedDatabase",
+                "description": "What was created."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "create_database"
+                ]
               }
             }
           }
@@ -4030,6 +4340,29 @@
               }
             ],
             "description": "Progress of a project setup."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateEvent",
+                "description": "Progress of a database creation."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "job"
+                ],
+                "properties": {
+                  "job": {
+                    "type": "string",
+                    "enum": [
+                      "create_database"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Progress of a database creation."
           }
         ],
         "description": "One step of a job's progress."

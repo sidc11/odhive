@@ -344,6 +344,7 @@ pub(super) async fn setup(
             format!("{} still running; stop it first", running.join(", ")),
         ));
     }
+    svc.ensure_no_database_job(&name)?;
     let opts = EnvOptions {
         python,
         discover: svc.discover_options().clone(),

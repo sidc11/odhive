@@ -320,3 +320,230 @@ async fn listing_an_unreachable_server_is_a_finding() {
     let l = list(&tls, None, &[], None, TIMEOUT).await;
     assert!(l.error.expect("error").summary.contains("require"));
 }
+
+/// The `fake-odoo-bin` fixture, run by python3, pointed at `pg` through
+/// libpq variables in the project env (like a real project's `[env]`).
+fn fake_odoo(pg: &TempPg, dir: &std::path::Path, extra: &[(&str, &str)]) -> OdooCommand {
+    let path = std::env::var_os("PATH").expect("PATH");
+    let python = crate::python::find_executable(&path, "python3").expect("python3");
+    let conf = dir.join("odoo.conf");
+    std::fs::write(&conf, "[options]\n").expect("conf");
+    let bin = TempPg::bin_dir().expect("pg bin");
+    let mut env = EnvVars::default();
+    for (k, v) in [
+        ("PGHOST", pg.socket_dir.to_str().expect("utf-8")),
+        ("PGPORT", "5432"),
+        ("FAKE_PG_BIN", bin.to_str().expect("utf-8")),
+    ]
+    .iter()
+    .chain(extra)
+    {
+        env.0.insert((*k).to_owned(), (*v).to_owned());
+    }
+    OdooCommand {
+        python,
+        odoo_bin: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/fake-odoo-bin"),
+        conf,
+        cwd: dir.to_path_buf(),
+        env,
+    }
+}
+
+async fn query_db(pg: &TempPg, db: &str, sql: &str) -> Vec<String> {
+    let (client, conn) = tokio_postgres::Config::new()
+        .host_path(&pg.socket_dir)
+        .port(5432)
+        .dbname(db)
+        .connect(tokio_postgres::NoTls)
+        .await
+        .expect("connect");
+    tokio::spawn(conn);
+    client
+        .query(sql, &[])
+        .await
+        .expect("query")
+        .iter()
+        .map(|r| r.get(0))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_database_is_created_with_its_settings_and_modules() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let odoo = fake_odoo(&pg, dir.path(), &[]);
+    let target = pg.target(None);
+    let mut new = NewDatabase::new("shop_main");
+    new.country = Some("be".into());
+    new.demo = true;
+    new.login = "boss@example.com".into();
+    new.password = "Very-s3cret".into();
+    new.modules = vec!["sale".into(), "stock".into()];
+    let mut events = Vec::new();
+    let made = create(&target, &odoo, &new, TIMEOUT, |e| events.push(e))
+        .await
+        .expect("create");
+    assert_eq!(made.name, "shop_main");
+    assert_eq!(made.country.as_deref(), Some("BE"));
+    assert_eq!(made.modules, ["sale", "stock"]);
+
+    let steps: Vec<CreateStep> = events
+        .iter()
+        .filter_map(|e| match e {
+            CreateEvent::Step { step } => Some(*step),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            CreateStep::Initialize,
+            CreateStep::InstallModules,
+            CreateStep::Finalize
+        ]
+    );
+    assert!(events.contains(&CreateEvent::Module {
+        name: "stock".into(),
+        index: 2,
+        total: 2
+    }));
+    for e in &events {
+        if let CreateEvent::Output { line } = e {
+            assert!(!line.contains("Very-s3cret"), "{line}");
+        }
+    }
+
+    let settings = query_db(
+        &pg,
+        "shop_main",
+        "SELECT key || '=' || value FROM odhive_fake ORDER BY key",
+    )
+    .await;
+    assert_eq!(
+        settings,
+        [
+            "country=BE",
+            "demo=True",
+            "lang=en_US",
+            "login=boss@example.com",
+            "password=Very-s3cret"
+        ]
+    );
+    let listed = list(&target, None, &[], None, TIMEOUT).await;
+    let db = listed
+        .databases
+        .iter()
+        .find(|d| d.name == "shop_main")
+        .expect("listed");
+    assert_eq!(db.odoo_series.as_deref(), Some("19.0"));
+
+    // The name is taken now.
+    let again = create(&target, &odoo, &new, TIMEOUT, |_| {}).await;
+    assert!(
+        matches!(again, Err(CreateError::Exists(ref n)) if n == "shop_main"),
+        "{again:?}"
+    );
+    assert!(exists(&target, "shop_main", TIMEOUT).await.expect("exists"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_create_removes_the_database() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = pg.target(None);
+
+    // Odoo's `db init` exits 0 when initializing fails: the last step notices.
+    let broken = fake_odoo(&pg, dir.path(), &[("FAKE_INIT_BROKEN", "1")]);
+    let mut events = Vec::new();
+    let err = create(
+        &target,
+        &broken,
+        &NewDatabase::new("broken"),
+        TIMEOUT,
+        |e| {
+            events.push(e);
+        },
+    )
+    .await
+    .expect_err("broken init");
+    match &err {
+        CreateError::Failed { step, tail, .. } => {
+            assert_eq!(*step, CreateStep::Finalize);
+            assert!(tail.contains("not as asked"), "{tail}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(events.contains(&CreateEvent::Step {
+        step: CreateStep::Cleanup
+    }));
+    assert!(!exists(&target, "broken", TIMEOUT).await.expect("exists"));
+
+    // A module Odoo does not know is ignored by `-i`: the last step notices.
+    let odoo = fake_odoo(&pg, dir.path(), &[]);
+    let mut new = NewDatabase::new("partial");
+    new.modules = vec!["sale".into(), "missing_mod".into()];
+    let err = create(&target, &odoo, &new, TIMEOUT, |_| {})
+        .await
+        .expect_err("unknown module");
+    assert!(err.to_string().contains("missing_mod"), "{err}");
+    assert!(!exists(&target, "partial", TIMEOUT).await.expect("exists"));
+
+    // Bad input never reaches the server.
+    let mut bad = NewDatabase::new("x;DROP DATABASE postgres");
+    assert!(matches!(
+        create(&PgTarget::nowhere(), &odoo, &bad, TIMEOUT, |_| {}).await,
+        Err(CreateError::Name(_))
+    ));
+    bad.name = "fine".into();
+    bad.modules = vec!["../evil".into()];
+    assert!(matches!(
+        create(&PgTarget::nowhere(), &odoo, &bad, TIMEOUT, |_| {}).await,
+        Err(CreateError::Invalid {
+            field: "modules",
+            ..
+        })
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancelled_create_removes_the_database() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = pg.target(None);
+    let odoo = fake_odoo(&pg, dir.path(), &[("FAKE_INSTALL_DELAY", "30")]);
+    let mut new = NewDatabase::new("cancelled");
+    new.modules = vec!["sale".into(), "stock".into()];
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    {
+        let work = create(&target, &odoo, &new, TIMEOUT, move |e| {
+            let _ = tx.send(e);
+        });
+        tokio::pin!(work);
+        loop {
+            tokio::select! {
+                r = &mut work => panic!("finished: {r:?}"),
+                Some(e) = rx.recv() => if matches!(e, CreateEvent::Module { .. }) { break },
+            }
+        }
+        assert!(exists(&target, "cancelled", TIMEOUT).await.expect("exists"));
+        // `work` is dropped here, as a cancelled job's work is.
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while exists(&target, "cancelled", TIMEOUT).await.expect("exists") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the cancelled database is still there"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}

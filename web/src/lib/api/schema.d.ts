@@ -223,7 +223,14 @@ export interface paths {
          */
         get: operations["list_project_databases"];
         put?: never;
-        post?: never;
+        /**
+         * Starts creating a database with the project's `odoo-bin`, as Odoo's
+         *     database manager does: `db init` (language, country, admin login, demo
+         *     data), then `-i <modules> --stop-after-init`, then a check that it all
+         *     took and the admin password. Follow it with `/jobs/{id}` or the
+         *     WebSocket. A failed or cancelled creation removes the database again.
+         */
+        post: operations["create_project_database"];
         delete?: never;
         options?: never;
         head?: never;
@@ -828,6 +835,57 @@ export interface components {
             /** @description Role connected as. */
             user: string;
         };
+        /** @description A database to create. */
+        CreateDatabase: {
+            /** @description Two-letter country code of the main company (sets its currency too). */
+            country?: string | null;
+            /** @description Install demo data. */
+            demo?: boolean;
+            /** @description Language, e.g. `fr_BE`; also the admin's. Default `en_US`. */
+            language?: string | null;
+            /** @description Admin login. Default `admin`. */
+            login?: string | null;
+            /** @description Modules to install besides `base` (technical names). */
+            modules?: string[];
+            /**
+             * @description Database name: letters, digits, `_`, `.`, `-`, 2-63 characters,
+             *     starting with a letter or digit.
+             * @example shop_main
+             */
+            name: string;
+            /**
+             * Format: password
+             * @description Admin password. Never part of a command line, a log or an answer.
+             */
+            password: string;
+        };
+        /** @description Progress of [`create`]. */
+        CreateEvent: {
+            /** @enum {string} */
+            event: "step";
+            /** @description The step. */
+            step: components["schemas"]["CreateStep"];
+        } | {
+            /** @enum {string} */
+            event: "module";
+            /**
+             * Format: int32
+             * @description Its position, from 1.
+             */
+            index: number;
+            /** @description Module name. */
+            name: string;
+            /**
+             * Format: int32
+             * @description Modules Odoo loads in this step.
+             */
+            total: number;
+        } | {
+            /** @enum {string} */
+            event: "output";
+            /** @description The line. */
+            line: string;
+        };
         /** @description A project to create. */
         CreateProject: {
             /**
@@ -853,6 +911,26 @@ export interface components {
              *     detected at setup.
              */
             python?: string | null;
+        };
+        /**
+         * @description A step of [`create`].
+         * @enum {string}
+         */
+        CreateStep: "initialize" | "install_modules" | "finalize" | "cleanup";
+        /** @description What [`create`] made. */
+        CreatedDatabase: {
+            /** @description Country of the main company. */
+            country?: string | null;
+            /** @description Whether demo data was installed. */
+            demo: boolean;
+            /** @description Language. */
+            language: string;
+            /** @description Admin login. */
+            login: string;
+            /** @description Extra modules installed. */
+            modules: string[];
+            /** @description Database name. */
+            name: string;
         };
         /** @description One database on the server. */
         Database: {
@@ -1393,6 +1471,13 @@ export interface components {
             kind: "setup";
             /** @description Project name. */
             project: string;
+        } | {
+            /** @description Database name. */
+            database: string;
+            /** @enum {string} */
+            kind: "create_database";
+            /** @description Project name. */
+            project: string;
         };
         /** @description What a successful job produced. */
         JobResult: {
@@ -1405,6 +1490,11 @@ export interface components {
             kind: "setup";
             /** @description What was set up. */
             report: components["schemas"]["EnvReport"];
+        } | {
+            /** @description What was created. */
+            database: components["schemas"]["CreatedDatabase"];
+            /** @enum {string} */
+            kind: "create_database";
         };
         /**
          * @description Where a job stands.
@@ -1418,6 +1508,9 @@ export interface components {
         }) | (components["schemas"]["SetupEvent"] & {
             /** @enum {string} */
             job: "setup";
+        }) | (components["schemas"]["CreateEvent"] & {
+            /** @enum {string} */
+            job: "create_database";
         });
         /**
          * @description Severity of a record, in increasing order.
@@ -2693,6 +2786,69 @@ export interface operations {
             };
             /** @description No such project */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    create_project_database: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDatabase"];
+            };
+        };
+        responses: {
+            /** @description Creation started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Invalid request or unknown module */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database exists, the project has no venv, or it is being set up */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description PostgreSQL cannot be used */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

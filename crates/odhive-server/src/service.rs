@@ -221,6 +221,25 @@ impl Service {
         }
     }
 
+    /// `409 database_job_running` while a database of project `name` is
+    /// being created.
+    pub(crate) fn ensure_no_database_job(&self, name: &str) -> ApiResult<()> {
+        let busy = self.inner.jobs.list().into_iter().find(|j| {
+            j.state == crate::jobs::JobState::Running
+                && matches!(&j.kind, JobKind::CreateDatabase { project, .. } if project == name)
+        });
+        match busy {
+            Some(job) => Err(ApiError::conflict(
+                "database_job_running",
+                format!(
+                    "a database of project {name} is being created (job {})",
+                    job.id
+                ),
+            )),
+            None => Ok(()),
+        }
+    }
+
     /// Turns `true` once [`Service::begin_shutdown`] was called.
     pub(crate) fn shutdown_signal(&self) -> watch::Receiver<bool> {
         self.inner.shutdown.subscribe()
