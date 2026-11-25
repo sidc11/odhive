@@ -1332,6 +1332,78 @@
         }
       }
     },
+    "/api/v1/projects/{name}/options/reveal": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Answers with the saved value of one secret option, for the config\nbuilder's reveal toggle. The answer is marked `Cache-Control: no-store`;\nnothing else in the API returns saved secrets.",
+        "operationId": "reveal_project_secret",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevealSecret"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevealedSecret"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project, or the secret has no saved value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The key is not a secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{name}/schema": {
       "get": {
         "tags": [
@@ -5165,6 +5237,37 @@
       "Requirement": {
         "type": "string",
         "description": "A validated requirement, normalised to `name[extras]specifiers ; marker`."
+      },
+      "RevealSecret": {
+        "type": "object",
+        "description": "A secret to reveal.",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The secret's option key, e.g. `admin_passwd`.",
+            "example": "admin_passwd"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RevealedSecret": {
+        "type": "object",
+        "description": "A saved secret's value, shown because the user asked for it.",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
       },
       "SchemaInfo": {
         "type": "object",

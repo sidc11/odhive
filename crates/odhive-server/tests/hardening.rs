@@ -66,6 +66,7 @@ async fn mutations_from_foreign_or_missing_origins_are_refused() {
     for (method, path) in [
         (Method::POST, "/api/v1/auth/codes"),
         (Method::DELETE, "/api/v1/sources/nope"),
+        (Method::POST, "/api/v1/projects/shop/options/reveal"),
         (Method::PUT, "/api/v1/sources"),
         (Method::PATCH, "/api/v1/nope"),
         (Method::OPTIONS, "/api/v1/sources"),

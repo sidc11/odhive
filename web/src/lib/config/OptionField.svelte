@@ -16,13 +16,18 @@
   const savedSecret = $derived(form.secretsSet.includes(option.key))
   /** The password input shows: no saved value, or replacing it. */
   const typingSecret = $derived(edit.action === 'set' || (edit.action === 'keep' && !savedSecret))
+  /** The saved value, when the user revealed it. */
+  const shown = $derived(form.revealed[option.key])
+  const revealError = $derived(form.revealErrors[option.key])
+  /** Show the typed new value as plain text. */
+  let showTyped = $state(false)
 
   const describedBy = $derived(
-    [problem ? `${id}-problem` : null, option.help ? `${id}-help` : null, `${id}-default`].filter(Boolean).join(' '),
+    [problem ? `${id}-problem` : null, revealError ? `${id}-reveal` : null, option.help ? `${id}-help` : null, `${id}-default`].filter(Boolean).join(' '),
   )
 
   function defaultText(): string {
-    if (secret) return savedSecret ? 'A value is saved; it is never shown' : 'Not set'
+    if (secret) return savedSecret ? 'A value is saved; it is shown only when you reveal it' : 'Not set'
     const text = fallback === null ? 'No default' : fallback === '' ? 'Default: empty' : `Default: ${fallback}`
     return option.type === 'list' ? `${text} · comma-separated` : text
   }
@@ -62,7 +67,7 @@
         <input
           bind:this={field}
           {id}
-          type="password"
+          type={showTyped ? 'text' : 'password'}
           class={input}
           value={edit.action === 'set' ? edit.value : ''}
           oninput={(e) => form.setSecret(option.key, { action: 'set', value: e.currentTarget.value })}
@@ -72,16 +77,36 @@
           aria-invalid={Boolean(problem)}
           aria-describedby={describedBy}
         />
+        <button
+          type="button"
+          class={small}
+          aria-label="{showTyped ? 'Hide' : 'Show'} typed {option.key}"
+          aria-pressed={showTyped}
+          onclick={() => (showTyped = !showTyped)}>{showTyped ? 'Hide' : 'Show'}</button
+        >
         {#if savedSecret}
           <button type="button" class={small} onclick={() => form.setSecret(option.key, { action: 'keep' })}>Keep saved</button>
         {/if}
       {:else}
-        <span {id} class="flex-1 font-mono text-sm text-fg-muted">
-          {edit.action === 'remove' ? 'Removed when you save' : '••••••••'}
-        </span>
+        {#if shown !== undefined}
+          <span {id} class="min-w-0 flex-1 font-mono text-sm break-all" data-revealed>{shown}</span>
+        {:else}
+          <span {id} class="flex-1 font-mono text-sm text-fg-muted">
+            {edit.action === 'remove' ? 'Removed when you save' : '••••••••'}
+          </span>
+        {/if}
         {#if edit.action === 'remove'}
           <button type="button" class={small} onclick={() => form.setSecret(option.key, { action: 'keep' })}>Undo</button>
         {:else}
+          <button
+            type="button"
+            class={small}
+            aria-label="{shown !== undefined ? 'Hide' : 'Reveal'} {option.key}"
+            aria-pressed={shown !== undefined}
+            disabled={form.revealing === option.key}
+            onclick={() => (shown !== undefined ? form.hide(option.key) : form.reveal(option.key))}
+            >{shown !== undefined ? 'Hide' : 'Reveal'}</button
+          >
           <button type="button" class={small} aria-label="Replace {option.key}" onclick={replace}>Replace</button>
           <button
             type="button"
@@ -129,6 +154,9 @@
 
   {#if problem}
     <p id="{id}-problem" class="text-sm text-state-crashed">{problem}</p>
+  {/if}
+  {#if revealError}
+    <p id="{id}-reveal" class="text-sm text-state-crashed">Could not reveal: {revealError}</p>
   {/if}
   {#if option.help}
     <p id="{id}-help" class="text-sm text-fg-muted">{option.help}</p>

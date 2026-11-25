@@ -5,7 +5,10 @@ import type { ImportedOptions, OdooOption, OptionsUpdate, ProjectOptions, Schema
 import { ApiRequestError, type ApiClient } from '../api/client'
 import { editableOptions, keyProblem, matchesSearch, sections, valueProblem, type Section } from './fields'
 
-type ConfigApi = Pick<ApiClient, 'projectSchema' | 'getProjectOptions' | 'putProjectOptions' | 'importProjectOptions'>
+type ConfigApi = Pick<
+  ApiClient,
+  'projectSchema' | 'getProjectOptions' | 'putProjectOptions' | 'importProjectOptions' | 'revealProjectSecret'
+>
 
 /** Largest `odoo.conf` the import reads (the API takes bodies up to 1 MiB). */
 export const MAX_IMPORT_BYTES = 512 * 1024
@@ -23,6 +26,10 @@ export type SecretEdit = { action: 'keep' } | { action: 'set'; value: string } |
 
 function message(error: unknown): string {
   return error instanceof ApiRequestError ? error.message : String(error)
+}
+
+function without(record: Record<string, string>, key: string): Record<string, string> {
+  return Object.fromEntries(Object.entries(record).filter(([k]) => k !== key))
 }
 
 function sameRecord(a: Record<string, string>, b: Record<string, string>): boolean {
@@ -57,6 +64,16 @@ export class ConfigForm {
   values = $state<Record<string, string>>({})
   customRows = $state<CustomRow[]>([])
   secrets = $state<Record<string, SecretEdit>>({})
+  /**
+   * Saved secret values the user asked to see, by key. Fetched one at a
+   * time on request and dropped on hide, save, discard and any edit of
+   * that secret; never part of the preview or the download.
+   */
+  revealed = $state<Record<string, string>>({})
+  /** The secret being fetched for a reveal. */
+  revealing = $state<string | null>(null)
+  /** Why the last reveal failed, by key. */
+  revealErrors = $state<Record<string, string>>({})
 
   query = $state('')
   onlySet = $state(false)
@@ -68,6 +85,8 @@ export class ConfigForm {
   private saved = $state.raw<Record<string, string>>({})
   private justSaved = $state(false)
   private nextRow = 0
+  /** Bumped whenever the saved options are (re)read, so a late reveal is dropped. */
+  private generation = 0
   private readonly api: ConfigApi
 
   constructor(api: ConfigApi, project: string) {
@@ -190,7 +209,34 @@ export class ConfigForm {
 
   setSecret(key: string, edit: SecretEdit): void {
     this.secrets[key] = edit
+    this.hide(key)
     this.justSaved = false
+  }
+
+  /** Fetches and shows the saved value of secret `key`; `true` when shown. */
+  async reveal(key: string): Promise<boolean> {
+    if (!this.secretsSet.includes(key)) return false
+    this.revealErrors = without(this.revealErrors, key)
+    this.revealing = key
+    const generation = this.generation
+    try {
+      const secret = await this.api.revealProjectSecret(this.project, { key })
+      // Dropped if the secret was edited (or the options reread) meanwhile.
+      if (generation !== this.generation || (this.secrets[key] ?? { action: 'keep' }).action !== 'keep') return false
+      this.revealed[key] = secret.value
+      return true
+    } catch (error) {
+      this.revealErrors[key] = message(error)
+      return false
+    } finally {
+      if (this.revealing === key) this.revealing = null
+    }
+  }
+
+  /** Hides a revealed secret again. */
+  hide(key: string): void {
+    if (key in this.revealed) this.revealed = without(this.revealed, key)
+    if (key in this.revealErrors) this.revealErrors = without(this.revealErrors, key)
   }
 
   /** Adds a blank custom option; returns it (the reactive copy, so edits through it show). */
@@ -234,6 +280,9 @@ export class ConfigForm {
     }
     this.values = values
     this.secrets = {}
+    this.revealed = {}
+    this.revealErrors = {}
+    this.generation++
     // After a save the rows stay as typed (same keys, minus blank ones), so focus is not lost.
     if (!keepRows) this.customRows = custom.map(([key, value]) => ({ id: this.nextRow++, key, value }))
     else this.customRows = this.customRows.filter((row) => row.key.trim() !== '')
@@ -256,6 +305,7 @@ export class ConfigForm {
     const secrets: Record<string, SecretEdit> = {}
     for (const [key, value] of Object.entries(imported.secrets)) secrets[key] = { action: 'set', value }
     this.secrets = secrets
+    for (const key of Object.keys(secrets)) this.hide(key)
     this.importNotes = imported.warnings
     this.justSaved = false
   }

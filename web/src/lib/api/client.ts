@@ -209,6 +209,11 @@ export class ApiClient {
     return this.post(`/projects/${segment(name)}/options/import`, body)
   }
 
+  /** The saved value of one secret option (only for the reveal toggle; never cached). */
+  revealProjectSecret(name: string, body: Body<'reveal_project_secret'>): Promise<Ok<'reveal_project_secret', 200>> {
+    return this.post(`/projects/${segment(name)}/options/reveal`, body)
+  }
+
   // Instances
 
   listInstances(): Promise<Ok<'list_instances', 200>> {

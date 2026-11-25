@@ -249,6 +249,11 @@ impl Api {
         path: &str,
         body: Option<Value>,
     ) -> (StatusCode, Value) {
+        split(self.respond(method, path, body).await).await
+    }
+
+    /// As [`Api::call`], but returns the whole response (headers too).
+    pub async fn respond(&self, method: Method, path: &str, body: Option<Value>) -> Response {
         let mut req = Request::builder()
             .method(method)
             .uri(path)
@@ -263,8 +268,7 @@ impl Api {
             }
             None => Body::empty(),
         };
-        let resp = self.send(req.body(body).expect("request")).await;
-        split(resp).await
+        self.send(req.body(body).expect("request")).await
     }
 
     pub async fn get(&self, path: &str) -> (StatusCode, Value) {

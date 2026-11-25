@@ -142,4 +142,67 @@ describe('ConfigForm', () => {
     expect(form.update).toEqual({ options: { db_host: 'pg', x_new: '1' }, secrets: { admin_passwd: 'f' } })
     expect(form.importNotes).toEqual(['w'])
   })
+  it('reveals one saved secret on request and hides it on edit, save and discard', async () => {
+    const { fetcher, calls } = routedFetch({
+      'GET /projects/shop/schema': [200, SCHEMA],
+      'GET /projects/shop/options': [200, saved()],
+      'PUT /projects/shop/options': [200, saved()],
+      'POST /projects/shop/options/reveal': [200, { key: 'admin_passwd', value: 's3cret' }],
+    })
+    const form = new ConfigForm(new ApiClient(fetcher), 'shop')
+    await form.load()
+    expect(form.revealed).toEqual({})
+    expect(await form.reveal('db_password')).toBe(false) // nothing saved: not asked
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+
+    expect(await form.reveal('admin_passwd')).toBe(true)
+    expect(calls.at(-1)).toMatchObject({ method: 'POST', path: '/projects/shop/options/reveal', body: { key: 'admin_passwd' } })
+    expect(form.revealed).toEqual({ admin_passwd: 's3cret' })
+    expect(form.dirty).toBe(false)
+    expect(form.update.secrets).toEqual({}) // a revealed secret is not sent back
+    form.hide('admin_passwd')
+    expect(form.revealed).toEqual({})
+
+    await form.reveal('admin_passwd')
+    form.setSecret('admin_passwd', { action: 'remove' })
+    expect(form.revealed).toEqual({})
+    form.setSecret('admin_passwd', { action: 'keep' })
+    await form.reveal('admin_passwd')
+    form.discard()
+    expect(form.revealed).toEqual({})
+    await form.reveal('admin_passwd')
+    form.setValue('db_host', 'pg')
+    await form.save()
+    expect(form.revealed).toEqual({})
+  })
+
+  it('drops a reveal answered after an edit, and shows reveal errors', async () => {
+    let answer: (r: Response) => void = () => {}
+    const { fetcher } = routedFetch({
+      'GET /projects/shop/schema': [200, SCHEMA],
+      'GET /projects/shop/options': [200, saved()],
+    })
+    const form = new ConfigForm(
+      new ApiClient(async (input, init) =>
+        String(input).endsWith('/reveal') ? new Promise<Response>((resolve) => (answer = resolve)) : fetcher(input, init),
+      ),
+      'shop',
+    )
+    await form.load()
+    const late = form.reveal('admin_passwd')
+    expect(form.revealing).toBe('admin_passwd')
+    form.setSecret('admin_passwd', { action: 'set', value: 'new' })
+    answer(Response.json({ key: 'admin_passwd', value: 'old' }))
+    expect(await late).toBe(false)
+    expect(form.revealed).toEqual({})
+    expect(form.revealing).toBe(null)
+
+    form.setSecret('admin_passwd', { action: 'keep' })
+    const failed = form.reveal('admin_passwd')
+    answer(Response.json({ error: 'secret_not_set', message: 'admin_passwd has no saved value' }, { status: 404 }))
+    expect(await failed).toBe(false)
+    expect(form.revealErrors).toEqual({ admin_passwd: 'admin_passwd has no saved value' })
+    form.hide('admin_passwd')
+    expect(form.revealErrors).toEqual({})
+  })
 })

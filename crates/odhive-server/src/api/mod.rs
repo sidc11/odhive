@@ -71,6 +71,7 @@ fn api_router() -> OpenApiRouter<Service> {
         .routes(routes!(options::get, options::put))
         .routes(routes!(options::preview))
         .routes(routes!(options::import))
+        .routes(routes!(options::reveal))
         .routes(routes!(projects::setup))
         .routes(routes!(editor::open))
         .routes(routes!(pythons::list))

@@ -15,7 +15,7 @@
     project: string
     api?: Pick<
       ApiClient,
-      'projectSchema' | 'getProjectOptions' | 'putProjectOptions' | 'previewProjectOptions' | 'importProjectOptions'
+      'projectSchema' | 'getProjectOptions' | 'putProjectOptions' | 'previewProjectOptions' | 'importProjectOptions' | 'revealProjectSecret'
     >
   } = $props()
 

@@ -430,6 +430,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{name}/options/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Answers with the saved value of one secret option, for the config
+         *     builder's reveal toggle. The answer is marked `Cache-Control: no-store`;
+         *     nothing else in the API returns saved secrets.
+         */
+        post: operations["reveal_project_secret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{name}/schema": {
         parameters: {
             query?: never;
@@ -1801,6 +1822,19 @@ export interface components {
         ReloadMode: "auto" | "restart" | "off";
         /** @description A validated requirement, normalised to `name[extras]specifiers ; marker`. */
         Requirement: string;
+        /** @description A secret to reveal. */
+        RevealSecret: {
+            /**
+             * @description The secret's option key, e.g. `admin_passwd`.
+             * @example admin_passwd
+             */
+            key: string;
+        };
+        /** @description A saved secret's value, shown because the user asked for it. */
+        RevealedSecret: {
+            key: string;
+            value: string;
+        };
         /** @description The `odoo.conf` options of an Odoo source. */
         SchemaInfo: {
             /** @description Why the bundled list is used. */
@@ -3124,6 +3158,60 @@ export interface operations {
                 };
             };
             /** @description Invalid option, as for a save */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    reveal_project_secret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevealSecret"];
+            };
+        };
+        responses: {
+            /** @description The secret */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevealedSecret"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project, or the secret has no saved value */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The key is not a secret */
             422: {
                 headers: {
                     [name: string]: unknown;
