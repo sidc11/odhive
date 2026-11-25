@@ -15,6 +15,7 @@ workspace = true
 directories = "6.0.0"
 getrandom = "0.4.3"
 notify = { version = "9.0.0", default-features = false, features = ["macos_fsevent"] }
+regex = { version = "1.13.2", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
 rustix = { version = "1.1.6", features = ["process", "net", "fs"] }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.154"

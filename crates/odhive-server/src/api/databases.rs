@@ -1,9 +1,10 @@
-//! `/projects/{name}/postgres`: the PostgreSQL server a project's Odoo
-//! connects to, with the project's `db_*` options.
+//! `/projects/{name}/postgres` and `/projects/{name}/databases`: the
+//! PostgreSQL server a project's Odoo connects to (with the project's
+//! `db_*` options), and the databases on it.
 
 use axum::Json;
 use axum::extract::State;
-use odhive_core::db::{self, DbHealth, PgTarget};
+use odhive_core::db::{self, DatabaseList, DbHealth, PgTarget};
 use odhive_core::envcheck::Requirement;
 
 use super::Params;
@@ -38,6 +39,43 @@ pub(super) async fn health(
         db::health(
             &target,
             requirement.as_ref(),
+            opts.package_manager,
+            opts.timeout,
+        )
+        .await,
+    ))
+}
+
+/// Lists the databases the project's Odoo would offer: owned by its role,
+/// not templates, and passing its `dbfilter` (matched like Odoo's
+/// `re.match`; a filter using `%h`/`%d` or one OdHive cannot read is not
+/// applied and `filter_note` says why). Each comes with its size, `base`
+/// module version, latest change and the project's instances using it. A
+/// server that cannot be used is reported in `error`.
+#[utoipa::path(operation_id = "list_project_databases", get, path = "/projects/{name}/databases", tag = "databases",
+    params(("name" = String, Path, description = "Project name")),
+    responses(
+        (status = OK, description = "Success (a server that cannot be used is reported in `error`)", body = DatabaseList),
+        (status = NOT_FOUND, description = "No such project", body = ErrorBody),
+    ))]
+pub(super) async fn list(
+    State(svc): State<Service>,
+    Params(name): Params<String>,
+) -> ApiResult<Json<DatabaseList>> {
+    let (_, project) = svc.project(&name)?;
+    let config = &project.config;
+    let target = PgTarget::for_project(&config.odoo_options, &config.env);
+    let uses: Vec<(String, String)> = config
+        .instances
+        .iter()
+        .map(|i| (i.id.clone(), i.db_name(&config.name)))
+        .collect();
+    let opts = svc.env_options();
+    Ok(Json(
+        db::list(
+            &target,
+            config.odoo_options.get("dbfilter"),
+            &uses,
             opts.package_manager,
             opts.timeout,
         )
