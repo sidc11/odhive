@@ -237,6 +237,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{name}/databases/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restores a database dump sent as the request body
+         *     (`application/octet-stream`): an Odoo backup zip (`dump.sql`,
+         *     `filestore/`, `manifest.json`), a `pg_dump` custom (`.dump`) or tar
+         *     archive, or a plain SQL script. The upload is streamed to disk inside the
+         *     project (at most 32 GiB, cut after 60 s without data) and checked before
+         *     the job starts. The job unpacks a zip safely (no paths leaving the
+         *     folder, no links, no zip bombs), creates the database, loads it with
+         *     `psql` (meta-commands locked) or `pg_restore`, checks that it is Odoo of
+         *     the project's series, neutralizes it unless `neutralize=false`, moves the
+         *     filestore to `data/filestore/<name>`, and loads it once in Odoo. A
+         *     failed or cancelled restore removes the database again. A dump is SQL run
+         *     as the project's role: restore only dumps you trust.
+         */
+        post: operations["restore_project_database"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{name}/instances/{id}/fix/confirm": {
         parameters: {
             query?: never;
@@ -985,6 +1015,11 @@ export interface components {
             settings: components["schemas"]["ConnectionSettings"];
         };
         /**
+         * @description What a dump file is.
+         * @enum {string}
+         */
+        DumpFormat: "zip" | "custom" | "tar" | "sql";
+        /**
          * @description Odoo edition of a registered source tree.
          * @enum {string}
          */
@@ -1478,6 +1513,13 @@ export interface components {
             kind: "create_database";
             /** @description Project name. */
             project: string;
+        } | {
+            /** @description Database name. */
+            database: string;
+            /** @enum {string} */
+            kind: "restore_database";
+            /** @description Project name. */
+            project: string;
         };
         /** @description What a successful job produced. */
         JobResult: {
@@ -1495,6 +1537,11 @@ export interface components {
             database: components["schemas"]["CreatedDatabase"];
             /** @enum {string} */
             kind: "create_database";
+        } | {
+            /** @description What was restored. */
+            database: components["schemas"]["RestoredDatabase"];
+            /** @enum {string} */
+            kind: "restore_database";
         };
         /**
          * @description Where a job stands.
@@ -1511,6 +1558,9 @@ export interface components {
         }) | (components["schemas"]["CreateEvent"] & {
             /** @enum {string} */
             job: "create_database";
+        }) | (components["schemas"]["RestoreEvent"] & {
+            /** @enum {string} */
+            job: "restore_database";
         });
         /**
          * @description Severity of a record, in increasing order.
@@ -2033,6 +2083,58 @@ export interface components {
         ReloadMode: "auto" | "restart" | "off";
         /** @description A validated requirement, normalised to `name[extras]specifiers ; marker`. */
         Requirement: string;
+        /** @description Progress of [`restore`]. */
+        RestoreEvent: {
+            /** @enum {string} */
+            event: "step";
+            /** @description The step. */
+            step: components["schemas"]["RestoreStep"];
+        } | {
+            /** @enum {string} */
+            event: "inspected";
+            /**
+             * Format: int64
+             * @description Filestore files in a zip.
+             */
+            filestore_files: number;
+            /** @description Its format. */
+            format: components["schemas"]["DumpFormat"];
+            /**
+             * Format: int64
+             * @description Bytes unpacked from a zip.
+             */
+            unpacked_bytes: number;
+        } | {
+            /** @enum {string} */
+            event: "output";
+            /** @description The line. */
+            line: string;
+        };
+        /**
+         * @description A step of [`restore`].
+         * @enum {string}
+         */
+        RestoreStep: "inspect" | "create" | "load" | "check" | "neutralize" | "filestore" | "finalize" | "cleanup";
+        /** @description What [`restore`] made. */
+        RestoredDatabase: {
+            /**
+             * Format: int64
+             * @description Filestore files restored.
+             */
+            filestore_files: number;
+            /** @description Format of the dump. */
+            format: components["schemas"]["DumpFormat"];
+            /** @description Database name. */
+            name: string;
+            /** @description Whether it was neutralized. */
+            neutralized: boolean;
+            /** @description Whether it got a new UUID (restored as a copy). */
+            new_uuid: boolean;
+            /** @description `base` module version, e.g. `19.0.1.3`. */
+            odoo_version?: string | null;
+            /** @description Name of the database the backup was made from (zip manifest). */
+            source_name?: string | null;
+        };
         /** @description A secret to reveal. */
         RevealSecret: {
             /**
@@ -2840,6 +2942,104 @@ export interface operations {
             };
             /** @description The database exists, the project has no venv, or it is being set up */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description PostgreSQL cannot be used */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    restore_project_database: {
+        parameters: {
+            query: {
+                /**
+                 * @description Name of the new database: letters, digits, `_`, `.`, `-`, 2-63
+                 *     characters, starting with a letter or digit.
+                 */
+                name: string;
+                /**
+                 * @description Run Odoo's neutralization (mail servers off, crons off, …). Default
+                 *     `true`; `false` restores the database as it was.
+                 */
+                neutralize?: boolean;
+                /**
+                 * @description Restore as a copy, with a new database UUID (default `true`); `false`
+                 *     keeps the UUID, for a database that was moved.
+                 */
+                copy?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        /** @description The dump file */
+        requestBody: {
+            content: {
+                "application/octet-stream": number[];
+            };
+        };
+        responses: {
+            /** @description Restore started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Invalid name, or the file is not a dump OdHive restores */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The upload stalled */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The database or its filestore exists, the project has no venv or is being set up, the PostgreSQL client tools are missing or too old */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The file is over the upload limit */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

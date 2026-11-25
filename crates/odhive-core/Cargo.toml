@@ -27,6 +27,7 @@ tokio-postgres = { version = "0.7.18", default-features = false, features = ["ru
 toml = "1.2.1"
 tracing = "0.1.44"
 utoipa = { version = "6.0.0", default-features = false, features = ["macros"] }
+zip = { version = "9.8.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
 proptest = "1.12.0"

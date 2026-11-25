@@ -246,18 +246,18 @@ async fn owned_databases(
 }
 
 /// The server's own message (`Display` only says `db error`).
-fn pg_message(e: &tokio_postgres::Error) -> String {
+pub(super) fn pg_message(e: &tokio_postgres::Error) -> String {
     e.as_db_error()
         .map_or_else(|| e.to_string(), |d| d.message().to_owned())
 }
 
-struct OdooFacts {
-    version: Option<String>,
-    last_modified: Option<String>,
+pub(super) struct OdooFacts {
+    pub(super) version: Option<String>,
+    pub(super) last_modified: Option<String>,
 }
 
 /// `base`'s version and the latest change, when the database is Odoo's.
-async fn odoo_facts(client: &Client) -> Result<OdooFacts, tokio_postgres::Error> {
+pub(super) async fn odoo_facts(client: &Client) -> Result<OdooFacts, tokio_postgres::Error> {
     let row = client
         .query_one(
             "SELECT pg_catalog.to_regclass('public.ir_module_module') IS NOT NULL, \
@@ -297,7 +297,7 @@ async fn odoo_facts(client: &Client) -> Result<OdooFacts, tokio_postgres::Error>
 
 /// `19.0.1.3` → `19.0`; `saas~18.3.1.3` → `saas~18.3`: the module's own
 /// version is the last two parts.
-fn series(version: &str) -> String {
+pub(super) fn series(version: &str) -> String {
     let parts: Vec<&str> = version.split('.').collect();
     if parts.len() > 2 {
         parts[..parts.len() - 2].join(".")

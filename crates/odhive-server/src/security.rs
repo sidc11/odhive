@@ -144,6 +144,47 @@ pub struct RequestLimits {
     /// Longest time a request may take to answer → else `503 timeout`.
     /// A WebSocket only counts until its upgrade response.
     pub timeout: Duration,
+    /// Limits of the upload routes ([`is_upload`]), which take the place of
+    /// `max_body` and `timeout` there.
+    pub upload: UploadLimits,
+}
+
+/// Limits of a file upload (a database dump to restore).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UploadLimits {
+    /// Largest file in bytes; larger → `413 body_too_large`.
+    pub max_bytes: u64,
+    /// Longest wait for the next chunk → else `408 upload_timeout`.
+    pub idle: Duration,
+}
+
+impl UploadLimits {
+    /// Default upload limit: 32 GiB.
+    pub const MAX_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+    /// Default idle limit: 60 s without a byte.
+    pub const IDLE: Duration = Duration::from_secs(60);
+}
+
+impl Default for UploadLimits {
+    fn default() -> Self {
+        Self {
+            max_bytes: Self::MAX_BYTES,
+            idle: Self::IDLE,
+        }
+    }
+}
+
+/// Whether `req` goes to an upload route: `POST` to
+/// `/api/v1/projects/{name}/databases/restore`.
+#[must_use]
+pub fn is_upload(req: &Request) -> bool {
+    if req.method() != Method::POST {
+        return false;
+    }
+    let path = req.uri().path();
+    path.strip_prefix("/api/v1/projects/")
+        .and_then(|rest| rest.strip_suffix("/databases/restore"))
+        .is_some_and(|name| !name.is_empty() && !name.contains('/'))
 }
 
 impl RequestLimits {
@@ -159,6 +200,7 @@ impl Default for RequestLimits {
         Self {
             max_body: Self::MAX_BODY,
             timeout: Self::TIMEOUT,
+            upload: UploadLimits::default(),
         }
     }
 }
@@ -167,11 +209,17 @@ impl Default for RequestLimits {
 /// with `413 body_too_large`, and answers `503 timeout` when the handler takes
 /// longer than the limit. A body without a length (chunked) is cut at the
 /// same limit when a handler reads it (see the `DefaultBodyLimit` on the API).
+///
+/// An upload ([`is_upload`]) is held to [`UploadLimits`] instead: its size
+/// limit here, and its handler (which gets the limits as a request
+/// extension) cuts the stream at the same size and after `idle` without
+/// data, rather than after a fixed time.
 pub async fn limit_requests(
     State(limits): State<RequestLimits>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Response {
+    let upload = is_upload(&req);
     let declared = req
         .headers()
         .get(header::CONTENT_LENGTH)
@@ -185,10 +233,20 @@ pub async fn limit_requests(
             )
             .into_response();
         }
+        Some(Some(n)) if upload => n > limits.upload.max_bytes,
         Some(Some(n)) => usize::try_from(n).map_or(true, |n| n > limits.max_body),
     };
     if too_large {
-        return crate::api::error::ApiError::body_too_large(limits.max_body).into_response();
+        let max = if upload {
+            limits.upload.max_bytes
+        } else {
+            limits.max_body as u64
+        };
+        return crate::api::error::ApiError::body_too_large(max).into_response();
+    }
+    if upload {
+        req.extensions_mut().insert(limits.upload);
+        return next.run(req).await;
     }
     match tokio::time::timeout(limits.timeout, next.run(req)).await {
         Ok(resp) => resp,

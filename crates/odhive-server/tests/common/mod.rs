@@ -4,6 +4,8 @@
 
 #![allow(dead_code)]
 
+pub mod pg;
+
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
@@ -326,6 +328,23 @@ fn copy_tree(from: &Path, to: &Path) {
 }
 
 impl Api {
+    /// Sends `body` as a file upload (`application/octet-stream`, with its
+    /// `Content-Length`) from the signed-in web UI.
+    pub async fn upload(&self, path: &str, body: Body, length: Option<u64>) -> (StatusCode, Value) {
+        let mut req = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .header(header::HOST, &self.host)
+            .header(header::ORIGIN, format!("http://{}", self.host))
+            .header(header::COOKIE, &self.cookie)
+            .header("x-odhive", "1")
+            .header(header::CONTENT_TYPE, "application/octet-stream");
+        if let Some(n) = length {
+            req = req.header(header::CONTENT_LENGTH, n);
+        }
+        split(self.send(req.body(body).expect("request")).await).await
+    }
+
     /// Polls job `id` until it is no longer running; returns it.
     pub async fn wait_job(&self, id: u64) -> Value {
         let deadline = std::time::Instant::now() + JOB_WAIT;

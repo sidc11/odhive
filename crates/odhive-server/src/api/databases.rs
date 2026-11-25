@@ -2,26 +2,34 @@
 //! PostgreSQL server a project's Odoo connects to (with the project's
 //! `db_*` options), and the databases on it.
 
+use std::ffi::OsString;
 use std::fmt;
+use std::os::unix::fs::DirBuilderExt;
+use std::path::Path;
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::StatusCode;
-use odhive_core::conf::MASK;
+use odhive_core::conf::{DATA_DIR, MASK};
+use odhive_core::db::archive::{self, ExtractLimits};
 use odhive_core::db::{
     self, DEFAULT_LANGUAGE, DEFAULT_LOGIN, DatabaseList, DbHealth, NewDatabase, OdooCommand,
-    PgTarget,
+    PgTarget, PgTools, RestoreError, RestoreOptions, RestoreRequest,
 };
 use odhive_core::envcheck::Requirement;
 use odhive_core::launch;
 use odhive_core::venv::{VENV_DIR, venv_python};
 use serde::Deserialize;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 use super::error::{ApiError, ApiResult, ErrorBody};
-use super::{Body, Params};
+use super::{Body, Params, QueryArgs};
 use crate::jobs::{Job, JobKind, JobResult, JobStep};
+use crate::security::UploadLimits;
 use crate::service::Service;
+
+/// Folder of the Odoo filestores inside the data folder.
+const FILESTORE_DIR: &str = "filestore";
 
 /// Connects with the project's `db_host`, `db_port`, `db_user`,
 /// `db_password` and `db_sslmode` (unset ones come from the project's
@@ -216,4 +224,203 @@ pub(super) async fn create(
         })
     })?;
     Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// How to restore an uploaded dump.
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreQuery {
+    /// Name of the new database: letters, digits, `_`, `.`, `-`, 2-63
+    /// characters, starting with a letter or digit.
+    pub name: String,
+    /// Run Odoo's neutralization (mail servers off, crons off, …). Default
+    /// `true`; `false` restores the database as it was.
+    pub neutralize: Option<bool>,
+    /// Restore as a copy, with a new database UUID (default `true`); `false`
+    /// keeps the UUID, for a database that was moved.
+    pub copy: Option<bool>,
+}
+
+/// Restores a database dump sent as the request body
+/// (`application/octet-stream`): an Odoo backup zip (`dump.sql`,
+/// `filestore/`, `manifest.json`), a `pg_dump` custom (`.dump`) or tar
+/// archive, or a plain SQL script. The upload is streamed to disk inside the
+/// project (at most 32 GiB, cut after 60 s without data) and checked before
+/// the job starts. The job unpacks a zip safely (no paths leaving the
+/// folder, no links, no zip bombs), creates the database, loads it with
+/// `psql` (meta-commands locked) or `pg_restore`, checks that it is Odoo of
+/// the project's series, neutralizes it unless `neutralize=false`, moves the
+/// filestore to `data/filestore/<name>`, and loads it once in Odoo. A
+/// failed or cancelled restore removes the database again. A dump is SQL run
+/// as the project's role: restore only dumps you trust.
+#[utoipa::path(operation_id = "restore_project_database", post, path = "/projects/{name}/databases/restore", tag = "databases",
+    request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "The dump file"),
+    params(("name" = String, Path, description = "Project name"), RestoreQuery),
+    responses(
+        (status = ACCEPTED, description = "Restore started", body = Job),
+        (status = BAD_REQUEST, description = "Invalid name, or the file is not a dump OdHive restores", body = ErrorBody),
+        (status = NOT_FOUND, description = "No such project", body = ErrorBody),
+        (status = REQUEST_TIMEOUT, description = "The upload stalled", body = ErrorBody),
+        (status = CONFLICT, description = "The database or its filestore exists, the project has no venv or is being set up, the PostgreSQL client tools are missing or too old", body = ErrorBody),
+        (status = PAYLOAD_TOO_LARGE, description = "The file is over the upload limit", body = ErrorBody),
+        (status = SERVICE_UNAVAILABLE, description = "PostgreSQL cannot be used", body = ErrorBody),
+    ))]
+pub(super) async fn restore(
+    State(svc): State<Service>,
+    Params(name): Params<String>,
+    QueryArgs(q): QueryArgs<RestoreQuery>,
+    limits: Option<Extension<UploadLimits>>,
+    body: axum::body::Body,
+) -> ApiResult<(StatusCode, Json<Job>)> {
+    let limits = limits.map(|Extension(l)| l).unwrap_or_default();
+    db::validate_new_db_name(&q.name)?;
+    let (cfg, project) = svc.project(&name)?;
+    svc.ensure_not_setting_up(&name)?;
+    let (community, _) = project.config.resolve_sources(&cfg)?;
+    let dir = project.dir();
+    let python = venv_python(&dir.join(VENV_DIR));
+    if !python.is_file() {
+        return Err(launch::LaunchError::NoVenv(dir.join(VENV_DIR), name.clone()).into());
+    }
+    let config = &project.config;
+    let options = &config.odoo_options;
+    let target = PgTarget::for_project(options, &config.env);
+    let timeout = svc.env_options().timeout;
+    let path_var = config
+        .env
+        .0
+        .get("PATH")
+        .map(OsString::from)
+        .or_else(|| std::env::var_os("PATH"));
+    let tools = PgTools::find(
+        db::pg_path_option(options).as_deref(),
+        path_var.as_deref(),
+        timeout,
+    )
+    .await?;
+    if db::exists(&target, &q.name, timeout).await? {
+        return Err(db::CreateError::Exists(q.name).into());
+    }
+    let data_dir = dir.join(DATA_DIR);
+    let filestore_root = data_dir.join(FILESTORE_DIR);
+    if filestore_root.join(&q.name).symlink_metadata().is_ok() {
+        return Err(RestoreError::FilestoreExists(filestore_root.join(&q.name)).into());
+    }
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&data_dir)
+        .map_err(|e| ApiError::internal(format!("cannot create {}: {e}", data_dir.display())))?;
+    // Removed when the job ends, however it ends (or now, on an error).
+    let staging = tempfile::Builder::new()
+        .prefix(".odhive-restore-")
+        .tempdir_in(&data_dir)
+        .map_err(|e| ApiError::internal(format!("cannot create a staging folder: {e}")))?;
+    let upload = staging.path().join("upload");
+    receive(body, &upload, limits).await?;
+    let format = archive::detect(&upload)?;
+    if format == archive::DumpFormat::Zip {
+        // Names, links and sizes from the zip's directory: an unsafe archive
+        // is refused before any job starts.
+        let zip = upload.clone();
+        tokio::task::spawn_blocking(move || {
+            archive::check_odoo_zip(&zip, ExtractLimits::default())
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))??;
+    }
+    if format.uses_psql() && !tools.psql_can_restrict() {
+        return Err(RestoreError::PsqlTooOld {
+            version: tools
+                .psql_version
+                .map_or_else(|| "unknown".into(), |(a, b)| format!("{a}.{b}")),
+        }
+        .into());
+    }
+    let prepared = launch::prepare(&cfg, svc.paths(), &project, &[]).await?;
+    let odoo = OdooCommand {
+        python,
+        odoo_bin: community.path.join("odoo-bin"),
+        conf: prepared.conf,
+        cwd: dir.to_path_buf(),
+        env: config.env.clone(),
+    };
+    let opts = RestoreOptions {
+        filestore_root,
+        staging: staging.path().to_path_buf(),
+        series: Some(community.odoo_version.to_string()),
+        template: db::template_option(options),
+        limits: ExtractLimits::default(),
+        timeout,
+    };
+    let req = RestoreRequest {
+        name: q.name.clone(),
+        neutralize: q.neutralize.unwrap_or(true),
+        copy: q.copy.unwrap_or(true),
+    };
+    let kind = JobKind::RestoreDatabase {
+        project: name,
+        database: q.name,
+    };
+    let job = svc.jobs().spawn(kind, move |report| {
+        Box::pin(async move {
+            let _staging = staging;
+            let database = db::restore(&target, &odoo, &tools, &upload, &req, &opts, |e| {
+                report.step(JobStep::RestoreDatabase(e));
+            })
+            .await?;
+            Ok(JobResult::RestoreDatabase { database })
+        })
+    })?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// Streams the request body to a new private file at `path`, at most
+/// `limits.max_bytes`, giving up after `limits.idle` without data.
+async fn receive(body: axum::body::Body, path: &Path, limits: UploadLimits) -> ApiResult<u64> {
+    use http_body_util::BodyExt;
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .await
+        .map_err(|e| ApiError::internal(format!("cannot create {}: {e}", path.display())))?;
+    let mut body = body;
+    let mut total: u64 = 0;
+    loop {
+        let frame = match tokio::time::timeout(limits.idle, body.frame()).await {
+            Err(_) => {
+                return Err(ApiError::new(
+                    StatusCode::REQUEST_TIMEOUT,
+                    "upload_timeout",
+                    format!("no data received for {} s", limits.idle.as_secs()),
+                ));
+            }
+            Ok(None) => break,
+            Ok(Some(Err(e))) => {
+                return Err(ApiError::bad_request(
+                    "upload_failed",
+                    format!("the upload broke off: {e}"),
+                ));
+            }
+            Ok(Some(Ok(frame))) => frame,
+        };
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
+        total += data.len() as u64;
+        if total > limits.max_bytes {
+            return Err(ApiError::body_too_large(limits.max_bytes));
+        }
+        file.write_all(&data)
+            .await
+            .map_err(|e| ApiError::internal(format!("cannot write the upload: {e}")))?;
+    }
+    file.flush()
+        .await
+        .map_err(|e| ApiError::internal(format!("cannot write the upload: {e}")))?;
+    Ok(total)
 }

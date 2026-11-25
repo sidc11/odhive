@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use odhive_core::config::SourceEntry;
-use odhive_core::db::{CreateEvent, CreatedDatabase};
+use odhive_core::db::{CreateEvent, CreatedDatabase, RestoreEvent, RestoredDatabase};
 use odhive_core::events::{Subscription, Topic};
 use odhive_core::requirements::InstallEvent;
 use odhive_core::setup::{EnvReport, SetupEvent};
@@ -60,6 +60,26 @@ pub enum JobKind {
         /// Database name.
         database: String,
     },
+    /// Restores an uploaded dump as a database of a project.
+    RestoreDatabase {
+        /// Project name.
+        project: String,
+        /// Database name.
+        database: String,
+    },
+}
+
+impl JobKind {
+    /// The project whose database this job creates or restores.
+    #[must_use]
+    pub fn database_project(&self) -> Option<&str> {
+        match self {
+            Self::CreateDatabase { project, .. } | Self::RestoreDatabase { project, .. } => {
+                Some(project)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Where a job stands.
@@ -86,6 +106,8 @@ pub enum JobStep {
     Setup(SetupEvent),
     /// Progress of a database creation.
     CreateDatabase(CreateEvent),
+    /// Progress of a database restore.
+    RestoreDatabase(RestoreEvent),
 }
 
 /// What a successful job produced.
@@ -106,6 +128,11 @@ pub enum JobResult {
     CreateDatabase {
         /// What was created.
         database: CreatedDatabase,
+    },
+    /// The restored database.
+    RestoreDatabase {
+        /// What was restored.
+        database: RestoredDatabase,
     },
 }
 
@@ -437,7 +464,8 @@ fn output_line(step: &JobStep) -> Option<&str> {
             SetupEvent::Venv(VenvEvent::Output { line })
             | SetupEvent::Install(InstallEvent::Output { line }),
         )
-        | JobStep::CreateDatabase(CreateEvent::Output { line }) => Some(line),
+        | JobStep::CreateDatabase(CreateEvent::Output { line })
+        | JobStep::RestoreDatabase(RestoreEvent::Output { line }) => Some(line),
         _ => None,
     }
 }

@@ -3,10 +3,13 @@
 //! [`health`] checks the server the project's Odoo connects to (with the
 //! project's `db_*` options): reachable, server version, whether the role
 //! may create databases. [`list()`] lists the databases Odoo would offer.
-//! [`create()`] creates one with the project's `odoo-bin`.
+//! [`create()`] creates one with the project's `odoo-bin`. [`restore()`]
+//! restores a dump (Odoo backup zip, `pg_dump` archive or SQL script).
 
+pub mod archive;
 mod create;
 mod list;
+mod restore;
 mod target;
 
 use std::time::Duration;
@@ -19,6 +22,10 @@ pub use create::{
     validate_new_db_name,
 };
 pub use list::{Database, DatabaseList, list};
+pub use restore::{
+    FINALIZE_RESTORE_SCRIPT, NEUTRALIZED_KEY, PgTools, RestoreError, RestoreEvent, RestoreOptions,
+    RestoreRequest, RestoreStep, RestoredDatabase, pg_path_option, restore, template_option,
+};
 pub use target::{ConnectionSettings, PgTarget, SOCKET_DIRS, SslMode};
 
 use crate::envcheck::{Check, Requirement, postgres};

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OdHive API",
-    "description": "Local API of OdHive, used by its web UI and CLI. Every request needs the session cookie `odhive_session` (set by `/login`) or `Authorization: Bearer <token>`, else 401. Every request other than GET/HEAD must also carry the header `X-OdHive: 1` and, from a browser, OdHive's own `Origin` (403 `forbidden_origin`; a request without `Origin` needs the bearer token). Bodies over 1 MiB get 413 `body_too_large`; a request not answered within 60 s gets 503 `timeout`. No CORS headers are ever sent.",
+    "description": "Local API of OdHive, used by its web UI and CLI. Every request needs the session cookie `odhive_session` (set by `/login`) or `Authorization: Bearer <token>`, else 401. Every request other than GET/HEAD must also carry the header `X-OdHive: 1` and, from a browser, OdHive's own `Origin` (403 `forbidden_origin`; a request without `Origin` needs the bearer token). Bodies over 1 MiB get 413 `body_too_large` (uploads: over 32 GiB); a request not answered within 60 s gets 503 `timeout` (uploads: 408 `upload_timeout` after 60 s without data). No CORS headers are ever sent.",
     "contact": {
       "name": "Siddharth Chaudhari"
     },
@@ -555,6 +555,141 @@
           },
           "409": {
             "description": "The database exists, the project has no venv, or it is being set up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PostgreSQL cannot be used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/databases/restore": {
+      "post": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Restores a database dump sent as the request body\n(`application/octet-stream`): an Odoo backup zip (`dump.sql`,\n`filestore/`, `manifest.json`), a `pg_dump` custom (`.dump`) or tar\narchive, or a plain SQL script. The upload is streamed to disk inside the\nproject (at most 32 GiB, cut after 60 s without data) and checked before\nthe job starts. The job unpacks a zip safely (no paths leaving the\nfolder, no links, no zip bombs), creates the database, loads it with\n`psql` (meta-commands locked) or `pg_restore`, checks that it is Odoo of\nthe project's series, neutralizes it unless `neutralize=false`, moves the\nfilestore to `data/filestore/<name>`, and loads it once in Odoo. A\nfailed or cancelled restore removes the database again. A dump is SQL run\nas the project's role: restore only dumps you trust.",
+        "operationId": "restore_project_database",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Name of the new database: letters, digits, `_`, `.`, `-`, 2-63\ncharacters, starting with a letter or digit.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "neutralize",
+            "in": "query",
+            "description": "Run Odoo's neutralization (mail servers off, crons off, …). Default\n`true`; `false` restores the database as it was.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "copy",
+            "in": "query",
+            "description": "Restore as a copy, with a new database UUID (default `true`); `false`\nkeeps the UUID, for a database that was moved.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The dump file",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Restore started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name, or the file is not a dump OdHive restores",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "The upload stalled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The database or its filestore exists, the project has no venv or is being set up, the PostgreSQL client tools are missing or too old",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The file is over the upload limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -2865,6 +3000,16 @@
           }
         }
       },
+      "DumpFormat": {
+        "type": "string",
+        "description": "What a dump file is.",
+        "enum": [
+          "zip",
+          "custom",
+          "tar",
+          "sql"
+        ]
+      },
       "Edition": {
         "type": "string",
         "description": "Odoo edition of a registered source tree.",
@@ -4214,6 +4359,31 @@
                 "description": "Project name."
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Restores an uploaded dump as a database of a project.",
+            "required": [
+              "project",
+              "database",
+              "kind"
+            ],
+            "properties": {
+              "database": {
+                "type": "string",
+                "description": "Database name."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "restore_database"
+                ]
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              }
+            }
           }
         ],
         "description": "What a job does."
@@ -4276,6 +4446,26 @@
                 "type": "string",
                 "enum": [
                   "create_database"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The restored database.",
+            "required": [
+              "database",
+              "kind"
+            ],
+            "properties": {
+              "database": {
+                "$ref": "#/components/schemas/RestoredDatabase",
+                "description": "What was restored."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "restore_database"
                 ]
               }
             }
@@ -4363,6 +4553,29 @@
               }
             ],
             "description": "Progress of a database creation."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RestoreEvent",
+                "description": "Progress of a database restore."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "job"
+                ],
+                "properties": {
+                  "job": {
+                    "type": "string",
+                    "enum": [
+                      "restore_database"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Progress of a database restore."
           }
         ],
         "description": "One step of a job's progress."
@@ -5847,6 +6060,148 @@
       "Requirement": {
         "type": "string",
         "description": "A validated requirement, normalised to `name[extras]specifiers ; marker`."
+      },
+      "RestoreEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A step started.",
+            "required": [
+              "step",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step"
+                ]
+              },
+              "step": {
+                "$ref": "#/components/schemas/RestoreStep",
+                "description": "The step."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "What the file is (after inspecting).",
+            "required": [
+              "format",
+              "unpacked_bytes",
+              "filestore_files",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "inspected"
+                ]
+              },
+              "filestore_files": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Filestore files in a zip.",
+                "minimum": 0
+              },
+              "format": {
+                "$ref": "#/components/schemas/DumpFormat",
+                "description": "Its format."
+              },
+              "unpacked_bytes": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Bytes unpacked from a zip.",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A line of tool output.",
+            "required": [
+              "line",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "output"
+                ]
+              },
+              "line": {
+                "type": "string",
+                "description": "The line."
+              }
+            }
+          }
+        ],
+        "description": "Progress of [`restore`]."
+      },
+      "RestoreStep": {
+        "type": "string",
+        "description": "A step of [`restore`].",
+        "enum": [
+          "inspect",
+          "create",
+          "load",
+          "check",
+          "neutralize",
+          "filestore",
+          "finalize",
+          "cleanup"
+        ]
+      },
+      "RestoredDatabase": {
+        "type": "object",
+        "description": "What [`restore`] made.",
+        "required": [
+          "name",
+          "format",
+          "neutralized",
+          "new_uuid",
+          "filestore_files"
+        ],
+        "properties": {
+          "filestore_files": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Filestore files restored.",
+            "minimum": 0
+          },
+          "format": {
+            "$ref": "#/components/schemas/DumpFormat",
+            "description": "Format of the dump."
+          },
+          "name": {
+            "type": "string",
+            "description": "Database name."
+          },
+          "neutralized": {
+            "type": "boolean",
+            "description": "Whether it was neutralized."
+          },
+          "new_uuid": {
+            "type": "boolean",
+            "description": "Whether it got a new UUID (restored as a copy)."
+          },
+          "odoo_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`base` module version, e.g. `19.0.1.3`."
+          },
+          "source_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the database the backup was made from (zip manifest)."
+          }
+        }
       },
       "RevealSecret": {
         "type": "object",
