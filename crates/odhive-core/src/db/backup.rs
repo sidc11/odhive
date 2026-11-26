@@ -734,6 +734,9 @@ mod unit_tests {
         fs::write(tmp.path().join("secret"), b"s").unwrap();
         symlink(tmp.path().join("secret"), dir.join("link.zip")).unwrap();
         fs::create_dir(dir.join("folder.zip")).unwrap();
+        // rustix has no mkfifoat on Apple targets; there `fifo.zip` is simply
+        // missing (still not found).
+        #[cfg(not(target_vendor = "apple"))]
         rustix::fs::mkfifoat(
             rustix::fs::CWD,
             dir.join("fifo.zip"),
