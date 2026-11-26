@@ -42,13 +42,13 @@ impl Place {
 }
 
 /// What a connection attempt ended with.
-enum Attempt {
+enum Attempt<'d> {
     /// Nothing listens there.
     Unreachable(String),
     /// A server answered and refused or failed the login.
     Refused(Refusal),
-    /// Logged in.
-    Connected(Client),
+    /// Logged in, to this database.
+    Connected(Client, &'d str),
 }
 
 pub(crate) enum Refusal {
@@ -102,6 +102,8 @@ pub(crate) async fn probe(
 pub(crate) struct Connection {
     pub(crate) client: Client,
     pub(crate) place: Place,
+    /// The maintenance database logged in to (`postgres` or `template1`).
+    pub(crate) database: &'static str,
     port: u16,
 }
 
@@ -152,10 +154,11 @@ pub(crate) async fn connect(
         match attempt(target, &place, &DATABASES, timeout).await {
             Attempt::Unreachable(why) => tried.push(format!("{label}: {why}")),
             Attempt::Refused(why) => return Err(ConnectError::Refused { label, why }),
-            Attempt::Connected(client) => {
+            Attempt::Connected(client, database) => {
                 return Ok(Connection {
                     client,
                     place,
+                    database,
                     port: target.port,
                 });
             }
@@ -173,7 +176,7 @@ pub(crate) async fn connect_db(
     timeout: Duration,
 ) -> Result<Client, String> {
     match attempt(target, place, &[db], timeout).await {
-        Attempt::Connected(client) => Ok(client),
+        Attempt::Connected(client, _) => Ok(client),
         Attempt::Unreachable(why) => Err(why),
         Attempt::Refused(Refusal::NeedsPassword) => Err("the server asks for a password".into()),
         Attempt::Refused(Refusal::WrongPassword) => Err("the server rejected the password".into()),
@@ -215,7 +218,12 @@ fn tls_required(mode: SslMode) -> Check {
 }
 
 /// Tries `dbs` in turn (the next one when a database does not exist).
-async fn attempt(target: &PgTarget, place: &Place, dbs: &[&str], timeout: Duration) -> Attempt {
+async fn attempt<'d>(
+    target: &PgTarget,
+    place: &Place,
+    dbs: &[&'d str],
+    timeout: Duration,
+) -> Attempt<'d> {
     for db in dbs.iter().copied() {
         let mut cfg = Config::new();
         match place {
@@ -245,7 +253,7 @@ async fn attempt(target: &PgTarget, place: &Place, dbs: &[&str], timeout: Durati
                 tokio::spawn(async move {
                     let _ = connection.await;
                 });
-                return Attempt::Connected(client);
+                return Attempt::Connected(client, db);
             }
             Ok(Err(e)) => e,
         };

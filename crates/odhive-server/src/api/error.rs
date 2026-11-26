@@ -6,7 +6,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use odhive_core::config::ConfigError;
 use odhive_core::db::archive::ArchiveError;
-use odhive_core::db::{BackupError, CreateError, DeleteError, DuplicateError, RestoreError};
+use odhive_core::db::{
+    BackupError, CreateError, DeleteError, DuplicateError, RestoreError, SnapshotError,
+};
 use odhive_core::launch::LaunchError;
 use odhive_core::manager::ManagerError;
 use odhive_core::pidfile::PidFileError;
@@ -290,6 +292,29 @@ impl From<DuplicateError> for ApiError {
             }
             DuplicateError::Spawn { .. } | DuplicateError::Failed { .. } => {
                 Self::new(StatusCode::INTERNAL_SERVER_ERROR, "duplicate_failed", msg)
+            }
+        }
+    }
+}
+
+impl From<SnapshotError> for ApiError {
+    fn from(e: SnapshotError) -> Self {
+        let msg = e.to_string();
+        match e {
+            SnapshotError::Name(_) => Self::bad_request("invalid_name", msg),
+            SnapshotError::InvalidName(_) => Self::bad_request("invalid_snapshot_name", msg),
+            SnapshotError::TooLong(_) => Self::bad_request("name_too_long", msg),
+            SnapshotError::NotFound(_) => Self::not_found("database_not_found", msg),
+            SnapshotError::SnapshotNotFound(_) => Self::not_found("snapshot_not_found", msg),
+            SnapshotError::Exists(_) => Self::conflict("snapshot_exists", msg),
+            SnapshotError::InUse { .. } => Self::conflict("database_in_use", msg),
+            SnapshotError::Server(_) => {
+                Self::new(StatusCode::SERVICE_UNAVAILABLE, "postgres_unavailable", msg)
+            }
+            SnapshotError::Spawn { .. }
+            | SnapshotError::Failed { .. }
+            | SnapshotError::Io { .. } => {
+                Self::new(StatusCode::INTERNAL_SERVER_ERROR, "snapshot_failed", msg)
             }
         }
     }

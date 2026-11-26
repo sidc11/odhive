@@ -326,7 +326,9 @@ export interface paths {
          *     ended, the database dropped, `data/filestore/<name>` removed). `confirm`
          *     must be the database name, typed exactly. Refused while an instance of
          *     the project runs on it (stop it first) or another job works on it.
-         *     Follow the job with `/jobs/{id}` or the WebSocket. There is no undo.
+         *     With `snapshot` a snapshot is taken first (the delete does not start
+         *     when it fails), the only way back. Follow the job with `/jobs/{id}` or
+         *     the WebSocket.
          */
         delete: operations["delete_project_database"];
         options?: never;
@@ -383,6 +385,33 @@ export interface paths {
          *     copy is removed again; the source is never changed.
          */
         post: operations["duplicate_project_database"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{name}/databases/{database}/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Starts taking a snapshot of a database the project lists: an instant
+         *     restore point `<database>__snap_<YYYYMMDDHHMMSS>` (UTC). PostgreSQL
+         *     copies the database with it as a template (other sessions on it are
+         *     ended), the copy is hidden from Odoo and locked, and the filestore is
+         *     hard-linked into `backups/snapshots/<snapshot>/`. Instances of the
+         *     project running on it are refused with `database_in_use` unless
+         *     `stop_instances` is set. Database names longer than 42 characters
+         *     cannot be snapshotted. Follow the job with `/jobs/{id}` or the
+         *     WebSocket; a failed or cancelled snapshot leaves nothing.
+         */
+        post: operations["snapshot_project_database"];
         delete?: never;
         options?: never;
         head?: never;
@@ -694,6 +723,72 @@ export interface paths {
          *     WebSocket. Refused while an instance of the project runs.
          */
         post: operations["setup_project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{name}/snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lists the project's snapshots, newest first. `broken` ones lost their
+         *     PostgreSQL copy (dropped outside OdHive) and can only be deleted.
+         */
+        get: operations["list_project_snapshots"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{name}/snapshots/{snapshot}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Deletes a snapshot of the project: its PostgreSQL copy and its folder in
+         *     `backups/snapshots/`. Refused while a job works on its database. The
+         *     database itself is not touched.
+         */
+        delete: operations["delete_project_snapshot"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{name}/snapshots/{snapshot}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Starts putting a database back as the snapshot has it, with its
+         *     filestore. The snapshot is copied first; only then is the database
+         *     dropped (other sessions ended) and the copy put in its place, so a
+         *     failure before that changes nothing. Everything done in the database
+         *     since the snapshot is lost; the snapshot itself is kept. Works for a
+         *     database deleted since. Instances of the project running on it are
+         *     refused with `database_in_use` unless `stop_instances` is set.
+         */
+        post: operations["restore_project_snapshot"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1192,6 +1287,11 @@ export interface components {
              * @example shop_main
              */
             confirm: string;
+            /**
+             * @description Take a snapshot first (a restore point to undo the delete with).
+             *     Default `false`.
+             */
+            snapshot?: boolean;
         };
         /** @description Progress of [`delete`]. */
         DeleteEvent: {
@@ -1209,7 +1309,7 @@ export interface components {
          * @description A step of [`delete`].
          * @enum {string}
          */
-        DeleteStep: "drop" | "check";
+        DeleteStep: "snapshot" | "drop" | "check";
         /** @description What [`delete`] removed. */
         DeletedDatabase: {
             /** @description Whether a filestore folder existed and was removed. */
@@ -1794,6 +1894,22 @@ export interface components {
             kind: "backup_database";
             /** @description Project name. */
             project: string;
+        } | {
+            /** @description Database name. */
+            database: string;
+            /** @enum {string} */
+            kind: "snapshot_database";
+            /** @description Project name. */
+            project: string;
+        } | {
+            /** @description Database name. */
+            database: string;
+            /** @enum {string} */
+            kind: "restore_snapshot";
+            /** @description Project name. */
+            project: string;
+            /** @description The snapshot. */
+            snapshot: string;
         };
         /** @description What a successful job produced. */
         JobResult: {
@@ -1821,6 +1937,7 @@ export interface components {
             database: components["schemas"]["DeletedDatabase"];
             /** @enum {string} */
             kind: "delete_database";
+            snapshot?: components["schemas"]["Snapshot"] | null;
         } | {
             /** @description What was made. */
             database: components["schemas"]["DuplicatedDatabase"];
@@ -1838,6 +1955,24 @@ export interface components {
             backup: components["schemas"]["Backup"];
             /** @enum {string} */
             kind: "backup_database";
+        } | {
+            /** @enum {string} */
+            kind: "snapshot_database";
+            /** @description Those started again afterwards. */
+            restarted: string[];
+            /** @description What was taken. */
+            snapshot: components["schemas"]["Snapshot"];
+            /** @description Instances stopped because they ran on the database. */
+            stopped: string[];
+        } | {
+            /** @description What was restored. */
+            database: components["schemas"]["RestoredSnapshot"];
+            /** @enum {string} */
+            kind: "restore_snapshot";
+            /** @description Those started again afterwards. */
+            restarted: string[];
+            /** @description Instances stopped because they ran on the database. */
+            stopped: string[];
         };
         /**
          * @description Where a job stands.
@@ -1866,6 +2001,12 @@ export interface components {
         }) | (components["schemas"]["BackupEvent"] & {
             /** @enum {string} */
             job: "backup_database";
+        }) | (components["schemas"]["SnapshotEvent"] & {
+            /** @enum {string} */
+            job: "snapshot_database";
+        }) | (components["schemas"]["SnapshotEvent"] & {
+            /** @enum {string} */
+            job: "restore_snapshot";
         });
         /**
          * @description Severity of a record, in increasing order.
@@ -2440,6 +2581,15 @@ export interface components {
             /** @description Name of the database the backup was made from (zip manifest). */
             source_name?: string | null;
         };
+        /** @description What [`Snapshots::restore`] did. */
+        RestoredSnapshot: {
+            /** @description The database, as it was when the snapshot was taken. */
+            database: string;
+            /** @description Whether a filestore was put back. */
+            filestore: boolean;
+            /** @description The snapshot restored (kept). */
+            snapshot: string;
+        };
         /** @description A secret to reveal. */
         RevealSecret: {
             /**
@@ -2624,6 +2774,56 @@ export interface components {
             /** @description The text as written. */
             text: string;
         };
+        /** @description A snapshot of the project. */
+        Snapshot: {
+            /**
+             * @description The PostgreSQL copy is gone (dropped outside OdHive): it cannot be
+             *     restored, only deleted.
+             */
+            broken: boolean;
+            /**
+             * Format: int64
+             * @description When it was taken, milliseconds since the Unix epoch.
+             */
+            created_at: number;
+            /** @description The database it was taken of. */
+            database: string;
+            /** @description Whether it holds a filestore. */
+            filestore: boolean;
+            /** @description Snapshot name, `<database>__snap_<YYYYMMDDHHMMSS>`. */
+            name: string;
+            /**
+             * Format: int64
+             * @description Size of its PostgreSQL copy in bytes, when known.
+             */
+            size?: number | null;
+        };
+        /** @description Progress of taking or restoring a snapshot. */
+        SnapshotEvent: {
+            /** @enum {string} */
+            event: "step";
+            /** @description The step. */
+            step: components["schemas"]["SnapshotStep"];
+        } | {
+            /** @enum {string} */
+            event: "output";
+            /** @description The line. */
+            line: string;
+        };
+        /** @description Takes or restores a snapshot. */
+        SnapshotRequest: {
+            /**
+             * @description Stop the project's instances running on the database first (and
+             *     start those run by OdHive again afterwards). Without it, running
+             *     instances refuse with `database_in_use`.
+             */
+            stop_instances?: boolean;
+        };
+        /**
+         * @description A step of taking or restoring a snapshot.
+         * @enum {string}
+         */
+        SnapshotStep: "stop_instances" | "copy" | "filestore" | "swap" | "cleanup" | "restart_instances";
         /** @description One Odoo source tree known to OdHive, shared between projects. */
         SourceEntry: {
             /** @description Community or Enterprise. */
@@ -3674,6 +3874,71 @@ export interface operations {
             };
         };
     };
+    snapshot_project_database: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+                /** @description Database to snapshot */
+                database: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SnapshotRequest"];
+            };
+        };
+        responses: {
+            /** @description Snapshot started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Invalid or too long name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project, or the project does not list this database */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Instances run on the database, a job works on it, the project is being set up, or the PostgreSQL client tools are missing */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description PostgreSQL cannot be used */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     confirm_fix: {
         parameters: {
             query?: never;
@@ -4493,6 +4758,180 @@ export interface operations {
             };
             /** @description Invalid project */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_project_snapshots: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Snapshot"][];
+                };
+            };
+            /** @description No such project */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The PostgreSQL client tools are missing */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description PostgreSQL cannot be used */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    delete_project_snapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+                /** @description Snapshot name */
+                snapshot: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a snapshot name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project or snapshot */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A job works on the database, or the PostgreSQL client tools are missing */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description PostgreSQL cannot be used */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    restore_project_snapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+                /** @description Snapshot name */
+                snapshot: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SnapshotRequest"];
+            };
+        };
+        responses: {
+            /** @description Restore started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Not a snapshot name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project or snapshot */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Instances run on the database, a job works on it, the project is being set up, or the PostgreSQL client tools are missing */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description PostgreSQL cannot be used */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -879,7 +879,7 @@
         "tags": [
           "databases"
         ],
-        "summary": "Starts deleting a database the project lists, with its filestore, as\nOdoo's database manager does (`odoo-bin db drop`: other connections are\nended, the database dropped, `data/filestore/<name>` removed). `confirm`\nmust be the database name, typed exactly. Refused while an instance of\nthe project runs on it (stop it first) or another job works on it.\nFollow the job with `/jobs/{id}` or the WebSocket. There is no undo.",
+        "summary": "Starts deleting a database the project lists, with its filestore, as\nOdoo's database manager does (`odoo-bin db drop`: other connections are\nended, the database dropped, `data/filestore/<name>` removed). `confirm`\nmust be the database name, typed exactly. Refused while an instance of\nthe project runs on it (stop it first) or another job works on it.\nWith `snapshot` a snapshot is taken first (the delete does not start\nwhen it fails), the only way back. Follow the job with `/jobs/{id}` or\nthe WebSocket.",
         "operationId": "delete_project_database",
         "parameters": [
           {
@@ -1126,6 +1126,97 @@
           },
           "409": {
             "description": "Instances run on the source, the copy or its filestore exists, a job works on either database, the project has no venv or is being set up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PostgreSQL cannot be used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/databases/{database}/snapshot": {
+      "post": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Starts taking a snapshot of a database the project lists: an instant\nrestore point `<database>__snap_<YYYYMMDDHHMMSS>` (UTC). PostgreSQL\ncopies the database with it as a template (other sessions on it are\nended), the copy is hidden from Odoo and locked, and the filestore is\nhard-linked into `backups/snapshots/<snapshot>/`. Instances of the\nproject running on it are refused with `database_in_use` unless\n`stop_instances` is set. Database names longer than 42 characters\ncannot be snapshotted. Follow the job with `/jobs/{id}` or the\nWebSocket; a failed or cancelled snapshot leaves nothing.",
+        "operationId": "snapshot_project_database",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "database",
+            "in": "path",
+            "description": "Database to snapshot",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnapshotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Snapshot started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or too long name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project, or the project does not list this database",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instances run on the database, a job works on it, the project is being set up, or the PostgreSQL client tools are missing",
             "content": {
               "application/json": {
                 "schema": {
@@ -2262,6 +2353,236 @@
           },
           "422": {
             "description": "Invalid project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/snapshots": {
+      "get": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Lists the project's snapshots, newest first. `broken` ones lost their\nPostgreSQL copy (dropped outside OdHive) and can only be deleted.",
+        "operationId": "list_project_snapshots",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Snapshot"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The PostgreSQL client tools are missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PostgreSQL cannot be used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/snapshots/{snapshot}": {
+      "delete": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Deletes a snapshot of the project: its PostgreSQL copy and its folder in\n`backups/snapshots/`. Refused while a job works on its database. The\ndatabase itself is not touched.",
+        "operationId": "delete_project_snapshot",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "snapshot",
+            "in": "path",
+            "description": "Snapshot name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "Not a snapshot name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project or snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A job works on the database, or the PostgreSQL client tools are missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PostgreSQL cannot be used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/snapshots/{snapshot}/restore": {
+      "post": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Starts putting a database back as the snapshot has it, with its\nfilestore. The snapshot is copied first; only then is the database\ndropped (other sessions ended) and the copy put in its place, so a\nfailure before that changes nothing. Everything done in the database\nsince the snapshot is lost; the snapshot itself is kept. Works for a\ndatabase deleted since. Instances of the project running on it are\nrefused with `database_in_use` unless `stop_instances` is set.",
+        "operationId": "restore_project_snapshot",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "snapshot",
+            "in": "path",
+            "description": "Snapshot name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnapshotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Restore started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a snapshot name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project or snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Instances run on the database, a job works on it, the project is being set up, or the PostgreSQL client tools are missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PostgreSQL cannot be used",
             "content": {
               "application/json": {
                 "schema": {
@@ -3558,6 +3879,10 @@
             "type": "string",
             "description": "The database name, typed again exactly.",
             "example": "shop_main"
+          },
+          "snapshot": {
+            "type": "boolean",
+            "description": "Take a snapshot first (a restore point to undo the delete with).\nDefault `false`."
           }
         },
         "additionalProperties": false
@@ -3611,6 +3936,7 @@
         "type": "string",
         "description": "A step of [`delete`].",
         "enum": [
+          "snapshot",
           "drop",
           "check"
         ]
@@ -5204,6 +5530,61 @@
                 "description": "Project name."
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Takes a snapshot of a database of a project.",
+            "required": [
+              "project",
+              "database",
+              "kind"
+            ],
+            "properties": {
+              "database": {
+                "type": "string",
+                "description": "Database name."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "snapshot_database"
+                ]
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Puts a database of a project back as a snapshot has it.",
+            "required": [
+              "project",
+              "database",
+              "snapshot",
+              "kind"
+            ],
+            "properties": {
+              "database": {
+                "type": "string",
+                "description": "Database name."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "restore_snapshot"
+                ]
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              },
+              "snapshot": {
+                "type": "string",
+                "description": "The snapshot."
+              }
+            }
           }
         ],
         "description": "What a job does."
@@ -5307,6 +5688,17 @@
                 "enum": [
                   "delete_database"
                 ]
+              },
+              "snapshot": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Snapshot",
+                    "description": "The snapshot taken first, when asked."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             }
           },
@@ -5363,6 +5755,78 @@
                 "enum": [
                   "backup_database"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The new snapshot.",
+            "required": [
+              "snapshot",
+              "stopped",
+              "restarted",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "snapshot_database"
+                ]
+              },
+              "restarted": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Those started again afterwards."
+              },
+              "snapshot": {
+                "$ref": "#/components/schemas/Snapshot",
+                "description": "What was taken."
+              },
+              "stopped": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Instances stopped because they ran on the database."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The database put back.",
+            "required": [
+              "database",
+              "stopped",
+              "restarted",
+              "kind"
+            ],
+            "properties": {
+              "database": {
+                "$ref": "#/components/schemas/RestoredSnapshot",
+                "description": "What was restored."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "restore_snapshot"
+                ]
+              },
+              "restarted": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Those started again afterwards."
+              },
+              "stopped": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Instances stopped because they ran on the database."
               }
             }
           }
@@ -5541,6 +6005,52 @@
               }
             ],
             "description": "Progress of a database backup."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SnapshotEvent",
+                "description": "Progress of a snapshot."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "job"
+                ],
+                "properties": {
+                  "job": {
+                    "type": "string",
+                    "enum": [
+                      "snapshot_database"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Progress of a snapshot."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SnapshotEvent",
+                "description": "Progress of a snapshot restore."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "job"
+                ],
+                "properties": {
+                  "job": {
+                    "type": "string",
+                    "enum": [
+                      "restore_snapshot"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Progress of a snapshot restore."
           }
         ],
         "description": "One step of a job's progress."
@@ -7168,6 +7678,29 @@
           }
         }
       },
+      "RestoredSnapshot": {
+        "type": "object",
+        "description": "What [`Snapshots::restore`] did.",
+        "required": [
+          "database",
+          "snapshot",
+          "filestore"
+        ],
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "The database, as it was when the snapshot was taken."
+          },
+          "filestore": {
+            "type": "boolean",
+            "description": "Whether a filestore was put back."
+          },
+          "snapshot": {
+            "type": "string",
+            "description": "The snapshot restored (kept)."
+          }
+        }
+      },
       "RevealSecret": {
         "type": "object",
         "description": "A secret to reveal.",
@@ -7759,6 +8292,118 @@
             "description": "The text as written."
           }
         }
+      },
+      "Snapshot": {
+        "type": "object",
+        "description": "A snapshot of the project.",
+        "required": [
+          "name",
+          "database",
+          "created_at",
+          "filestore",
+          "broken"
+        ],
+        "properties": {
+          "broken": {
+            "type": "boolean",
+            "description": "The PostgreSQL copy is gone (dropped outside OdHive): it cannot be\nrestored, only deleted."
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it was taken, milliseconds since the Unix epoch.",
+            "minimum": 0
+          },
+          "database": {
+            "type": "string",
+            "description": "The database it was taken of."
+          },
+          "filestore": {
+            "type": "boolean",
+            "description": "Whether it holds a filestore."
+          },
+          "name": {
+            "type": "string",
+            "description": "Snapshot name, `<database>__snap_<YYYYMMDDHHMMSS>`."
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Size of its PostgreSQL copy in bytes, when known.",
+            "minimum": 0
+          }
+        }
+      },
+      "SnapshotEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A step started.",
+            "required": [
+              "step",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step"
+                ]
+              },
+              "step": {
+                "$ref": "#/components/schemas/SnapshotStep",
+                "description": "The step."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A line of tool output.",
+            "required": [
+              "line",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "output"
+                ]
+              },
+              "line": {
+                "type": "string",
+                "description": "The line."
+              }
+            }
+          }
+        ],
+        "description": "Progress of taking or restoring a snapshot."
+      },
+      "SnapshotRequest": {
+        "type": "object",
+        "description": "Takes or restores a snapshot.",
+        "properties": {
+          "stop_instances": {
+            "type": "boolean",
+            "description": "Stop the project's instances running on the database first (and\nstart those run by OdHive again afterwards). Without it, running\ninstances refuse with `database_in_use`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SnapshotStep": {
+        "type": "string",
+        "description": "A step of taking or restoring a snapshot.",
+        "enum": [
+          "stop_instances",
+          "copy",
+          "filestore",
+          "swap",
+          "cleanup",
+          "restart_instances"
+        ]
       },
       "SourceEntry": {
         "type": "object",

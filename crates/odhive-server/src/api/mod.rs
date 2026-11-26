@@ -89,6 +89,10 @@ fn api_router() -> OpenApiRouter<Service> {
             databases::download_backup,
             databases::delete_backup
         ))
+        .routes(routes!(databases::snapshot))
+        .routes(routes!(databases::list_snapshots))
+        .routes(routes!(databases::restore_snapshot))
+        .routes(routes!(databases::delete_snapshot))
         .routes(routes!(jobs::list))
         .routes(routes!(jobs::get))
         .routes(routes!(jobs::cancel))

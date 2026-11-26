@@ -53,6 +53,7 @@ use crate::conf::OdooOptions;
 use crate::envcheck::postgres::{self, Place};
 use crate::names;
 use crate::proc::{self, RunError};
+use crate::project::EnvVars;
 
 /// Run by `odoo-bin shell` (on stdin) as the last step. Fixed text.
 pub const FINALIZE_RESTORE_SCRIPT: &str = r#"import os
@@ -434,8 +435,18 @@ pub(super) fn pg_command(
     program: &Path,
     env: &[(&'static str, OsString)],
 ) -> Command {
+    pg_command_in(&odoo.cwd, &odoo.env, program, env)
+}
+
+/// [`pg_command`] run in `cwd` with the project env `project_env`.
+pub(super) fn pg_command_in(
+    cwd: &Path,
+    project_env: &EnvVars,
+    program: &Path,
+    env: &[(&'static str, OsString)],
+) -> Command {
     let mut cmd = Command::new(program);
-    cmd.current_dir(&odoo.cwd).envs(&odoo.env.0);
+    cmd.current_dir(cwd).envs(&project_env.0);
     for k in PG_ENV_CLEARED {
         cmd.env_remove(k);
     }
