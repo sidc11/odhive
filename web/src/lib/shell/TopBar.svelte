@@ -33,6 +33,11 @@
           { label: route.project, href: routeHref({ name: 'project', project: route.project }) },
           { label: 'Odoo options' },
         ]
+      case 'databases':
+        return [
+          { label: route.project, href: routeHref({ name: 'project', project: route.project }) },
+          { label: 'Databases' },
+        ]
       case 'logs':
         return [{ label: 'Logs' }]
       case 'not_found':

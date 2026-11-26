@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatBytes, formatCpu, formatUptime } from './format'
+import { formatBytes, formatCpu, formatTime, formatUptime } from './format'
 
 describe('formatBytes', () => {
   it('picks a binary unit', () => {
@@ -33,5 +33,19 @@ describe('formatUptime', () => {
 
   it('never goes negative (clock skew)', () => {
     expect(at(-30)).toBe('0s')
+  })
+})
+
+describe('formatTime', () => {
+  it('shows epoch milliseconds and ISO strings in the given zone', () => {
+    const ms = Date.UTC(2026, 10, 26, 9, 5)
+    const gb = { locale: 'en-GB', timeZone: 'UTC' }
+    expect(formatTime(ms, gb)).toBe('26 Nov 2026, 09:05')
+    expect(formatTime('2026-11-26T09:05:00Z', gb)).toBe('26 Nov 2026, 09:05')
+    expect(formatTime(ms + 7000, { ...gb, seconds: true })).toBe('26 Nov 2026, 09:05:07')
+  })
+
+  it('shows an unreadable value as is', () => {
+    expect(formatTime('yesterday')).toBe('yesterday')
   })
 })

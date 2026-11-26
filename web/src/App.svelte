@@ -8,6 +8,7 @@
   import { connectStores, toasts } from './lib/stores'
   import ConfigPage from './pages/ConfigPage.svelte'
   import Dashboard from './pages/Dashboard.svelte'
+  import DatabasesPage from './pages/DatabasesPage.svelte'
   import Environment from './pages/Environment.svelte'
   import InstancePage from './pages/InstancePage.svelte'
   import LogsPage from './pages/LogsPage.svelte'
@@ -31,6 +32,8 @@
         return `${route.project}/${route.instance} · OdHive`
       case 'config':
         return `${route.project} options · OdHive`
+      case 'databases':
+        return `${route.project} databases · OdHive`
       case 'logs':
         return 'Logs · OdHive'
       case 'not_found':
@@ -59,6 +62,10 @@
   {:else if route.name === 'config'}
     {#key route.project}
       <ConfigPage project={route.project} />
+    {/key}
+  {:else if route.name === 'databases'}
+    {#key route.project}
+      <DatabasesPage project={route.project} />
     {/key}
   {:else if route.name === 'logs'}
     <LogsPage panes={route.panes} />

@@ -42,6 +42,7 @@ describe('buildCommands', () => {
       // restart, no start. Stopped: start only. No venv: nothing to run.
       // Settings: always.
       'config:shop',
+      'databases:shop',
       'stop:shop/main',
       'restart:shop/main',
       'logs:shop/main',
@@ -50,6 +51,7 @@ describe('buildCommands', () => {
       'logs:shop/test',
       'settings:shop/test',
       'config:crm',
+      'databases:crm',
       'logs:crm/main',
       'settings:crm/main',
     ])

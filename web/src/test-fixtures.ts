@@ -1,6 +1,11 @@
 // Shapes the API sends, for component and store tests.
 import type {
+  Backup,
   ClientMessage,
+  Database,
+  DatabaseList,
+  Job,
+  Snapshot,
   EnvCheck,
   EnvCheckReport,
   InstanceInfo,
@@ -12,6 +17,7 @@ import type {
   ServerMessage,
   Status,
 } from './lib/api'
+import type { DatabaseJob } from './lib/databases/progress'
 import type { SocketLike } from './lib/live.svelte'
 
 export function instanceView(id: string, extra: Partial<InstanceView> = {}): InstanceView {
@@ -198,4 +204,66 @@ export function projectOptions(extra: Partial<ProjectOptions> = {}): ProjectOpti
     conf_path: '/home/dev/OdHive/projects/shop/odoo.conf',
     ...extra,
   }
+}
+
+export function database(name: string, extra: Partial<Database> = {}): Database {
+  return {
+    name,
+    valid_name: true,
+    odoo: true,
+    odoo_series: '19.0',
+    odoo_version: '19.0.1.3',
+    size_bytes: 12 * 1024 * 1024,
+    last_modified: '2026-11-26T09:05:00Z',
+    instances: [],
+    ...extra,
+  }
+}
+
+export function databaseList(databases: Database[], extra: Partial<DatabaseList> = {}): DatabaseList {
+  return {
+    databases,
+    hidden: 0,
+    settings: { socket_dirs: ['/run/postgresql'], port: 5432, user: 'dev', password_set: false, ssl_mode: 'prefer' },
+    ...extra,
+  }
+}
+
+export function backup(file: string, extra: Partial<Backup> = {}): Backup {
+  return { file, database: 'shop_main', format: 'zip', size: 2048, modified_at: Date.UTC(2026, 10, 26, 9, 5), ...extra }
+}
+
+export function snapshot(name: string, extra: Partial<Snapshot> = {}): Snapshot {
+  return {
+    name,
+    database: name.split('__snap_')[0] ?? name,
+    created_at: Date.UTC(2026, 10, 26, 9, 5),
+    filestore: true,
+    broken: false,
+    size: 8 * 1024 * 1024,
+    ...extra,
+  }
+}
+
+/** A running database job; `extra` sets steps, state, result, … */
+export function databaseJob(
+  id: number,
+  kind: Job['kind'] & DatabaseJob['kind'],
+  database: string,
+  extra: Partial<Job> = {},
+): DatabaseJob {
+  const base = {
+    id,
+    kind,
+    project: 'shop',
+    database,
+    state: 'running',
+    started_at: 1,
+    steps: [],
+    output: [],
+    output_dropped: 0,
+    ...(kind === 'duplicate_database' ? { source: 'shop_main' } : {}),
+    ...(kind === 'restore_snapshot' ? { snapshot: `${database}__snap_20261126090500` } : {}),
+  }
+  return { ...base, ...extra } as DatabaseJob
 }

@@ -8,6 +8,7 @@ export type Route =
   | { name: 'project'; project: string }
   | { name: 'instance'; project: string; instance: string }
   | { name: 'config'; project: string }
+  | { name: 'databases'; project: string }
   | { name: 'logs'; panes: LogPane[] }
   | { name: 'not_found'; path: string }
 
@@ -55,6 +56,7 @@ export function parseRoute(path: string): Route {
   if (project === null) return notFound
   if (parts.length === 2) return { name: 'project', project }
   if (parts.length === 3 && parts[2] === 'config') return { name: 'config', project }
+  if (parts.length === 3 && parts[2] === 'databases') return { name: 'databases', project }
 
   const instance = parts[3] === undefined ? null : segment(parts[3])
   if (parts.length === 4 && parts[2] === 'instances' && instance !== null) {
@@ -77,6 +79,8 @@ export function routeHref(route: Exclude<Route, { name: 'not_found' }>): string 
       return `/projects/${encodeURIComponent(route.project)}/instances/${encodeURIComponent(route.instance)}`
     case 'config':
       return `/projects/${encodeURIComponent(route.project)}/config`
+    case 'databases':
+      return `/projects/${encodeURIComponent(route.project)}/databases`
     case 'logs':
       return ['/logs', ...route.panes.flatMap((pane) => [pane.project, pane.instance].map(encodeURIComponent))].join(
         '/',

@@ -87,6 +87,14 @@ export function buildCommands(state: ProjectsState, deps: CommandDeps): Command[
       keywords: ['config', 'conf', 'odoo.conf', 'settings', 'options'],
       run: () => navigate(routeHref({ name: 'config', project: project.name })),
     })
+    actionCommands.push({
+      id: `databases:${project.name}`,
+      group: 'Actions',
+      title: `Databases of ${project.name}`,
+      hint: 'Create, restore, back up, snapshot',
+      keywords: ['database', 'db', 'backup', 'restore', 'snapshot', 'duplicate'],
+      run: () => navigate(routeHref({ name: 'databases', project: project.name })),
+    })
     for (const view of project.instances) {
       const name = `${project.name}/${view.id}`
       const status = instanceState(view)

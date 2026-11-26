@@ -36,3 +36,19 @@ export function formatUptime(startedAt: number, nowMs: number): string {
   if (minutes > 0) return `${minutes}m ${pad(seconds)}s`
   return `${seconds}s`
 }
+
+/**
+ * A moment as the UI shows it, in the browser's time zone: milliseconds
+ * since the epoch or an ISO 8601 string (`2026-11-26T10:04:00Z`). An
+ * unreadable value is shown as is. `seconds` for times that may be close
+ * together (snapshots).
+ */
+export function formatTime(
+  when: number | string,
+  options: { seconds?: boolean; locale?: string; timeZone?: string } = {},
+): string {
+  const date = new Date(when)
+  if (Number.isNaN(date.getTime())) return String(when)
+  const { seconds = false, locale, timeZone } = options
+  return date.toLocaleString(locale, { dateStyle: 'medium', timeStyle: seconds ? 'medium' : 'short', timeZone })
+}
