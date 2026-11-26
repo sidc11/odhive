@@ -454,6 +454,169 @@
         }
       }
     },
+    "/api/v1/projects/{name}/backups": {
+      "get": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Lists the backups in the project's `backups/` folder, newest first:\nplain `.zip` and `.dump` files (links, folders and other files are left\nout). `database` is set for files named by OdHive.",
+        "operationId": "list_project_backups",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Backup"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/backups/{file}": {
+      "get": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Downloads a backup file of the project (`Content-Disposition:\nattachment`). Only plain files directly in `backups/` are served, never\nthrough a link.",
+        "operationId": "download_project_backup",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "Backup file name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a backup file name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project or backup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Deletes a backup file of the project (a plain file in `backups/`).",
+        "operationId": "delete_project_backup",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "Backup file name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "Not a backup file name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project or backup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{name}/databases": {
       "get": {
         "tags": [
@@ -781,6 +944,97 @@
           },
           "409": {
             "description": "An instance runs on the database, a job works on it, the project has no venv or is being set up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PostgreSQL cannot be used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{name}/databases/{database}/backup": {
+      "post": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Starts backing up a database the project lists into the project's\n`backups/` folder, as `<database>_<YYYYMMDD>-<HHMMSS>.zip` or `.dump`\n(UTC). A `zip` is Odoo's own backup (`odoo-bin db dump`: `dump.sql`,\n`filestore/`, `manifest.json`), the file Odoo's database manager and\nOdHive restore; a `dump` is `pg_dump --format=custom` without the\nfilestore. Instances may keep running: PostgreSQL dumps a consistent\nsnapshot. The file is checked, made private (`0600`) and only then put\nin place; a failed or cancelled backup leaves nothing. Follow the job\nwith `/jobs/{id}` or the WebSocket.",
+        "operationId": "backup_project_database",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "database",
+            "in": "path",
+            "description": "Database to back up",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupDatabase"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Backup started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project, or the project does not list this database",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A job works on the database, the project has no venv or is being set up, or the PostgreSQL client tools are missing",
             "content": {
               "application/json": {
                 "schema": {
@@ -2436,6 +2690,117 @@
           "auto",
           "ask",
           "off"
+        ]
+      },
+      "Backup": {
+        "type": "object",
+        "description": "A backup file in `backups/`.",
+        "required": [
+          "file",
+          "format",
+          "size",
+          "modified_at"
+        ],
+        "properties": {
+          "database": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The database it was made from, read from an OdHive file name."
+          },
+          "file": {
+            "type": "string",
+            "description": "File name inside `backups/`."
+          },
+          "format": {
+            "$ref": "#/components/schemas/BackupFormat",
+            "description": "What kind of file."
+          },
+          "modified_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Last change, milliseconds since the Unix epoch.",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Size in bytes.",
+            "minimum": 0
+          }
+        }
+      },
+      "BackupDatabase": {
+        "type": "object",
+        "description": "A backup to make.",
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/BackupFormat",
+            "description": "`zip` (default): Odoo's backup with `dump.sql`, the filestore and\n`manifest.json`. `dump`: a `pg_dump` custom-format archive only."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BackupEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A step started.",
+            "required": [
+              "step",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step"
+                ]
+              },
+              "step": {
+                "$ref": "#/components/schemas/BackupStep",
+                "description": "The step."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A line of `odoo-bin` or `pg_dump` output.",
+            "required": [
+              "line",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "output"
+                ]
+              },
+              "line": {
+                "type": "string",
+                "description": "The line."
+              }
+            }
+          }
+        ],
+        "description": "Progress of [`backup`]."
+      },
+      "BackupFormat": {
+        "type": "string",
+        "description": "What kind of backup.",
+        "enum": [
+          "zip",
+          "dump"
+        ]
+      },
+      "BackupStep": {
+        "type": "string",
+        "description": "A step of [`backup`].",
+        "enum": [
+          "dump",
+          "check"
         ]
       },
       "Candidate": {
@@ -4814,6 +5179,31 @@
                 "description": "The database copied."
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Backs up a database of a project into its `backups/` folder.",
+            "required": [
+              "project",
+              "database",
+              "kind"
+            ],
+            "properties": {
+              "database": {
+                "type": "string",
+                "description": "Database name."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "backup_database"
+                ]
+              },
+              "project": {
+                "type": "string",
+                "description": "Project name."
+              }
+            }
           }
         ],
         "description": "What a job does."
@@ -4953,6 +5343,26 @@
                   "type": "string"
                 },
                 "description": "Instances stopped because they ran on the source."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The new backup file.",
+            "required": [
+              "backup",
+              "kind"
+            ],
+            "properties": {
+              "backup": {
+                "$ref": "#/components/schemas/Backup",
+                "description": "The file, in the project's `backups/` folder."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "backup_database"
+                ]
               }
             }
           }
@@ -5108,6 +5518,29 @@
               }
             ],
             "description": "Progress of a database copy."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BackupEvent",
+                "description": "Progress of a database backup."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "job"
+                ],
+                "properties": {
+                  "job": {
+                    "type": "string",
+                    "enum": [
+                      "backup_database"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Progress of a database backup."
           }
         ],
         "description": "One step of a job's progress."

@@ -129,6 +129,8 @@ pub struct PgTools {
     pub psql: PathBuf,
     /// `pg_restore`.
     pub pg_restore: PathBuf,
+    /// `pg_dump`.
+    pub pg_dump: PathBuf,
     /// `psql`'s version, e.g. `(17, 6)`, when it could be read.
     pub psql_version: Option<(u32, u32)>,
 }
@@ -156,6 +158,7 @@ impl PgTools {
         Ok(Self {
             createdb: find("createdb")?,
             pg_restore: find("pg_restore")?,
+            pg_dump: find("pg_dump")?,
             psql,
             psql_version,
         })
@@ -426,7 +429,11 @@ pub(crate) fn pg_env(target: &PgTarget, place: &Place) -> Vec<(&'static str, OsS
 }
 
 /// A client tool command: the project env, then the connection variables.
-fn pg_command(odoo: &OdooCommand, program: &Path, env: &[(&'static str, OsString)]) -> Command {
+pub(super) fn pg_command(
+    odoo: &OdooCommand,
+    program: &Path,
+    env: &[(&'static str, OsString)],
+) -> Command {
     let mut cmd = Command::new(program);
     cmd.current_dir(&odoo.cwd).envs(&odoo.env.0);
     for k in PG_ENV_CLEARED {

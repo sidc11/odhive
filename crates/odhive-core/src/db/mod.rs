@@ -6,9 +6,11 @@
 //! [`create()`] creates one with the project's `odoo-bin`. [`restore()`]
 //! restores a dump (Odoo backup zip, `pg_dump` archive or SQL script).
 //! [`delete()`] drops one with its filestore. [`duplicate()`] copies one
-//! with its filestore.
+//! with its filestore. [`backup()`] backs one up into the project's
+//! `backups/` folder; [`list_backups`] lists that folder.
 
 pub mod archive;
+mod backup;
 mod create;
 mod delete;
 mod duplicate;
@@ -20,6 +22,10 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+pub use backup::{
+    Backup, BackupError, BackupEvent, BackupFormat, BackupRequest, BackupStep, MAX_BACKUP_NAME_LEN,
+    backup, backup_file_name, delete_backup, list_backups, open_backup, validate_backup_name,
+};
 pub use create::{
     CreateError, CreateEvent, CreateStep, CreatedDatabase, DEFAULT_LANGUAGE, DEFAULT_LOGIN,
     FINALIZE_SCRIPT, MAX_MODULES, NewDatabase, OdooCommand, create, exists, missing_modules,

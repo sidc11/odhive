@@ -287,7 +287,7 @@ impl Service {
             Some(job) => Err(ApiError::conflict(
                 "database_job_running",
                 format!(
-                    "a database of project {name} is being created, restored or deleted (job {})",
+                    "a database of project {name} is being created, restored, deleted, copied or backed up (job {})",
                     job.id
                 ),
             )),
@@ -306,7 +306,7 @@ impl Service {
             Some(job) => Err(ApiError::conflict(
                 "database_job_running",
                 format!(
-                    "database {database} of project {name} is being created, restored, deleted or copied (job {})",
+                    "database {database} of project {name} is being created, restored, deleted, copied or backed up (job {})",
                     job.id
                 ),
             )),

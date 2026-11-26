@@ -1354,3 +1354,218 @@ async fn a_cancelled_duplicate_removes_the_copy() {
     }
     assert!(exists(&target, "src", TIMEOUT).await.expect("exists"));
 }
+
+/// A fake-made database `name` in `s`'s project, with one filestore file.
+async fn backup_source(s: &RestoreSetup, name: &str) {
+    create(&s.target, &s.odoo, &NewDatabase::new(name), TIMEOUT, |_| {})
+        .await
+        .expect("create");
+    let fs = s.root.join("data/filestore").join(name).join("ab");
+    std::fs::create_dir_all(&fs).expect("mkdir");
+    std::fs::write(fs.join("cafe"), "attachment").expect("write");
+}
+
+async fn back_up(
+    s: &RestoreSetup,
+    database: &str,
+    format: BackupFormat,
+) -> (Result<Backup, BackupError>, Vec<BackupEvent>) {
+    let mut events = Vec::new();
+    let req = BackupRequest {
+        database: database.into(),
+        format,
+    };
+    let r = backup(
+        &s.target,
+        &s.odoo,
+        &s.tools,
+        &req,
+        &s.root.join("backups"),
+        TIMEOUT,
+        |e| events.push(e),
+    )
+    .await;
+    (r, events)
+}
+
+/// Everything in `backups/`, hidden entries too.
+fn backups_dir_entries(s: &RestoreSetup) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(s.root.join("backups"))
+        .map(|d| {
+            d.map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_backup_survives_a_drop_and_restores_neutralized() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let s = RestoreSetup::new(&pg, &[]).await;
+    backup_source(&s, "shop").await;
+
+    let (r, events) = back_up(&s, "shop", BackupFormat::Zip).await;
+    let zip = r.expect("zip backup");
+    assert_eq!(zip.format, BackupFormat::Zip);
+    assert_eq!(zip.database.as_deref(), Some("shop"));
+    assert!(zip.file.starts_with("shop_") && zip.file.ends_with(".zip"));
+    let steps: Vec<BackupStep> = events
+        .iter()
+        .filter_map(|e| match e {
+            BackupEvent::Step { step } => Some(*step),
+            BackupEvent::Output { .. } => None,
+        })
+        .collect();
+    assert_eq!(steps, [BackupStep::Dump, BackupStep::Check]);
+    // Odoo's temporary copy of the filestore went to the private staging
+    // folder, not /tmp.
+    let staging = s.root.join("backups").join(".odhive-backup-");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, BackupEvent::Output { line }
+            if line.contains("temporary folder") && line.contains(staging.to_str().unwrap()))),
+        "{events:?}"
+    );
+    let path = s.root.join("backups").join(&zip.file);
+    let meta = std::fs::metadata(&path).expect("backup file");
+    assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+    assert_eq!(meta.len(), zip.size);
+    let mut names: Vec<String> = zip::ZipArchive::new(std::fs::File::open(&path).expect("open"))
+        .expect("zip")
+        .file_names()
+        .map(|n| n.expect("name").into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["dump.sql", "filestore/ab/cafe", "manifest.json"]);
+
+    let (r, _) = back_up(&s, "shop", BackupFormat::Dump).await;
+    let dump = r.expect("dump backup");
+    assert_eq!(
+        archive::detect(&s.root.join("backups").join(&dump.file)).expect("detect"),
+        archive::DumpFormat::Custom
+    );
+    // Only the two backups are left: no staging folders.
+    let mut want = vec![zip.file.clone(), dump.file.clone()];
+    want.sort();
+    assert_eq!(backups_dir_entries(&s), want);
+    let listed = list_backups(&s.root.join("backups")).expect("list");
+    assert_eq!(listed.len(), 2);
+    assert!(listed.iter().all(|b| b.database.as_deref() == Some("shop")));
+
+    let filestore_root = s.root.join("data/filestore");
+    delete(&s.target, &s.odoo, "shop", &filestore_root, TIMEOUT, |_| {})
+        .await
+        .expect("drop");
+    assert!(!exists(&s.target, "shop", TIMEOUT).await.expect("exists"));
+
+    // The custom dump restores without psql.
+    let (r, _) = s
+        .restore(
+            &s.root.join("backups").join(&dump.file),
+            &RestoreRequest::new("shop_from_dump"),
+            "19.0",
+        )
+        .await;
+    r.expect("restore of the dump");
+    assert_eq!(
+        param(&pg, "shop_from_dump", NEUTRALIZED_KEY).await,
+        ["true"]
+    );
+
+    let (r, _) = s.restore(&path, &RestoreRequest::new("shop"), "19.0").await;
+    if !s.tools.psql_can_restrict() {
+        assert!(matches!(r, Err(RestoreError::PsqlTooOld { .. })), "{r:?}");
+        return;
+    }
+    let restored = r.expect("restore of the zip");
+    assert!(restored.neutralized);
+    assert_eq!(restored.filestore_files, 1);
+    assert_eq!(param(&pg, "shop", NEUTRALIZED_KEY).await, ["true"]);
+    assert_eq!(
+        query_db(
+            &pg,
+            "shop",
+            "SELECT value FROM odhive_fake WHERE key = 'login'"
+        )
+        .await,
+        ["admin"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(filestore_root.join("shop/ab/cafe")).expect("filestore"),
+        "attachment"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_backups_leave_nothing_behind() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let s = RestoreSetup::new(&pg, &[]).await;
+    backup_source(&s, "shop").await;
+    let (r, _) = back_up(&s, "missing", BackupFormat::Zip).await;
+    assert!(matches!(r, Err(BackupError::NotFound(_))), "{r:?}");
+    let (r, _) = back_up(&s, "x;DROP DATABASE shop", BackupFormat::Dump).await;
+    assert!(matches!(r, Err(BackupError::Name(_))), "{r:?}");
+
+    for (flag, step) in [
+        ("FAKE_DUMP_BROKEN", BackupStep::Dump),
+        ("FAKE_DUMP_NOT_ZIP", BackupStep::Check),
+    ] {
+        let broken = RestoreSetup::new(&pg, &[(flag, "1")]).await;
+        let (r, _) = back_up(&broken, "shop", BackupFormat::Zip).await;
+        assert!(
+            matches!(r, Err(BackupError::Failed { step: s, .. }) if s == step),
+            "{flag}: {r:?}"
+        );
+        assert!(backups_dir_entries(&broken).is_empty(), "{flag}");
+    }
+    assert!(exists(&s.target, "shop", TIMEOUT).await.expect("exists"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancelled_backup_leaves_nothing_behind() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let s = RestoreSetup::new(&pg, &[("FAKE_DUMP_DELAY", "30")]).await;
+    backup_source(&s, "shop").await;
+    {
+        let req = BackupRequest {
+            database: "shop".into(),
+            format: BackupFormat::Zip,
+        };
+        let dir = s.root.join("backups");
+        let mut started = false;
+        let work = backup(&s.target, &s.odoo, &s.tools, &req, &dir, TIMEOUT, |e| {
+            started |= matches!(e, BackupEvent::Output { .. });
+        });
+        tokio::pin!(work);
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !backups_dir_entries(&s)
+            .iter()
+            .any(|n| n.starts_with(".odhive-backup-"))
+        {
+            tokio::select! {
+                r = &mut work => panic!("finished: {r:?}"),
+                () = tokio::time::sleep(Duration::from_millis(100)) => {}
+            }
+            assert!(std::time::Instant::now() < deadline, "no staging folder");
+        }
+        // Let odoo-bin start, then drop `work` as a cancelled job does.
+        tokio::select! {
+            r = &mut work => panic!("finished: {r:?}"),
+            () = tokio::time::sleep(Duration::from_millis(500)) => {}
+        }
+    }
+    assert!(backups_dir_entries(&s).is_empty());
+}

@@ -1032,6 +1032,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "tower",
  "tracing",
  "utoipa",

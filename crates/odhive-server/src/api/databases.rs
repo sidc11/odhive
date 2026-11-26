@@ -9,18 +9,21 @@ use std::path::Path;
 
 use axum::Json;
 use axum::extract::{Extension, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use odhive_core::conf::{DATA_DIR, MASK};
 use odhive_core::db::archive::{self, ExtractLimits};
 use odhive_core::db::{
-    self, DEFAULT_LANGUAGE, DEFAULT_LOGIN, DatabaseList, DbHealth, DeleteError, DuplicateError,
-    DuplicateEvent, DuplicateRequest, DuplicateStep, NewDatabase, OdooCommand, PgTarget, PgTools,
-    RestoreError, RestoreOptions, RestoreRequest,
+    self, Backup, BackupError, BackupFormat, BackupRequest, DEFAULT_LANGUAGE, DEFAULT_LOGIN,
+    DatabaseList, DbHealth, DeleteError, DuplicateError, DuplicateEvent, DuplicateRequest,
+    DuplicateStep, NewDatabase, OdooCommand, PgTarget, PgTools, RestoreError, RestoreOptions,
+    RestoreRequest,
 };
 use odhive_core::envcheck::Requirement;
 use odhive_core::launch;
 use odhive_core::ports::PortOwner;
 use odhive_core::project::ProjectConfig;
+use odhive_core::setup::BACKUPS_DIR;
 use odhive_core::venv::{VENV_DIR, venv_python};
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
@@ -290,18 +293,7 @@ pub(super) async fn restore(
     let options = &config.odoo_options;
     let target = PgTarget::for_project(options, &config.env);
     let timeout = svc.env_options().timeout;
-    let path_var = config
-        .env
-        .0
-        .get("PATH")
-        .map(OsString::from)
-        .or_else(|| std::env::var_os("PATH"));
-    let tools = PgTools::find(
-        db::pg_path_option(options).as_deref(),
-        path_var.as_deref(),
-        timeout,
-    )
-    .await?;
+    let tools = pg_tools(config, timeout).await?;
     if db::exists(&target, &q.name, timeout).await? {
         return Err(db::CreateError::Exists(q.name).into());
     }
@@ -636,6 +628,201 @@ pub(super) async fn duplicate(
         })
     })?;
     Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// The project's `PgTools` (from `pg_path`, else the project's `PATH`, else
+/// the service's).
+async fn pg_tools(config: &ProjectConfig, timeout: std::time::Duration) -> ApiResult<PgTools> {
+    let path_var = config
+        .env
+        .0
+        .get("PATH")
+        .map(OsString::from)
+        .or_else(|| std::env::var_os("PATH"));
+    Ok(PgTools::find(
+        db::pg_path_option(&config.odoo_options).as_deref(),
+        path_var.as_deref(),
+        timeout,
+    )
+    .await?)
+}
+
+/// A backup to make.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BackupDatabase {
+    /// `zip` (default): Odoo's backup with `dump.sql`, the filestore and
+    /// `manifest.json`. `dump`: a `pg_dump` custom-format archive only.
+    #[serde(default)]
+    pub format: BackupFormat,
+}
+
+/// Starts backing up a database the project lists into the project's
+/// `backups/` folder, as `<database>_<YYYYMMDD>-<HHMMSS>.zip` or `.dump`
+/// (UTC). A `zip` is Odoo's own backup (`odoo-bin db dump`: `dump.sql`,
+/// `filestore/`, `manifest.json`), the file Odoo's database manager and
+/// OdHive restore; a `dump` is `pg_dump --format=custom` without the
+/// filestore. Instances may keep running: PostgreSQL dumps a consistent
+/// snapshot. The file is checked, made private (`0600`) and only then put
+/// in place; a failed or cancelled backup leaves nothing. Follow the job
+/// with `/jobs/{id}` or the WebSocket.
+#[utoipa::path(operation_id = "backup_project_database", post, path = "/projects/{name}/databases/{database}/backup", tag = "databases",
+    request_body = BackupDatabase,
+    params(
+        ("name" = String, Path, description = "Project name"),
+        ("database" = String, Path, description = "Database to back up"),
+    ),
+    responses(
+        (status = ACCEPTED, description = "Backup started", body = Job),
+        (status = BAD_REQUEST, description = "Invalid name", body = ErrorBody),
+        (status = NOT_FOUND, description = "No such project, or the project does not list this database", body = ErrorBody),
+        (status = CONFLICT, description = "A job works on the database, the project has no venv or is being set up, or the PostgreSQL client tools are missing", body = ErrorBody),
+        (status = SERVICE_UNAVAILABLE, description = "PostgreSQL cannot be used", body = ErrorBody),
+    ))]
+pub(super) async fn backup(
+    State(svc): State<Service>,
+    Params((name, database)): Params<(String, String)>,
+    Body(req): Body<BackupDatabase>,
+) -> ApiResult<(StatusCode, Json<Job>)> {
+    odhive_core::names::validate_db_name(&database).map_err(BackupError::from)?;
+    let (cfg, project) = svc.project(&name)?;
+    svc.ensure_not_setting_up(&name)?;
+    svc.ensure_database_idle(&name, &database)?;
+    let (community, _) = project.config.resolve_sources(&cfg)?;
+    let dir = project.dir();
+    let python = venv_python(&dir.join(VENV_DIR));
+    if !python.is_file() {
+        return Err(launch::LaunchError::NoVenv(dir.join(VENV_DIR), name.clone()).into());
+    }
+    let config = &project.config;
+    let target = PgTarget::for_project(&config.odoo_options, &config.env);
+    let timeout = svc.env_options().timeout;
+    let tools = pg_tools(config, timeout).await?;
+    if !lists(&svc, config, &target, &database).await? {
+        return Err(BackupError::NotFound(database).into());
+    }
+    let prepared = launch::prepare(&cfg, svc.paths(), &project, &[]).await?;
+    let odoo = OdooCommand {
+        python,
+        odoo_bin: community.path.join("odoo-bin"),
+        conf: prepared.conf,
+        cwd: dir.to_path_buf(),
+        env: config.env.clone(),
+    };
+    let backups_dir = dir.join(BACKUPS_DIR);
+    let request = BackupRequest {
+        database: database.clone(),
+        format: req.format,
+    };
+    let kind = JobKind::BackupDatabase {
+        project: name,
+        database,
+    };
+    let job = svc.jobs().spawn(kind, move |report| {
+        Box::pin(async move {
+            let backup = db::backup(
+                &target,
+                &odoo,
+                &tools,
+                &request,
+                &backups_dir,
+                timeout,
+                |e| report.step(JobStep::BackupDatabase(e)),
+            )
+            .await?;
+            Ok(JobResult::BackupDatabase { backup })
+        })
+    })?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// Lists the backups in the project's `backups/` folder, newest first:
+/// plain `.zip` and `.dump` files (links, folders and other files are left
+/// out). `database` is set for files named by OdHive.
+#[utoipa::path(operation_id = "list_project_backups", get, path = "/projects/{name}/backups", tag = "databases",
+    params(("name" = String, Path, description = "Project name")),
+    responses(
+        (status = OK, description = "Success", body = Vec<Backup>),
+        (status = NOT_FOUND, description = "No such project", body = ErrorBody),
+    ))]
+pub(super) async fn list_backups(
+    State(svc): State<Service>,
+    Params(name): Params<String>,
+) -> ApiResult<Json<Vec<Backup>>> {
+    let (_, project) = svc.project(&name)?;
+    let dir = project.dir().join(BACKUPS_DIR);
+    let backups = tokio::task::spawn_blocking(move || db::list_backups(&dir))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))??;
+    Ok(Json(backups))
+}
+
+/// Downloads a backup file of the project (`Content-Disposition:
+/// attachment`). Only plain files directly in `backups/` are served, never
+/// through a link.
+#[utoipa::path(operation_id = "download_project_backup", get, path = "/projects/{name}/backups/{file}", tag = "databases",
+    params(
+        ("name" = String, Path, description = "Project name"),
+        ("file" = String, Path, description = "Backup file name"),
+    ),
+    responses(
+        (status = OK, description = "The file", content_type = "application/octet-stream", body = Vec<u8>),
+        (status = BAD_REQUEST, description = "Not a backup file name", body = ErrorBody),
+        (status = NOT_FOUND, description = "No such project or backup", body = ErrorBody),
+    ))]
+pub(super) async fn download_backup(
+    State(svc): State<Service>,
+    Params((name, file)): Params<(String, String)>,
+) -> ApiResult<Response> {
+    db::validate_backup_name(&file)?;
+    let (_, project) = svc.project(&name)?;
+    let dir = project.dir().join(BACKUPS_DIR);
+    let (f, backup) = tokio::task::spawn_blocking(move || db::open_backup(&dir, &file))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))??;
+    let content_type = match backup.format {
+        BackupFormat::Zip => "application/zip",
+        BackupFormat::Dump => "application/octet-stream",
+    };
+    let stream = tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(f));
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type.to_owned()),
+            (header::CONTENT_LENGTH, backup.size.to_string()),
+            // The name passed `validate_backup_name`: nothing to escape.
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}\"", backup.file),
+            ),
+            (header::CACHE_CONTROL, "no-store".to_owned()),
+        ],
+        axum::body::Body::from_stream(stream),
+    )
+        .into_response())
+}
+
+/// Deletes a backup file of the project (a plain file in `backups/`).
+#[utoipa::path(operation_id = "delete_project_backup", delete, path = "/projects/{name}/backups/{file}", tag = "databases",
+    params(
+        ("name" = String, Path, description = "Project name"),
+        ("file" = String, Path, description = "Backup file name"),
+    ),
+    responses(
+        (status = NO_CONTENT, description = "Deleted"),
+        (status = BAD_REQUEST, description = "Not a backup file name", body = ErrorBody),
+        (status = NOT_FOUND, description = "No such project or backup", body = ErrorBody),
+    ))]
+pub(super) async fn delete_backup(
+    State(svc): State<Service>,
+    Params((name, file)): Params<(String, String)>,
+) -> ApiResult<StatusCode> {
+    db::validate_backup_name(&file)?;
+    let (_, project) = svc.project(&name)?;
+    let dir = project.dir().join(BACKUPS_DIR);
+    tokio::task::spawn_blocking(move || db::delete_backup(&dir, &file))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))??;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Streams the request body to a new private file at `path`, at most

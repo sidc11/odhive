@@ -16,8 +16,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use odhive_core::config::SourceEntry;
 use odhive_core::db::{
-    CreateEvent, CreatedDatabase, DeleteEvent, DeletedDatabase, DuplicateEvent, DuplicatedDatabase,
-    RestoreEvent, RestoredDatabase,
+    Backup, BackupEvent, CreateEvent, CreatedDatabase, DeleteEvent, DeletedDatabase,
+    DuplicateEvent, DuplicatedDatabase, RestoreEvent, RestoredDatabase,
 };
 use odhive_core::events::{Subscription, Topic};
 use odhive_core::requirements::InstallEvent;
@@ -86,24 +86,32 @@ pub enum JobKind {
         /// The database copied.
         source: String,
     },
+    /// Backs up a database of a project into its `backups/` folder.
+    BackupDatabase {
+        /// Project name.
+        project: String,
+        /// Database name.
+        database: String,
+    },
 }
 
 impl JobKind {
-    /// The project whose database this job creates, restores, deletes or
-    /// copies.
+    /// The project whose database this job creates, restores, deletes,
+    /// copies or backs up.
     #[must_use]
     pub fn database_project(&self) -> Option<&str> {
         self.database().map(|(project, _)| project)
     }
 
-    /// Project and database this job creates, restores, deletes or makes
-    /// as a copy.
+    /// Project and database this job creates, restores, deletes, makes as
+    /// a copy or backs up.
     #[must_use]
     pub fn database(&self) -> Option<(&str, &str)> {
         match self {
             Self::CreateDatabase { project, database }
             | Self::RestoreDatabase { project, database }
             | Self::DeleteDatabase { project, database }
+            | Self::BackupDatabase { project, database }
             | Self::DuplicateDatabase {
                 project, database, ..
             } => Some((project, database)),
@@ -112,7 +120,8 @@ impl JobKind {
     }
 
     /// Whether this job works on database `database` of `project`: the one
-    /// it creates, restores, deletes or makes, or the one it copies.
+    /// it creates, restores, deletes, makes or backs up, or the one it
+    /// copies.
     #[must_use]
     pub fn touches(&self, project: &str, database: &str) -> bool {
         if self.database() == Some((project, database)) {
@@ -153,6 +162,8 @@ pub enum JobStep {
     DeleteDatabase(DeleteEvent),
     /// Progress of a database copy.
     DuplicateDatabase(DuplicateEvent),
+    /// Progress of a database backup.
+    BackupDatabase(BackupEvent),
 }
 
 /// What a successful job produced.
@@ -193,6 +204,11 @@ pub enum JobResult {
         /// Those started again afterwards (instances run from a terminal
         /// are not).
         restarted: Vec<String>,
+    },
+    /// The new backup file.
+    BackupDatabase {
+        /// The file, in the project's `backups/` folder.
+        backup: Backup,
     },
 }
 
@@ -527,7 +543,8 @@ fn output_line(step: &JobStep) -> Option<&str> {
         | JobStep::CreateDatabase(CreateEvent::Output { line })
         | JobStep::RestoreDatabase(RestoreEvent::Output { line })
         | JobStep::DeleteDatabase(DeleteEvent::Output { line })
-        | JobStep::DuplicateDatabase(DuplicateEvent::Output { line }) => Some(line),
+        | JobStep::DuplicateDatabase(DuplicateEvent::Output { line })
+        | JobStep::BackupDatabase(BackupEvent::Output { line }) => Some(line),
         _ => None,
     }
 }
@@ -576,6 +593,13 @@ mod tests {
         };
         assert!(delete.touches("shop", "shop_main"));
         assert!(!delete.touches("shop", "shop_copy"));
+        let backup = JobKind::BackupDatabase {
+            project: "shop".into(),
+            database: "shop_main".into(),
+        };
+        assert_eq!(backup.database_project(), Some("shop"));
+        assert!(backup.touches("shop", "shop_main"));
+        assert!(!backup.touches("shop", "shop_copy"));
         let clone = JobKind::Clone {
             version: "19.0".into(),
         };

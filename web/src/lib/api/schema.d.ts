@@ -206,6 +206,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{name}/backups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lists the backups in the project's `backups/` folder, newest first:
+         *     plain `.zip` and `.dump` files (links, folders and other files are left
+         *     out). `database` is set for files named by OdHive.
+         */
+        get: operations["list_project_backups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{name}/backups/{file}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Downloads a backup file of the project (`Content-Disposition:
+         *     attachment`). Only plain files directly in `backups/` are served, never
+         *     through a link.
+         */
+        get: operations["download_project_backup"];
+        put?: never;
+        post?: never;
+        /** Deletes a backup file of the project (a plain file in `backups/`). */
+        delete: operations["delete_project_backup"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{name}/databases": {
         parameters: {
             query?: never;
@@ -286,6 +329,33 @@ export interface paths {
          *     Follow the job with `/jobs/{id}` or the WebSocket. There is no undo.
          */
         delete: operations["delete_project_database"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{name}/databases/{database}/backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Starts backing up a database the project lists into the project's
+         *     `backups/` folder, as `<database>_<YYYYMMDD>-<HHMMSS>.zip` or `.dump`
+         *     (UTC). A `zip` is Odoo's own backup (`odoo-bin db dump`: `dump.sql`,
+         *     `filestore/`, `manifest.json`), the file Odoo's database manager and
+         *     OdHive restore; a `dump` is `pg_dump --format=custom` without the
+         *     filestore. Instances may keep running: PostgreSQL dumps a consistent
+         *     snapshot. The file is checked, made private (`0600`) and only then put
+         *     in place; a failed or cancelled backup leaves nothing. Follow the job
+         *     with `/jobs/{id}` or the WebSocket.
+         */
+        post: operations["backup_project_database"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -798,6 +868,55 @@ export interface components {
          * @enum {string}
          */
         AutofixMode: "auto" | "ask" | "off";
+        /** @description A backup file in `backups/`. */
+        Backup: {
+            /** @description The database it was made from, read from an OdHive file name. */
+            database?: string | null;
+            /** @description File name inside `backups/`. */
+            file: string;
+            /** @description What kind of file. */
+            format: components["schemas"]["BackupFormat"];
+            /**
+             * Format: int64
+             * @description Last change, milliseconds since the Unix epoch.
+             */
+            modified_at: number;
+            /**
+             * Format: int64
+             * @description Size in bytes.
+             */
+            size: number;
+        };
+        /** @description A backup to make. */
+        BackupDatabase: {
+            /**
+             * @description `zip` (default): Odoo's backup with `dump.sql`, the filestore and
+             *     `manifest.json`. `dump`: a `pg_dump` custom-format archive only.
+             */
+            format?: components["schemas"]["BackupFormat"];
+        };
+        /** @description Progress of [`backup`]. */
+        BackupEvent: {
+            /** @enum {string} */
+            event: "step";
+            /** @description The step. */
+            step: components["schemas"]["BackupStep"];
+        } | {
+            /** @enum {string} */
+            event: "output";
+            /** @description The line. */
+            line: string;
+        };
+        /**
+         * @description What kind of backup.
+         * @enum {string}
+         */
+        BackupFormat: "zip" | "dump";
+        /**
+         * @description A step of [`backup`].
+         * @enum {string}
+         */
+        BackupStep: "dump" | "check";
         /** @description What would be installed for a missing module. */
         Candidate: {
             /** @description The missing top-level module. */
@@ -1668,6 +1787,13 @@ export interface components {
             project: string;
             /** @description The database copied. */
             source: string;
+        } | {
+            /** @description Database name. */
+            database: string;
+            /** @enum {string} */
+            kind: "backup_database";
+            /** @description Project name. */
+            project: string;
         };
         /** @description What a successful job produced. */
         JobResult: {
@@ -1707,6 +1833,11 @@ export interface components {
             restarted: string[];
             /** @description Instances stopped because they ran on the source. */
             stopped: string[];
+        } | {
+            /** @description The file, in the project's `backups/` folder. */
+            backup: components["schemas"]["Backup"];
+            /** @enum {string} */
+            kind: "backup_database";
         };
         /**
          * @description Where a job stands.
@@ -1732,6 +1863,9 @@ export interface components {
         }) | (components["schemas"]["DuplicateEvent"] & {
             /** @enum {string} */
             job: "duplicate_database";
+        }) | (components["schemas"]["BackupEvent"] & {
+            /** @enum {string} */
+            job: "backup_database";
         });
         /**
          * @description Severity of a record, in increasing order.
@@ -3036,6 +3170,122 @@ export interface operations {
             };
         };
     };
+    list_project_backups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Backup"][];
+                };
+            };
+            /** @description No such project */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    download_project_backup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+                /** @description Backup file name */
+                file: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": number[];
+                };
+            };
+            /** @description Not a backup file name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project or backup */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    delete_project_backup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+                /** @description Backup file name */
+                file: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a backup file name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project or backup */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     list_project_databases: {
         parameters: {
             query?: never;
@@ -3275,6 +3525,71 @@ export interface operations {
                 };
             };
             /** @description An instance runs on the database, a job works on it, the project has no venv or is being set up */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description PostgreSQL cannot be used */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    backup_project_database: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+                /** @description Database to back up */
+                database: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackupDatabase"];
+            };
+        };
+        responses: {
+            /** @description Backup started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Invalid name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project, or the project does not list this database */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A job works on the database, the project has no venv or is being set up, or the PostgreSQL client tools are missing */
             409: {
                 headers: {
                     [name: string]: unknown;
