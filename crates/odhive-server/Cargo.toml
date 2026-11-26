@@ -26,6 +26,7 @@ serde_json = "1"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["net", "rt-multi-thread", "macros", "signal", "time", "fs", "io-util"] }
+tokio-util = { version = "0.7.20", default-features = false, features = ["io"] }
 tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.44"
 utoipa = { version = "6.0.0", default-features = false, features = ["macros", "rc_schema"] }

@@ -374,7 +374,7 @@ async fn restore_is_refused_before_anything_runs() {
             .is_some_and(|m| m.contains("pg_restore"))
     );
 
-    dummy_pg_tools(&tools, &["pg_restore"]);
+    dummy_pg_tools(&tools, &["pg_restore", "pg_dump"]);
     let (status, body) = up("name=shop_main").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["error"], "postgres_unavailable");
@@ -1098,4 +1098,221 @@ async fn instances_on_the_source_are_stopped_only_when_asked() {
         .post("/api/v1/projects/shop/instances/main/stop", None)
         .await;
     assert!(status.is_success(), "{body}");
+}
+
+async fn backup_db(api: &common::Api, db: &str, body: Value) -> (StatusCode, Value) {
+    api.post(
+        &format!("/api/v1/projects/shop/databases/{db}/backup"),
+        Some(body),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn backups_are_refused_before_anything_runs() {
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+
+    for name in ["x%3BDROP%20DATABASE%20postgres", "x'y", "two%20words", "-x"] {
+        let (status, body) = backup_db(&api, name, json!({})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name:?}: {body}");
+        assert_eq!(body["error"], "invalid_name", "{name:?}: {body}");
+    }
+    for bad in [json!({ "format": "sql" }), json!({ "x": 1 })] {
+        let (status, body) = backup_db(&api, "shop_main", bad.clone()).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}: {body}");
+    }
+    let (status, body) = backup_db(&api, "shop_main", json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "no_venv");
+    let (status, body) = api
+        .post(
+            "/api/v1/projects/nope/databases/shop_main/backup",
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "unknown_project");
+
+    // Backup files: names only, never paths or other project files.
+    let (status, list) = api.get("/api/v1/projects/shop/backups").await;
+    assert_eq!((status, list), (StatusCode::OK, json!([])));
+    for file in [
+        "..%2Fodhive.toml",
+        "%2E%2E%2Fodhive.toml",
+        "odhive.toml",
+        ".hidden.zip",
+        "a%2Fb.zip",
+    ] {
+        for method in [axum::http::Method::GET, axum::http::Method::DELETE] {
+            let (status, body) = api
+                .call(
+                    method.clone(),
+                    &format!("/api/v1/projects/shop/backups/{file}"),
+                    None,
+                )
+                .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {file}: {body}");
+            assert_eq!(body["error"], "invalid_backup_name", "{body}");
+        }
+    }
+    let (status, body) = api.get("/api/v1/projects/shop/backups/none.zip").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "backup_not_found");
+    let (status, body) = api.get("/api/v1/projects/nope/backups").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (_, jobs) = api.get("/api/v1/jobs").await;
+    assert_eq!(jobs, json!([]), "no job was started");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_listed_database_is_backed_up_downloaded_and_restored() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    point_at(&env, &api, &pg).await;
+    odoo_like_db(&pg, "shop_main");
+    let dir = env.project_dir("shop");
+    let filestore = dir.join("data/filestore/shop_main");
+    std::fs::create_dir_all(filestore.join("ab")).expect("mkdir");
+    std::fs::write(filestore.join("ab/cafe"), "attachment").expect("write");
+
+    for db in ["postgres", "missing"] {
+        let (status, body) = backup_db(&api, db, json!({})).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{db}: {body}");
+        assert_eq!(body["error"], "database_not_found", "{body}");
+    }
+
+    let mut files = Vec::new();
+    for format in ["zip", "dump"] {
+        let (status, job) = backup_db(&api, "shop_main", json!({ "format": format })).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+        assert_eq!(job["kind"], "backup_database");
+        assert_eq!(job["database"], "shop_main");
+        let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+        assert_eq!(done["state"], "succeeded", "{done}");
+        let b = &done["result"]["backup"];
+        assert_eq!(b["format"], format);
+        assert_eq!(b["database"], "shop_main");
+        assert!(
+            done["steps"]
+                .as_array()
+                .expect("steps")
+                .iter()
+                .any(|s| s["job"] == "backup_database" && s["step"] == "check"),
+            "{done}"
+        );
+        files.push(b["file"].as_str().expect("file").to_owned());
+        // Same-second names would clash; real backups are seconds apart.
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+    }
+    let (status, list) = api.get("/api/v1/projects/shop/backups").await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let listed: Vec<&str> = list
+        .as_array()
+        .expect("list")
+        .iter()
+        .map(|b| b["file"].as_str().expect("file"))
+        .collect();
+    assert_eq!(
+        listed,
+        [files[1].as_str(), files[0].as_str()],
+        "newest first"
+    );
+    // Nothing but the two files in the folder.
+    let mut on_disk: Vec<String> = std::fs::read_dir(dir.join("backups"))
+        .expect("backups")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    on_disk.sort();
+    let mut want = files.clone();
+    want.sort();
+    assert_eq!(on_disk, want);
+
+    // Download: the file's bytes, as an attachment.
+    let mut downloaded = Vec::new();
+    for file in &files {
+        let resp = api
+            .respond(
+                axum::http::Method::GET,
+                &format!("/api/v1/projects/shop/backups/{file}"),
+                None,
+            )
+            .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let h = resp.headers().clone();
+        assert_eq!(
+            h["content-disposition"],
+            format!("attachment; filename=\"{file}\"").as_str()
+        );
+        assert_eq!(h["cache-control"], "no-store");
+        let bytes = http_body_util::BodyExt::collect(resp.into_body())
+            .await
+            .expect("body")
+            .to_bytes();
+        assert_eq!(h["content-length"], bytes.len().to_string().as_str());
+        assert_eq!(
+            bytes.as_ref(),
+            std::fs::read(dir.join("backups").join(file))
+                .expect("read")
+                .as_slice()
+        );
+        downloaded.push(bytes);
+    }
+    let zip = zip::ZipArchive::new(std::io::Cursor::new(downloaded[0].clone())).expect("zip");
+    let mut names: Vec<String> = zip
+        .file_names()
+        .map(|n| n.expect("name").into_owned())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["dump.sql", "filestore/ab/cafe", "manifest.json"]);
+
+    // A link in backups/ is neither listed nor served.
+    std::os::unix::fs::symlink(dir.join("odhive.toml"), dir.join("backups/link.zip"))
+        .expect("symlink");
+    let (_, list) = api.get("/api/v1/projects/shop/backups").await;
+    assert_eq!(list.as_array().expect("list").len(), 2, "{list}");
+    let (status, _) = api.get("/api/v1/projects/shop/backups/link.zip").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Drop the database, then restore the downloaded dump.
+    let (status, job) = delete_db(&api, "shop_main", json!({ "confirm": "shop_main" })).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    let work = tempfile::tempdir().expect("tempdir");
+    let dump = work.path().join("back.dump");
+    std::fs::write(&dump, &downloaded[1]).expect("write");
+    let (status, job) = upload_file(&api, "name=shop_main", &dump).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(
+        pg.psql(
+            "shop_main",
+            "SELECT value FROM ir_config_parameter WHERE key = 'database.is_neutralized'"
+        ),
+        ["true"]
+    );
+
+    // Delete a backup.
+    let (status, body) = api
+        .delete(&format!("/api/v1/projects/shop/backups/{}", files[0]))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert!(!dir.join("backups").join(&files[0]).exists());
+    let (status, _) = api
+        .delete(&format!("/api/v1/projects/shop/backups/{}", files[0]))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = api.delete("/api/v1/projects/shop/backups/link.zip").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "links are not deleted");
+    assert!(dir.join("odhive.toml").is_file());
 }

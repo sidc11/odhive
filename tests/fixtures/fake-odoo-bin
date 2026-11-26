@@ -39,6 +39,13 @@ folder, libpq `PG*` variables say where the server is):
                                  copy <data_dir>/filestore/SRC (FAKE_DUPLICATE_BROKEN=1: copy,
                                  then exit 1; FAKE_DUPLICATE_SAME_UUID=1: keep the UUID;
                                  FAKE_DUPLICATE_DELAY=S: wait S seconds after the copy)
+  db [-c CONF] dump [--format zip|dump] NAME PATH
+                                 zip: pg_dump --no-owner into dump.sql, manifest.json and
+                                 <data_dir>/filestore/NAME in a temporary folder (from TMPDIR,
+                                 logged), zipped to PATH; dump: pg_dump --format=c to PATH
+                                 (FAKE_DUMP_BROKEN=1: write half a file, exit 1;
+                                 FAKE_DUMP_NOT_ZIP=1: write text, exit 0; FAKE_DUMP_DELAY=S:
+                                 wait S seconds before writing)
   neutralize -d NAME             set database.is_neutralized in ir_config_parameter
                                  (FAKE_NEUTRALIZE_BROKEN=1: set nothing but exit 0)
   -d NAME -i MODS --stop-after-init
@@ -193,9 +200,15 @@ def db_main(argv):
     dup.add_argument("-n", "--neutralize", action="store_true")
     dup.add_argument("source")
     dup.add_argument("target")
+    dump = sub.add_parser("dump")
+    dump.add_argument("database")
+    dump.add_argument("dump_path")
+    dump.add_argument("--format", dest="dump_format", choices=("zip", "dump"), default="zip")
     args = p.parse_args(argv)
     if args.cmd == "duplicate":
         return duplicate(args)
+    if args.cmd == "dump":
+        return dump_db(args)
     db = args.database
     if args.cmd == "drop":
         if os.environ.get("FAKE_DROP_BROKEN") == "1":
@@ -254,6 +267,46 @@ def duplicate(args):
         time.sleep(delay)
     if os.environ.get("FAKE_DUPLICATE_BROKEN") == "1":
         sys.exit(f"Couldn't finish duplicating {src}: broken on purpose")
+    return 0
+
+
+def dump_db(args):
+    import json
+    import tempfile
+    import zipfile
+    db, path = args.database, args.dump_path
+    log("INFO", "odoo.service.db", f"DUMP DB: {db} format {args.dump_format} with filestore")
+    delay = float(os.environ.get("FAKE_DUMP_DELAY", "0"))
+    if delay:
+        time.sleep(delay)
+    if os.environ.get("FAKE_DUMP_BROKEN") == "1":
+        with open(path, "wb") as f:
+            f.write(b"PK\x03\x04half")
+        sys.exit(f"Couldn't dump {db}: broken on purpose")
+    if os.environ.get("FAKE_DUMP_NOT_ZIP") == "1":
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("not a zip\n")
+        return 0
+    if args.dump_format == "dump":
+        subprocess.run([pg_tool("pg_dump"), "--no-owner", "--format=c", f"--file={path}", db],
+                       check=True)
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        log("INFO", "odoo.service.db", f"temporary folder {tmp}")
+        subprocess.run([pg_tool("pg_dump"), "--no-owner", f"--file={os.path.join(tmp, 'dump.sql')}", db],
+                       check=True)
+        with open(os.path.join(tmp, "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump({"odoo_dump": "1", "db_name": db, "version": "19.0",
+                       "major_version": "19.0", "modules": {"base": "19.0.1.3"}}, f)
+        data_dir = conf_value(args.config, "data_dir")
+        fs = os.path.join(data_dir, "filestore", db) if data_dir else None
+        if fs and os.path.isdir(fs):
+            shutil.copytree(fs, os.path.join(tmp, "filestore"))
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            for root, _dirs, files in os.walk(tmp):
+                for name in sorted(files, key=lambda n: n != "dump.sql"):
+                    full = os.path.join(root, name)
+                    z.write(full, os.path.relpath(full, tmp))
     return 0
 
 

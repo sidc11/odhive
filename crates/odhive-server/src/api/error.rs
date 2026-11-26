@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use odhive_core::config::ConfigError;
 use odhive_core::db::archive::ArchiveError;
-use odhive_core::db::{CreateError, DeleteError, DuplicateError, RestoreError};
+use odhive_core::db::{BackupError, CreateError, DeleteError, DuplicateError, RestoreError};
 use odhive_core::launch::LaunchError;
 use odhive_core::manager::ManagerError;
 use odhive_core::pidfile::PidFileError;
@@ -290,6 +290,25 @@ impl From<DuplicateError> for ApiError {
             }
             DuplicateError::Spawn { .. } | DuplicateError::Failed { .. } => {
                 Self::new(StatusCode::INTERNAL_SERVER_ERROR, "duplicate_failed", msg)
+            }
+        }
+    }
+}
+
+impl From<BackupError> for ApiError {
+    fn from(e: BackupError) -> Self {
+        let msg = e.to_string();
+        match e {
+            BackupError::Name(_) => Self::bad_request("invalid_name", msg),
+            BackupError::NotFound(_) => Self::not_found("database_not_found", msg),
+            BackupError::InvalidFile(_) => Self::bad_request("invalid_backup_name", msg),
+            BackupError::FileNotFound(_) => Self::not_found("backup_not_found", msg),
+            BackupError::FileExists(_) => Self::conflict("backup_exists", msg),
+            BackupError::Server(_) => {
+                Self::new(StatusCode::SERVICE_UNAVAILABLE, "postgres_unavailable", msg)
+            }
+            BackupError::Spawn { .. } | BackupError::Failed { .. } | BackupError::Io { .. } => {
+                Self::new(StatusCode::INTERNAL_SERVER_ERROR, "backup_failed", msg)
             }
         }
     }
