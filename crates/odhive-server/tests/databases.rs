@@ -1351,6 +1351,17 @@ async fn snapshots_are_refused_before_anything_runs() {
     let api = env.app();
     let source = api.add_source(&env.source_dir()).await;
     api.create_project("shop", &source).await;
+    // Client tools are looked up before the snapshot folder: fake ones, so
+    // the answers below do not depend on psql being installed (macOS CI).
+    let tools = env.project_dir("shop").join("pgbin");
+    dummy_pg_tools(&tools, &["psql", "createdb", "pg_dump", "pg_restore"]);
+    let (status, body) = api
+        .put(
+            "/api/v1/projects/shop/options",
+            json!({ "options": { "pg_path": tools.to_str().expect("utf-8") } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 
     for name in ["x%3BDROP%20DATABASE%20postgres", "x'y", "two%20words", "-x"] {
         let (status, body) = snapshot_db(&api, name, json!({})).await;
