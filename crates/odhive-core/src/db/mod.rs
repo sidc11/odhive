@@ -7,7 +7,8 @@
 //! restores a dump (Odoo backup zip, `pg_dump` archive or SQL script).
 //! [`delete()`] drops one with its filestore. [`duplicate()`] copies one
 //! with its filestore. [`backup()`] backs one up into the project's
-//! `backups/` folder; [`list_backups`] lists that folder.
+//! `backups/` folder; [`list_backups`] lists that folder. [`Snapshots`]
+//! takes, lists, restores and deletes instant restore points.
 
 pub mod archive;
 mod backup;
@@ -16,6 +17,7 @@ mod delete;
 mod duplicate;
 mod list;
 mod restore;
+mod snapshot;
 mod target;
 
 use std::time::Duration;
@@ -42,6 +44,10 @@ pub use list::{Database, DatabaseList, list};
 pub use restore::{
     FINALIZE_RESTORE_SCRIPT, NEUTRALIZED_KEY, PgTools, RestoreError, RestoreEvent, RestoreOptions,
     RestoreRequest, RestoreStep, RestoredDatabase, pg_path_option, restore, template_option,
+};
+pub use snapshot::{
+    MAX_SNAPSHOT_SOURCE_LEN, RESTORING_SUFFIX, RestoredSnapshot, SNAPSHOTS_DIR, Snapshot,
+    SnapshotError, SnapshotEvent, SnapshotStep, Snapshots, parse_snapshot_name, snapshot_name,
 };
 pub use target::{ConnectionSettings, PgTarget, SOCKET_DIRS, SslMode};
 

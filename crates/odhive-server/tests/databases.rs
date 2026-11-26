@@ -1316,3 +1316,228 @@ async fn a_listed_database_is_backed_up_downloaded_and_restored() {
     assert_eq!(status, StatusCode::NOT_FOUND, "links are not deleted");
     assert!(dir.join("odhive.toml").is_file());
 }
+
+async fn snapshot_db(api: &common::Api, db: &str, body: Value) -> (StatusCode, Value) {
+    api.post(
+        &format!("/api/v1/projects/shop/databases/{db}/snapshot"),
+        Some(body),
+    )
+    .await
+}
+
+async fn restore_snapshot(api: &common::Api, snap: &str, body: Value) -> (StatusCode, Value) {
+    api.post(
+        &format!("/api/v1/projects/shop/snapshots/{snap}/restore"),
+        Some(body),
+    )
+    .await
+}
+
+fn step_names(job: &Value) -> Vec<String> {
+    job["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .filter(|s| s["event"] == "step")
+        .filter_map(|s| s["step"].as_str().map(str::to_owned))
+        .collect()
+}
+
+#[tokio::test]
+async fn snapshots_are_refused_before_anything_runs() {
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+
+    for name in ["x%3BDROP%20DATABASE%20postgres", "x'y", "two%20words", "-x"] {
+        let (status, body) = snapshot_db(&api, name, json!({})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name:?}: {body}");
+        assert_eq!(body["error"], "invalid_name", "{name:?}: {body}");
+    }
+    let long = "d".repeat(43);
+    let (status, body) = snapshot_db(&api, &long, json!({})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "name_too_long", "{body}");
+    let (status, body) = snapshot_db(&api, "shop_main", json!({ "x": 1 })).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let (status, body) = api
+        .post(
+            "/api/v1/projects/nope/databases/shop_main/snapshot",
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "unknown_project");
+
+    // Snapshot names only, never paths or other databases.
+    for snap in [
+        "shop_main",
+        "..%2Fshop_main__snap_20261126090503",
+        "shop_main__snap_2026",
+        "x%3BDROP__snap_20261126090503",
+        "shop_main__snap_20260231000000",
+    ] {
+        let (status, body) = restore_snapshot(&api, snap, json!({})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{snap}: {body}");
+        assert_eq!(body["error"], "invalid_snapshot_name", "{snap}: {body}");
+        let (status, body) = api
+            .call(
+                axum::http::Method::DELETE,
+                &format!("/api/v1/projects/shop/snapshots/{snap}"),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{snap}: {body}");
+        assert_eq!(body["error"], "invalid_snapshot_name", "{snap}: {body}");
+    }
+    // An unknown snapshot: the project has no folder for it.
+    let (status, body) = api
+        .call(
+            axum::http::Method::DELETE,
+            "/api/v1/projects/shop/snapshots/shop_main__snap_20261126090503",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "snapshot_not_found", "{body}");
+    let (_, jobs) = api.get("/api/v1/jobs").await;
+    assert_eq!(jobs, json!([]), "no job was started");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_snapshot_is_taken_restored_and_undoes_a_delete() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let env = Env::new();
+    let api = env.app();
+    let source = api.add_source(&env.source_dir()).await;
+    api.create_project("shop", &source).await;
+    point_at(&env, &api, &pg).await;
+    odoo_like_db(&pg, "shop_main");
+    let dir = env.project_dir("shop");
+    let filestore = dir.join("data/filestore/shop_main");
+    std::fs::create_dir_all(filestore.join("ab")).expect("mkdir");
+    std::fs::write(filestore.join("ab/cafe"), "attachment").expect("write");
+
+    for db in ["postgres", "missing"] {
+        let (status, body) = snapshot_db(&api, db, json!({})).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{db}: {body}");
+        assert_eq!(body["error"], "database_not_found", "{body}");
+    }
+    let (status, list) = api.get("/api/v1/projects/shop/snapshots").await;
+    assert_eq!((status, list), (StatusCode::OK, json!([])));
+
+    // Instance `main` runs on `shop_main`: refused unless asked to stop it.
+    let (status, body) = api
+        .post("/api/v1/projects/shop/instances/main/start", None)
+        .await;
+    assert!(status.is_success(), "{body}");
+    let (status, body) = snapshot_db(&api, "shop_main", json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "database_in_use", "{body}");
+    let (status, job) = snapshot_db(&api, "shop_main", json!({ "stop_instances": true })).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    assert_eq!(job["kind"], "snapshot_database");
+    assert_eq!(job["database"], "shop_main");
+    let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(
+        step_names(&done),
+        ["stop_instances", "copy", "filestore", "restart_instances"]
+    );
+    assert_eq!(done["result"]["stopped"], json!(["main"]), "{done}");
+    assert_eq!(done["result"]["restarted"], json!(["main"]), "{done}");
+    let snap = done["result"]["snapshot"].clone();
+    let name = snap["name"].as_str().expect("name").to_owned();
+    assert!(name.starts_with("shop_main__snap_"), "{snap}");
+    assert_eq!(snap["filestore"], true);
+    let (status, body) = api
+        .post("/api/v1/projects/shop/instances/main/stop", None)
+        .await;
+    assert!(status.is_success(), "{body}");
+
+    // Listed as a snapshot, never as a database.
+    let (_, list) = api.get("/api/v1/projects/shop/snapshots").await;
+    assert_eq!(list, json!([snap]));
+    let (_, dbs) = api.get("/api/v1/projects/shop/databases").await;
+    let names: Vec<&str> = dbs["databases"]
+        .as_array()
+        .expect("databases")
+        .iter()
+        .filter_map(|d| d["name"].as_str())
+        .collect();
+    assert_eq!(names, ["shop_main"], "{dbs}");
+
+    // Changes since the snapshot are undone.
+    pg.psql("shop_main", "DELETE FROM res_partner");
+    std::fs::remove_file(filestore.join("ab/cafe")).expect("unlink");
+    let (status, job) = restore_snapshot(&api, &name, json!({})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    assert_eq!(job["kind"], "restore_snapshot");
+    assert_eq!(job["snapshot"], name.as_str());
+    let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(step_names(&done), ["copy", "filestore", "swap"]);
+    assert_eq!(done["result"]["database"]["database"], "shop_main");
+    assert_eq!(
+        pg.psql("shop_main", "SELECT count(*) FROM res_partner"),
+        ["2"]
+    );
+    assert!(filestore.join("ab/cafe").is_file());
+
+    // Delete with a snapshot first, then undo it.
+    let (status, job) = delete_db(
+        &api,
+        "shop_main",
+        json!({ "confirm": "shop_main", "snapshot": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(step_names(&done), ["snapshot", "drop", "check"]);
+    let before_delete = done["result"]["snapshot"]["name"]
+        .as_str()
+        .expect("snapshot")
+        .to_owned();
+    assert!(
+        pg.psql(
+            "postgres",
+            "SELECT datname FROM pg_database WHERE datname = 'shop_main'"
+        )
+        .is_empty()
+    );
+    let (status, job) = restore_snapshot(&api, &before_delete, json!({})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let done = api.wait_job(job["id"].as_u64().expect("id")).await;
+    assert_eq!(done["state"], "succeeded", "{done}");
+    assert_eq!(
+        pg.psql("shop_main", "SELECT count(*) FROM res_partner"),
+        ["2"]
+    );
+    assert!(filestore.join("ab/cafe").is_file());
+
+    // Deleting snapshots leaves the database.
+    for snap in [&name, &before_delete] {
+        let (status, body) = api
+            .call(
+                axum::http::Method::DELETE,
+                &format!("/api/v1/projects/shop/snapshots/{snap}"),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    }
+    let (_, list) = api.get("/api/v1/projects/shop/snapshots").await;
+    assert_eq!(list, json!([]));
+    let (status, body) = restore_snapshot(&api, &name, json!({})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "snapshot_not_found");
+    assert_eq!(
+        pg.psql("shop_main", "SELECT count(*) FROM res_partner"),
+        ["2"]
+    );
+}

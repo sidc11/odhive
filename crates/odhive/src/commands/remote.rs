@@ -315,6 +315,14 @@ fn print_backup_event(e: odhive_core::db::BackupEvent) {
     }
 }
 
+fn print_snapshot_event(e: odhive_core::db::SnapshotEvent) {
+    use odhive_core::db::SnapshotEvent;
+    match e {
+        SnapshotEvent::Step { step } => say(format!("{step}…")),
+        SnapshotEvent::Output { .. } => {}
+    }
+}
+
 /// Prints a job's progress until it ends; Ctrl+C cancels it.
 async fn follow_job(c: &Client, mut job: Job) -> anyhow::Result<Job> {
     let mut signals = Signals::new()?;
@@ -332,6 +340,9 @@ async fn follow_job(c: &Client, mut job: Job) -> anyhow::Result<Job> {
                 JobStep::DeleteDatabase(e) => print_delete_event(e),
                 JobStep::DuplicateDatabase(e) => print_duplicate_event(e),
                 JobStep::BackupDatabase(e) => print_backup_event(e),
+                JobStep::SnapshotDatabase(e) | JobStep::RestoreSnapshot(e) => {
+                    print_snapshot_event(e);
+                }
             }
         }
         steps = steps.max(job.steps.len());

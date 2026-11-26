@@ -24,6 +24,9 @@ use crate::names::{self, NameError};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DeleteStep {
+    /// Taking a snapshot first, when asked (reported by the caller, which
+    /// does it).
+    Snapshot,
     /// Odoo drops the database and its filestore.
     Drop,
     /// Checking that the database and its filestore are gone.
@@ -33,6 +36,7 @@ pub enum DeleteStep {
 impl fmt::Display for DeleteStep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::Snapshot => "taking a snapshot first",
             Self::Drop => "dropping the database",
             Self::Check => "checking the database is gone",
         })

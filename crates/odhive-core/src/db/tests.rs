@@ -1569,3 +1569,417 @@ async fn a_cancelled_backup_leaves_nothing_behind() {
     }
     assert!(backups_dir_entries(&s).is_empty());
 }
+
+fn snapshots(s: &RestoreSetup, target: PgTarget) -> Snapshots {
+    Snapshots {
+        target,
+        tools: s.tools.clone(),
+        cwd: s.root.clone(),
+        env: s.odoo.env.clone(),
+        backups_dir: s.root.join("backups"),
+        filestore_root: s.root.join("data/filestore"),
+        timeout: TIMEOUT,
+    }
+}
+
+async fn partners(pg: &TempPg, db: &str) -> Vec<String> {
+    query_db(pg, db, "SELECT name FROM res_partner ORDER BY name").await
+}
+
+async fn db_flags(pg: &TempPg, db: &str) -> Vec<String> {
+    query_db(
+        pg,
+        "postgres",
+        &format!(
+            "SELECT datistemplate::text || ',' || datallowconn::text FROM pg_database \
+             WHERE datname = '{db}'"
+        ),
+    )
+    .await
+}
+
+fn steps_of(events: &[SnapshotEvent]) -> Vec<SnapshotStep> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            SnapshotEvent::Step { step } => Some(*step),
+            SnapshotEvent::Output { .. } => None,
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_snapshot_is_taken_hidden_and_restored_with_its_filestore() {
+    use std::os::unix::fs::MetadataExt;
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let s = RestoreSetup::new(&pg, &[]).await;
+    odoo_like_db(&pg, "shop").await;
+    let fs_dir = s.root.join("data/filestore/shop");
+    std::fs::create_dir_all(fs_dir.join("ab")).expect("mkdir");
+    std::fs::write(fs_dir.join("ab/cafe"), "attachment").expect("write");
+    let snaps = snapshots(&s, s.target.clone());
+
+    // An open session on the source does not stop the snapshot.
+    let (held, conn) = tokio_postgres::Config::new()
+        .host_path(&pg.socket_dir)
+        .port(5432)
+        .dbname("shop")
+        .connect(tokio_postgres::NoTls)
+        .await
+        .expect("connect");
+    let held_conn = tokio::spawn(conn);
+
+    let mut events = Vec::new();
+    let snap = snaps
+        .take("shop", |e| events.push(e))
+        .await
+        .expect("snapshot");
+    assert_eq!(
+        steps_of(&events),
+        [SnapshotStep::Copy, SnapshotStep::Filestore]
+    );
+    assert!(held_conn.await.is_ok() && held.is_closed());
+    assert!(snap.name.starts_with("shop__snap_"), "{snap:?}");
+    assert_eq!(parse_snapshot_name(&snap.name).expect("name").0, "shop");
+    assert!(snap.filestore && !snap.broken && snap.size.is_some());
+    // Hidden from Odoo and from the project's list; nobody may connect.
+    assert_eq!(db_flags(&pg, &snap.name).await, ["true,false"]);
+    let listed = list(&s.target, None, &[], None, TIMEOUT).await;
+    assert!(listed.databases.iter().all(|d| d.name != snap.name));
+    // The filestore is hard-linked, not copied.
+    let snap_dir = s.root.join("backups/snapshots").join(&snap.name);
+    let linked = snap_dir.join("filestore/ab/cafe");
+    assert_eq!(
+        std::fs::metadata(&linked).expect("meta").ino(),
+        std::fs::metadata(fs_dir.join("ab/cafe"))
+            .expect("meta")
+            .ino()
+    );
+    // No staging folder is left.
+    let entries: Vec<String> = std::fs::read_dir(s.root.join("backups/snapshots"))
+        .expect("read")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(entries, std::slice::from_ref(&snap.name));
+    assert_eq!(
+        snaps.list().await.expect("list"),
+        std::slice::from_ref(&snap)
+    );
+
+    // Change the database and the filestore the way Odoo does.
+    sql_in(
+        &pg,
+        "shop",
+        "DELETE FROM res_partner WHERE name = 'Azure'; INSERT INTO res_partner (name) VALUES ('New')",
+    )
+    .await;
+    std::fs::remove_file(fs_dir.join("ab/cafe")).expect("unlink");
+    std::fs::create_dir_all(fs_dir.join("cd")).expect("mkdir");
+    std::fs::write(fs_dir.join("cd/beef"), "later").expect("write");
+    assert_eq!(partners(&pg, "shop").await, ["Deco", "New"]);
+
+    let mut events = Vec::new();
+    let restored = snaps
+        .restore(&snap.name, |e| events.push(e))
+        .await
+        .expect("restore");
+    assert_eq!(
+        steps_of(&events),
+        [
+            SnapshotStep::Copy,
+            SnapshotStep::Filestore,
+            SnapshotStep::Swap
+        ]
+    );
+    assert_eq!(restored.database, "shop");
+    assert!(restored.filestore);
+    assert_eq!(partners(&pg, "shop").await, ["Azure", "Deco"]);
+    assert_eq!(db_flags(&pg, "shop").await, ["false,true"]);
+    assert_eq!(
+        std::fs::read_to_string(fs_dir.join("ab/cafe")).expect("read"),
+        "attachment"
+    );
+    assert!(!fs_dir.join("cd").exists());
+    // Nothing left over: no copy, no staging folder; the snapshot stays.
+    assert!(
+        !exists(&s.target, "shop__restoring", TIMEOUT)
+            .await
+            .expect("exists")
+    );
+    let filestores: Vec<String> = std::fs::read_dir(s.root.join("data/filestore"))
+        .expect("read")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(filestores, ["shop"]);
+    assert_eq!(db_flags(&pg, &snap.name).await, ["true,false"]);
+    assert!(linked.is_file());
+
+    // A deleted database comes back too.
+    let deleted = delete(
+        &s.target,
+        &s.odoo,
+        "shop",
+        &s.root.join("data/filestore"),
+        TIMEOUT,
+        |_| {},
+    )
+    .await
+    .expect("delete");
+    assert!(deleted.filestore_removed);
+    snaps.restore(&snap.name, |_| {}).await.expect("restore");
+    assert_eq!(partners(&pg, "shop").await, ["Azure", "Deco"]);
+    assert!(fs_dir.join("ab/cafe").is_file());
+
+    snaps.delete(&snap.name).await.expect("delete snapshot");
+    assert!(
+        !exists(&s.target, &snap.name, TIMEOUT)
+            .await
+            .expect("exists")
+    );
+    assert!(!snap_dir.exists());
+    assert!(snaps.list().await.expect("list").is_empty());
+    assert!(matches!(
+        snaps.delete(&snap.name).await,
+        Err(SnapshotError::SnapshotNotFound(_))
+    ));
+    // The database itself is untouched by deleting its snapshot.
+    assert_eq!(partners(&pg, "shop").await, ["Azure", "Deco"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_role_that_only_owns_its_databases_can_use_snapshots() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    pg.sql("CREATE ROLE maker LOGIN CREATEDB").await;
+    pg.sql("CREATE DATABASE mine OWNER maker").await;
+    sql_in(
+        &pg,
+        "mine",
+        "SET ROLE maker; CREATE TABLE res_partner (id serial PRIMARY KEY, name text); \
+         INSERT INTO res_partner (name) VALUES ('Azure')",
+    )
+    .await;
+    let s = RestoreSetup::new(&pg, &[]).await;
+    let mut env = s.odoo.env.clone();
+    env.0.insert("PGUSER".into(), "maker".into());
+    let snaps = Snapshots {
+        env,
+        ..snapshots(&s, pg.target(Some("maker")))
+    };
+    let snap = snaps.take("mine", |_| {}).await.expect("snapshot");
+    assert!(!snap.filestore);
+    assert!(
+        !s.root
+            .join("backups/snapshots")
+            .join(&snap.name)
+            .join("filestore")
+            .exists()
+    );
+    sql_in(&pg, "mine", "TRUNCATE res_partner").await;
+    let restored = snaps.restore(&snap.name, |_| {}).await.expect("restore");
+    assert!(!restored.filestore);
+    assert_eq!(partners(&pg, "mine").await, ["Azure"]);
+    snaps.delete(&snap.name).await.expect("delete");
+    assert!(
+        !exists(&s.target, &snap.name, TIMEOUT)
+            .await
+            .expect("exists")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_projects_own_snapshots_are_used() {
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let s = RestoreSetup::new(&pg, &[]).await;
+    odoo_like_db(&pg, "shop").await;
+    let snaps = snapshots(&s, s.target.clone());
+    let snap = snaps.take("shop", |_| {}).await.expect("snapshot");
+    // One right after another waits for the next second.
+    let next = snaps.take("shop", |_| {}).await.expect("second snapshot");
+    assert!(next.name > snap.name, "{} {}", next.name, snap.name);
+    snaps.delete(&next.name).await.expect("delete");
+
+    // Another project on the same server: no folder, so not its snapshot.
+    let other_root = tempfile::tempdir().expect("tempdir");
+    let other = Snapshots {
+        backups_dir: other_root.path().join("backups"),
+        filestore_root: other_root.path().join("filestore"),
+        ..snaps.clone()
+    };
+    assert!(other.list().await.expect("list").is_empty());
+    assert!(matches!(
+        other.restore(&snap.name, |_| {}).await,
+        Err(SnapshotError::SnapshotNotFound(_))
+    ));
+    assert!(matches!(
+        other.delete(&snap.name).await,
+        Err(SnapshotError::SnapshotNotFound(_))
+    ));
+    assert!(
+        exists(&s.target, &snap.name, TIMEOUT)
+            .await
+            .expect("exists")
+    );
+
+    // A folder whose copy was dropped outside OdHive is broken: listed,
+    // not restorable, deletable.
+    let lost = snapshot_name("shop", 1_700_000_000);
+    std::fs::create_dir(s.root.join("backups/snapshots").join(&lost)).expect("mkdir");
+    // Links, files and other names in the folder are not snapshots.
+    std::os::unix::fs::symlink(
+        s.root.join("backups/snapshots").join(&snap.name),
+        s.root
+            .join("backups/snapshots")
+            .join(snapshot_name("shop", 1_600_000_000)),
+    )
+    .expect("symlink");
+    std::fs::write(s.root.join("backups/snapshots/notes"), "x").expect("write");
+    let listed = snaps.list().await.expect("list");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|l| (l.name.as_str(), l.broken))
+            .collect::<Vec<_>>(),
+        [(snap.name.as_str(), false), (lost.as_str(), true)]
+    );
+    assert!(matches!(
+        snaps.restore(&lost, |_| {}).await,
+        Err(SnapshotError::SnapshotNotFound(_))
+    ));
+    snaps.delete(&lost).await.expect("delete broken");
+    assert!(!s.root.join("backups/snapshots").join(&lost).exists());
+
+    // Names are checked before anything else.
+    for bad in [
+        "shop",
+        "x;DROP DATABASE postgres__snap_20261126090503",
+        "../shop__snap_20261126090503",
+    ] {
+        assert!(matches!(
+            snaps.restore(bad, |_| {}).await,
+            Err(SnapshotError::InvalidName(_))
+        ));
+        assert!(matches!(
+            snaps.delete(bad).await,
+            Err(SnapshotError::InvalidName(_))
+        ));
+    }
+    for bad in ["a b", "x;DROP DATABASE postgres", "-x", ""] {
+        assert!(matches!(
+            snaps.take(bad, |_| {}).await,
+            Err(SnapshotError::Name(_))
+        ));
+    }
+    assert!(matches!(
+        snaps.take(&"d".repeat(43), |_| {}).await,
+        Err(SnapshotError::TooLong(_))
+    ));
+    assert!(matches!(
+        snaps.take("missing", |_| {}).await,
+        Err(SnapshotError::NotFound(_))
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_snapshots_and_restores_leave_things_as_they_were() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(pg) = TempPg::start() else {
+        eprintln!("skipped: no PostgreSQL server binaries");
+        return;
+    };
+    let s = RestoreSetup::new(&pg, &[]).await;
+    odoo_like_db(&pg, "shop").await;
+    let snaps = snapshots(&s, s.target.clone());
+    let snap = snaps.take("shop", |_| {}).await.expect("snapshot");
+
+    // A filestore folder that cannot be read: the copy is dropped again.
+    let locked = s.root.join("data/filestore/shop/locked");
+    std::fs::create_dir_all(&locked).expect("mkdir");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    let mut events = Vec::new();
+    let failed = snaps.take("shop", |e| events.push(e)).await;
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    assert!(
+        matches!(failed, Err(SnapshotError::Io { .. })),
+        "{failed:?}"
+    );
+    assert_eq!(steps_of(&events).last(), Some(&SnapshotStep::Cleanup));
+    let names: Vec<String> = snaps
+        .list()
+        .await
+        .expect("list")
+        .into_iter()
+        .map(|l| l.name)
+        .collect();
+    assert_eq!(names, std::slice::from_ref(&snap.name));
+    let left: Vec<String> = query_db(
+        &pg,
+        "postgres",
+        "SELECT datname::text FROM pg_database WHERE datname LIKE 'shop__snap_%'",
+    )
+    .await;
+    assert_eq!(left, std::slice::from_ref(&snap.name));
+    assert_eq!(
+        std::fs::read_dir(s.root.join("backups/snapshots"))
+            .expect("read")
+            .count(),
+        1
+    );
+
+    // A leftover `<db>__restoring` stops a restore before anything changes.
+    pg.sql("CREATE DATABASE shop__restoring").await;
+    sql_in(
+        &pg,
+        "shop",
+        "INSERT INTO res_partner (name) VALUES ('Kept')",
+    )
+    .await;
+    assert!(matches!(
+        snaps.restore(&snap.name, |_| {}).await,
+        Err(SnapshotError::Exists(n)) if n == "shop__restoring"
+    ));
+    assert_eq!(partners(&pg, "shop").await, ["Azure", "Deco", "Kept"]);
+    pg.sql("DROP DATABASE shop__restoring").await;
+
+    // A failing filestore copy on restore: the copy goes, the database stays.
+    let snap_fs = s
+        .root
+        .join("backups/snapshots")
+        .join(&snap.name)
+        .join("filestore");
+    std::fs::create_dir_all(snap_fs.join("locked")).expect("mkdir");
+    std::fs::set_permissions(
+        snap_fs.join("locked"),
+        std::fs::Permissions::from_mode(0o000),
+    )
+    .expect("chmod");
+    let failed = snaps.restore(&snap.name, |_| {}).await;
+    std::fs::set_permissions(
+        snap_fs.join("locked"),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .expect("chmod");
+    assert!(
+        matches!(failed, Err(SnapshotError::Io { .. })),
+        "{failed:?}"
+    );
+    assert_eq!(partners(&pg, "shop").await, ["Azure", "Deco", "Kept"]);
+    assert!(
+        !exists(&s.target, "shop__restoring", TIMEOUT)
+            .await
+            .expect("exists")
+    );
+    let staging: Vec<String> = std::fs::read_dir(s.root.join("data/filestore"))
+        .expect("read")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(staging, ["shop"]);
+}

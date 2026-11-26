@@ -15,9 +15,9 @@ use odhive_core::conf::{DATA_DIR, MASK};
 use odhive_core::db::archive::{self, ExtractLimits};
 use odhive_core::db::{
     self, Backup, BackupError, BackupFormat, BackupRequest, DEFAULT_LANGUAGE, DEFAULT_LOGIN,
-    DatabaseList, DbHealth, DeleteError, DuplicateError, DuplicateEvent, DuplicateRequest,
-    DuplicateStep, NewDatabase, OdooCommand, PgTarget, PgTools, RestoreError, RestoreOptions,
-    RestoreRequest,
+    DatabaseList, DbHealth, DeleteError, DeleteEvent, DeleteStep, DuplicateError, DuplicateEvent,
+    DuplicateRequest, DuplicateStep, NewDatabase, OdooCommand, PgTarget, PgTools, RestoreError,
+    RestoreOptions, RestoreRequest, SnapshotError, SnapshotEvent, SnapshotStep, Snapshots,
 };
 use odhive_core::envcheck::Requirement;
 use odhive_core::launch;
@@ -32,7 +32,7 @@ use super::error::{ApiError, ApiResult, ErrorBody};
 use super::{Body, Params, QueryArgs};
 use crate::jobs::{Job, JobKind, JobResult, JobStep};
 use crate::security::UploadLimits;
-use crate::service::Service;
+use crate::service::{OnDatabase, Service};
 
 /// Folder of the Odoo filestores inside the data folder.
 const FILESTORE_DIR: &str = "filestore";
@@ -378,6 +378,10 @@ pub struct DeleteDatabase {
     /// The database name, typed again exactly.
     #[schema(example = "shop_main")]
     pub confirm: String,
+    /// Take a snapshot first (a restore point to undo the delete with).
+    /// Default `false`.
+    #[serde(default)]
+    pub snapshot: bool,
 }
 
 /// Starts deleting a database the project lists, with its filestore, as
@@ -385,7 +389,9 @@ pub struct DeleteDatabase {
 /// ended, the database dropped, `data/filestore/<name>` removed). `confirm`
 /// must be the database name, typed exactly. Refused while an instance of
 /// the project runs on it (stop it first) or another job works on it.
-/// Follow the job with `/jobs/{id}` or the WebSocket. There is no undo.
+/// With `snapshot` a snapshot is taken first (the delete does not start
+/// when it fails), the only way back. Follow the job with `/jobs/{id}` or
+/// the WebSocket.
 #[utoipa::path(operation_id = "delete_project_database", delete, path = "/projects/{name}/databases/{database}", tag = "databases",
     request_body = DeleteDatabase,
     params(
@@ -443,17 +449,43 @@ pub(super) async fn delete(
     };
     let filestore_root = dir.join(DATA_DIR).join(FILESTORE_DIR);
     let timeout = opts.timeout;
+    let snaps = if req.snapshot {
+        if database.len() > db::MAX_SNAPSHOT_SOURCE_LEN {
+            return Err(SnapshotError::TooLong(database).into());
+        }
+        Some(project_snapshots(config, dir, timeout).await?)
+    } else {
+        None
+    };
     let kind = JobKind::DeleteDatabase {
         project: name,
         database: database.clone(),
     };
     let job = svc.jobs().spawn(kind, move |report| {
         Box::pin(async move {
-            let database = db::delete(&target, &odoo, &database, &filestore_root, timeout, |e| {
-                report.step(JobStep::DeleteDatabase(e));
-            })
-            .await?;
-            Ok(JobResult::DeleteDatabase { database })
+            let step = |e: DeleteEvent| report.step(JobStep::DeleteDatabase(e));
+            let snapshot = match snaps {
+                Some(snaps) => {
+                    step(DeleteEvent::Step {
+                        step: DeleteStep::Snapshot,
+                    });
+                    let taken = snaps
+                        .take(&database, |e| {
+                            if let SnapshotEvent::Output { line } = e {
+                                step(DeleteEvent::Output { line });
+                            }
+                        })
+                        .await?;
+                    step(DeleteEvent::Output {
+                        line: format!("snapshot {} taken", taken.name),
+                    });
+                    Some(taken)
+                }
+                None => None,
+            };
+            let database =
+                db::delete(&target, &odoo, &database, &filestore_root, timeout, &step).await?;
+            Ok(JobResult::DeleteDatabase { database, snapshot })
         })
     })?;
     Ok((StatusCode::ACCEPTED, Json(job)))
@@ -585,41 +617,19 @@ pub(super) async fn duplicate(
             let svc = job_svc;
             let step = |e: DuplicateEvent| report.step(JobStep::DuplicateDatabase(e));
             let line = |line: String| step(DuplicateEvent::Output { line });
-            let mut stopped = Vec::new();
-            let mut to_restart = Vec::new();
             if !users.is_empty() {
                 step(DuplicateEvent::Step {
                     step: DuplicateStep::StopInstances,
                 });
-                for user in &users {
-                    let owner = PortOwner::new(&name, &user.instance);
-                    svc.stop(&owner).await?;
-                    line(format!("stopped instance {owner}"));
-                    stopped.push(user.instance.clone());
-                    if user.managed {
-                        to_restart.push(user.instance.clone());
-                    }
-                }
             }
+            let (stopped, to_restart) = stop_users(&svc, &name, &users, &line).await?;
             let copied = db::duplicate(&target, &odoo, &dup, &filestore_root, timeout, &step).await;
-            let mut restarted = Vec::new();
             if !to_restart.is_empty() {
                 step(DuplicateEvent::Step {
                     step: DuplicateStep::RestartInstances,
                 });
-                for id in to_restart {
-                    match svc.start(&name, &id, false).await {
-                        Ok(_) => {
-                            line(format!("started instance {name}/{id} again"));
-                            restarted.push(id);
-                        }
-                        Err(e) => line(format!(
-                            "could not start instance {name}/{id} again: {}",
-                            e.message
-                        )),
-                    }
-                }
             }
+            let restarted = restart_users(&svc, &name, to_restart, &line).await;
             Ok(JobResult::DuplicateDatabase {
                 database: copied?,
                 stopped,
@@ -628,6 +638,293 @@ pub(super) async fn duplicate(
         })
     })?;
     Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// Stops `users` (instances of `project`), reporting each on `line`.
+/// Returns the ids stopped and those OdHive runs, to start again.
+async fn stop_users(
+    svc: &Service,
+    project: &str,
+    users: &[OnDatabase],
+    line: &impl Fn(String),
+) -> ApiResult<(Vec<String>, Vec<String>)> {
+    let mut stopped = Vec::new();
+    let mut to_restart = Vec::new();
+    for user in users {
+        let owner = PortOwner::new(project, &user.instance);
+        svc.stop(&owner).await?;
+        line(format!("stopped instance {owner}"));
+        stopped.push(user.instance.clone());
+        if user.managed {
+            to_restart.push(user.instance.clone());
+        }
+    }
+    Ok((stopped, to_restart))
+}
+
+/// Starts `ids` of `project` again; a failure is a `line`, not an error.
+async fn restart_users(
+    svc: &Service,
+    project: &str,
+    ids: Vec<String>,
+    line: &impl Fn(String),
+) -> Vec<String> {
+    let mut restarted = Vec::new();
+    for id in ids {
+        match svc.start(project, &id, false).await {
+            Ok(_) => {
+                line(format!("started instance {project}/{id} again"));
+                restarted.push(id);
+            }
+            Err(e) => line(format!(
+                "could not start instance {project}/{id} again: {}",
+                e.message
+            )),
+        }
+    }
+    restarted
+}
+
+/// The project's snapshot settings: its server, client tools, folders.
+async fn project_snapshots(
+    config: &ProjectConfig,
+    dir: &Path,
+    timeout: std::time::Duration,
+) -> ApiResult<Snapshots> {
+    Ok(Snapshots {
+        target: PgTarget::for_project(&config.odoo_options, &config.env),
+        tools: pg_tools(config, timeout).await?,
+        cwd: dir.to_path_buf(),
+        env: config.env.clone(),
+        backups_dir: dir.join(BACKUPS_DIR),
+        filestore_root: dir.join(DATA_DIR).join(FILESTORE_DIR),
+        timeout,
+    })
+}
+
+/// Instances to stop before a snapshot job on `database`; refused with
+/// `database_in_use` unless `stop` is set.
+fn users_to_stop(
+    svc: &Service,
+    config: &ProjectConfig,
+    database: &str,
+    stop: bool,
+) -> ApiResult<Vec<OnDatabase>> {
+    let users = svc.instances_on(config, database)?;
+    if !users.is_empty() && !stop {
+        return Err(SnapshotError::InUse {
+            name: database.to_owned(),
+            instances: users.into_iter().map(|u| u.instance).collect(),
+        }
+        .into());
+    }
+    Ok(users)
+}
+
+/// Takes or restores a snapshot.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotRequest {
+    /// Stop the project's instances running on the database first (and
+    /// start those run by OdHive again afterwards). Without it, running
+    /// instances refuse with `database_in_use`.
+    #[serde(default)]
+    pub stop_instances: bool,
+}
+
+/// Starts taking a snapshot of a database the project lists: an instant
+/// restore point `<database>__snap_<YYYYMMDDHHMMSS>` (UTC). PostgreSQL
+/// copies the database with it as a template (other sessions on it are
+/// ended), the copy is hidden from Odoo and locked, and the filestore is
+/// hard-linked into `backups/snapshots/<snapshot>/`. Instances of the
+/// project running on it are refused with `database_in_use` unless
+/// `stop_instances` is set. Database names longer than 42 characters
+/// cannot be snapshotted. Follow the job with `/jobs/{id}` or the
+/// WebSocket; a failed or cancelled snapshot leaves nothing.
+#[utoipa::path(operation_id = "snapshot_project_database", post, path = "/projects/{name}/databases/{database}/snapshot", tag = "databases",
+    request_body = SnapshotRequest,
+    params(
+        ("name" = String, Path, description = "Project name"),
+        ("database" = String, Path, description = "Database to snapshot"),
+    ),
+    responses(
+        (status = ACCEPTED, description = "Snapshot started", body = Job),
+        (status = BAD_REQUEST, description = "Invalid or too long name", body = ErrorBody),
+        (status = NOT_FOUND, description = "No such project, or the project does not list this database", body = ErrorBody),
+        (status = CONFLICT, description = "Instances run on the database, a job works on it, the project is being set up, or the PostgreSQL client tools are missing", body = ErrorBody),
+        (status = SERVICE_UNAVAILABLE, description = "PostgreSQL cannot be used", body = ErrorBody),
+    ))]
+pub(super) async fn snapshot(
+    State(svc): State<Service>,
+    Params((name, database)): Params<(String, String)>,
+    Body(req): Body<SnapshotRequest>,
+) -> ApiResult<(StatusCode, Json<Job>)> {
+    odhive_core::names::validate_db_name(&database).map_err(SnapshotError::from)?;
+    if database.len() > db::MAX_SNAPSHOT_SOURCE_LEN {
+        return Err(SnapshotError::TooLong(database).into());
+    }
+    let (_, project) = svc.project(&name)?;
+    svc.ensure_not_setting_up(&name)?;
+    svc.ensure_database_idle(&name, &database)?;
+    let config = &project.config;
+    let snaps = project_snapshots(config, project.dir(), svc.env_options().timeout).await?;
+    if !lists(&svc, config, &snaps.target, &database).await? {
+        return Err(SnapshotError::NotFound(database).into());
+    }
+    let users = users_to_stop(&svc, config, &database, req.stop_instances)?;
+    let kind = JobKind::SnapshotDatabase {
+        project: name.clone(),
+        database: database.clone(),
+    };
+    let job_svc = svc.clone();
+    let job = svc.jobs().spawn(kind, move |report| {
+        Box::pin(async move {
+            let svc = job_svc;
+            let step = |e: SnapshotEvent| report.step(JobStep::SnapshotDatabase(e));
+            let line = |line: String| step(SnapshotEvent::Output { line });
+            if !users.is_empty() {
+                step(SnapshotEvent::Step {
+                    step: SnapshotStep::StopInstances,
+                });
+            }
+            let (stopped, to_restart) = stop_users(&svc, &name, &users, &line).await?;
+            let taken = snaps.take(&database, &step).await;
+            if !to_restart.is_empty() {
+                step(SnapshotEvent::Step {
+                    step: SnapshotStep::RestartInstances,
+                });
+            }
+            let restarted = restart_users(&svc, &name, to_restart, &line).await;
+            Ok(JobResult::SnapshotDatabase {
+                snapshot: taken?,
+                stopped,
+                restarted,
+            })
+        })
+    })?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// Lists the project's snapshots, newest first. `broken` ones lost their
+/// PostgreSQL copy (dropped outside OdHive) and can only be deleted.
+#[utoipa::path(operation_id = "list_project_snapshots", get, path = "/projects/{name}/snapshots", tag = "databases",
+    params(("name" = String, Path, description = "Project name")),
+    responses(
+        (status = OK, description = "Success", body = Vec<db::Snapshot>),
+        (status = NOT_FOUND, description = "No such project", body = ErrorBody),
+        (status = CONFLICT, description = "The PostgreSQL client tools are missing", body = ErrorBody),
+        (status = SERVICE_UNAVAILABLE, description = "PostgreSQL cannot be used", body = ErrorBody),
+    ))]
+pub(super) async fn list_snapshots(
+    State(svc): State<Service>,
+    Params(name): Params<String>,
+) -> ApiResult<Json<Vec<db::Snapshot>>> {
+    let (_, project) = svc.project(&name)?;
+    let snaps =
+        project_snapshots(&project.config, project.dir(), svc.env_options().timeout).await?;
+    Ok(Json(snaps.list().await?))
+}
+
+/// Starts putting a database back as the snapshot has it, with its
+/// filestore. The snapshot is copied first; only then is the database
+/// dropped (other sessions ended) and the copy put in its place, so a
+/// failure before that changes nothing. Everything done in the database
+/// since the snapshot is lost; the snapshot itself is kept. Works for a
+/// database deleted since. Instances of the project running on it are
+/// refused with `database_in_use` unless `stop_instances` is set.
+#[utoipa::path(operation_id = "restore_project_snapshot", post, path = "/projects/{name}/snapshots/{snapshot}/restore", tag = "databases",
+    request_body = SnapshotRequest,
+    params(
+        ("name" = String, Path, description = "Project name"),
+        ("snapshot" = String, Path, description = "Snapshot name"),
+    ),
+    responses(
+        (status = ACCEPTED, description = "Restore started", body = Job),
+        (status = BAD_REQUEST, description = "Not a snapshot name", body = ErrorBody),
+        (status = NOT_FOUND, description = "No such project or snapshot", body = ErrorBody),
+        (status = CONFLICT, description = "Instances run on the database, a job works on it, the project is being set up, or the PostgreSQL client tools are missing", body = ErrorBody),
+        (status = SERVICE_UNAVAILABLE, description = "PostgreSQL cannot be used", body = ErrorBody),
+    ))]
+pub(super) async fn restore_snapshot(
+    State(svc): State<Service>,
+    Params((name, snapshot)): Params<(String, String)>,
+    Body(req): Body<SnapshotRequest>,
+) -> ApiResult<(StatusCode, Json<Job>)> {
+    let (database, _) = db::parse_snapshot_name(&snapshot)?;
+    let (_, project) = svc.project(&name)?;
+    svc.ensure_not_setting_up(&name)?;
+    svc.ensure_database_idle(&name, &database)?;
+    let config = &project.config;
+    let snaps = project_snapshots(config, project.dir(), svc.env_options().timeout).await?;
+    if !snaps
+        .list()
+        .await?
+        .iter()
+        .any(|s| s.name == snapshot && !s.broken)
+    {
+        return Err(SnapshotError::SnapshotNotFound(snapshot).into());
+    }
+    let users = users_to_stop(&svc, config, &database, req.stop_instances)?;
+    let kind = JobKind::RestoreSnapshot {
+        project: name.clone(),
+        database,
+        snapshot: snapshot.clone(),
+    };
+    let job_svc = svc.clone();
+    let job = svc.jobs().spawn(kind, move |report| {
+        Box::pin(async move {
+            let svc = job_svc;
+            let step = |e: SnapshotEvent| report.step(JobStep::RestoreSnapshot(e));
+            let line = |line: String| step(SnapshotEvent::Output { line });
+            if !users.is_empty() {
+                step(SnapshotEvent::Step {
+                    step: SnapshotStep::StopInstances,
+                });
+            }
+            let (stopped, to_restart) = stop_users(&svc, &name, &users, &line).await?;
+            let restored = snaps.restore(&snapshot, &step).await;
+            if !to_restart.is_empty() {
+                step(SnapshotEvent::Step {
+                    step: SnapshotStep::RestartInstances,
+                });
+            }
+            let restarted = restart_users(&svc, &name, to_restart, &line).await;
+            Ok(JobResult::RestoreSnapshot {
+                database: restored?,
+                stopped,
+                restarted,
+            })
+        })
+    })?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// Deletes a snapshot of the project: its PostgreSQL copy and its folder in
+/// `backups/snapshots/`. Refused while a job works on its database. The
+/// database itself is not touched.
+#[utoipa::path(operation_id = "delete_project_snapshot", delete, path = "/projects/{name}/snapshots/{snapshot}", tag = "databases",
+    params(
+        ("name" = String, Path, description = "Project name"),
+        ("snapshot" = String, Path, description = "Snapshot name"),
+    ),
+    responses(
+        (status = NO_CONTENT, description = "Deleted"),
+        (status = BAD_REQUEST, description = "Not a snapshot name", body = ErrorBody),
+        (status = NOT_FOUND, description = "No such project or snapshot", body = ErrorBody),
+        (status = CONFLICT, description = "A job works on the database, or the PostgreSQL client tools are missing", body = ErrorBody),
+        (status = SERVICE_UNAVAILABLE, description = "PostgreSQL cannot be used", body = ErrorBody),
+    ))]
+pub(super) async fn delete_snapshot(
+    State(svc): State<Service>,
+    Params((name, snapshot)): Params<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let (database, _) = db::parse_snapshot_name(&snapshot)?;
+    let (_, project) = svc.project(&name)?;
+    svc.ensure_database_idle(&name, &database)?;
+    let snaps =
+        project_snapshots(&project.config, project.dir(), svc.env_options().timeout).await?;
+    snaps.delete(&snapshot).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The project's `PgTools` (from `pg_path`, else the project's `PATH`, else

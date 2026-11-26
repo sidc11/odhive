@@ -17,7 +17,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use odhive_core::config::SourceEntry;
 use odhive_core::db::{
     Backup, BackupEvent, CreateEvent, CreatedDatabase, DeleteEvent, DeletedDatabase,
-    DuplicateEvent, DuplicatedDatabase, RestoreEvent, RestoredDatabase,
+    DuplicateEvent, DuplicatedDatabase, RestoreEvent, RestoredDatabase, RestoredSnapshot, Snapshot,
+    SnapshotEvent,
 };
 use odhive_core::events::{Subscription, Topic};
 use odhive_core::requirements::InstallEvent;
@@ -93,6 +94,22 @@ pub enum JobKind {
         /// Database name.
         database: String,
     },
+    /// Takes a snapshot of a database of a project.
+    SnapshotDatabase {
+        /// Project name.
+        project: String,
+        /// Database name.
+        database: String,
+    },
+    /// Puts a database of a project back as a snapshot has it.
+    RestoreSnapshot {
+        /// Project name.
+        project: String,
+        /// Database name.
+        database: String,
+        /// The snapshot.
+        snapshot: String,
+    },
 }
 
 impl JobKind {
@@ -112,6 +129,10 @@ impl JobKind {
             | Self::RestoreDatabase { project, database }
             | Self::DeleteDatabase { project, database }
             | Self::BackupDatabase { project, database }
+            | Self::SnapshotDatabase { project, database }
+            | Self::RestoreSnapshot {
+                project, database, ..
+            }
             | Self::DuplicateDatabase {
                 project, database, ..
             } => Some((project, database)),
@@ -164,6 +185,10 @@ pub enum JobStep {
     DuplicateDatabase(DuplicateEvent),
     /// Progress of a database backup.
     BackupDatabase(BackupEvent),
+    /// Progress of a snapshot.
+    SnapshotDatabase(SnapshotEvent),
+    /// Progress of a snapshot restore.
+    RestoreSnapshot(SnapshotEvent),
 }
 
 /// What a successful job produced.
@@ -194,6 +219,8 @@ pub enum JobResult {
     DeleteDatabase {
         /// What was deleted.
         database: DeletedDatabase,
+        /// The snapshot taken first, when asked.
+        snapshot: Option<Snapshot>,
     },
     /// The copy.
     DuplicateDatabase {
@@ -209,6 +236,24 @@ pub enum JobResult {
     BackupDatabase {
         /// The file, in the project's `backups/` folder.
         backup: Backup,
+    },
+    /// The new snapshot.
+    SnapshotDatabase {
+        /// What was taken.
+        snapshot: Snapshot,
+        /// Instances stopped because they ran on the database.
+        stopped: Vec<String>,
+        /// Those started again afterwards.
+        restarted: Vec<String>,
+    },
+    /// The database put back.
+    RestoreSnapshot {
+        /// What was restored.
+        database: RestoredSnapshot,
+        /// Instances stopped because they ran on the database.
+        stopped: Vec<String>,
+        /// Those started again afterwards.
+        restarted: Vec<String>,
     },
 }
 
@@ -544,7 +589,9 @@ fn output_line(step: &JobStep) -> Option<&str> {
         | JobStep::RestoreDatabase(RestoreEvent::Output { line })
         | JobStep::DeleteDatabase(DeleteEvent::Output { line })
         | JobStep::DuplicateDatabase(DuplicateEvent::Output { line })
-        | JobStep::BackupDatabase(BackupEvent::Output { line }) => Some(line),
+        | JobStep::BackupDatabase(BackupEvent::Output { line })
+        | JobStep::SnapshotDatabase(SnapshotEvent::Output { line })
+        | JobStep::RestoreSnapshot(SnapshotEvent::Output { line }) => Some(line),
         _ => None,
     }
 }
@@ -600,6 +647,19 @@ mod tests {
         assert_eq!(backup.database_project(), Some("shop"));
         assert!(backup.touches("shop", "shop_main"));
         assert!(!backup.touches("shop", "shop_copy"));
+        let restore = JobKind::RestoreSnapshot {
+            project: "shop".into(),
+            database: "shop_main".into(),
+            snapshot: "shop_main__snap_20261126090503".into(),
+        };
+        assert_eq!(restore.database(), Some(("shop", "shop_main")));
+        assert!(restore.touches("shop", "shop_main"));
+        let snap = JobKind::SnapshotDatabase {
+            project: "shop".into(),
+            database: "shop_main".into(),
+        };
+        assert!(snap.touches("shop", "shop_main"));
+        assert!(!snap.touches("other", "shop_main"));
         let clone = JobKind::Clone {
             version: "19.0".into(),
         };
