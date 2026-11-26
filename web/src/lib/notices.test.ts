@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { routedFetch } from '../test-fixtures'
 import type { Job, ManagerEvent } from './api'
 import { ApiClient } from './api/client'
-import { MAX_BODY, Notifier, hintText, jobToast } from './notices'
+import { MAX_BODY, Notifier, hintText, jobName, jobToast } from './notices'
 import { ToastStore } from './toasts.svelte'
 
 type Body = ManagerEvent extends infer E ? (E extends ManagerEvent ? Omit<E, 'project' | 'instance'> : never) : never
@@ -171,5 +171,18 @@ describe('Notifier', () => {
     notifier.handle({ type: 'job_events', events: [{ event: 'started', job: { ...clone, state: 'running' } as Job }] })
     notifier.handle({ type: 'job_events', events: [{ event: 'finished', job: { ...clone, state: 'succeeded' } as Job }] })
     expect(toasts.items.map((t) => t.title)).toEqual(['Clone of Odoo 19.0 finished'])
+  })
+
+  it('names database jobs by what they do, not as a setup', () => {
+    const job = (kind: string, extra: object = {}) =>
+      ({ id: 1, kind, project: 'shop', database: 'shop_main', state: 'succeeded', started_at: 1, steps: [], output: [], output_dropped: 0, ...extra }) as Job
+    expect(jobName(job('create_database'))).toBe('Creation of database shop_main')
+    expect(jobName(job('restore_database'))).toBe('Restore of database shop_main')
+    expect(jobName(job('delete_database'))).toBe('Deletion of database shop_main')
+    expect(jobName(job('duplicate_database', { database: 'shop_copy', source: 'shop_main' }))).toBe('Copy of shop_main to shop_copy')
+    expect(jobName(job('backup_database'))).toBe('Backup of shop_main')
+    expect(jobName(job('snapshot_database'))).toBe('Snapshot of shop_main')
+    expect(jobName(job('restore_snapshot', { snapshot: 'shop_main__snap_20261126090500' }))).toBe('Snapshot restore of shop_main')
+    expect(jobToast(job('backup_database'))?.title).toBe('Backup of shop_main finished')
   })
 })

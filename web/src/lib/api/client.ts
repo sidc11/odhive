@@ -57,26 +57,89 @@ function isErrorBody(body: unknown): body is ApiError {
 
 const segment = encodeURIComponent
 
+/** The parsed body of a `status` answer, or the `ApiRequestError` it means. */
+function answer<T>(status: number, text: string): T {
+  let parsed: unknown = null
+  if (text !== '') {
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      parsed = null
+    }
+  }
+  if (status >= 200 && status < 300) return parsed as T
+  if (status === 401) {
+    throw new ApiRequestError(401, 'unauthorized', 'Not signed in. Run `odhive` in a terminal to open a signed-in tab.')
+  }
+  if (isErrorBody(parsed)) throw new ApiRequestError(status, parsed.error, parsed.message)
+  throw new ApiRequestError(status, 'http_error', `Request failed (HTTP ${status}).`)
+}
+
+/** Bytes sent of an upload so far, and its size. */
+export interface UploadProgress {
+  sent: number
+  total: number
+}
+
+export interface Upload {
+  url: string
+  headers: Record<string, string>
+  body: Blob
+  onprogress?: (progress: UploadProgress) => void
+  signal?: AbortSignal
+}
+
+/** Sends a raw `POST` body; answers the status and the body text. */
+export type Uploader = (upload: Upload) => Promise<{ status: number; text: string }>
+
+/** Error code of an upload the user stopped. */
+export const ABORTED = 'aborted'
+
+/** `fetch` cannot report upload progress; `XMLHttpRequest` can. */
+export const xhrUpload: Uploader = (upload) =>
+  new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', upload.url)
+    xhr.withCredentials = true
+    for (const [key, value] of Object.entries(upload.headers)) xhr.setRequestHeader(key, value)
+    xhr.upload.onprogress = (event) => upload.onprogress?.({ sent: event.loaded, total: event.total })
+    xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText })
+    xhr.onerror = () => reject(new ApiRequestError(0, UNREACHABLE, 'OdHive is not reachable. Is the service running?'))
+    xhr.onabort = () => reject(new ApiRequestError(0, ABORTED, 'Upload stopped.'))
+    if (upload.signal?.aborted) {
+      reject(new ApiRequestError(0, ABORTED, 'Upload stopped.'))
+      return
+    }
+    upload.signal?.addEventListener('abort', () => xhr.abort(), { once: true })
+    xhr.send(upload.body)
+  })
+
 interface Request {
   body?: unknown
-  query?: Record<string, string | number | null | undefined>
+  query?: Record<string, string | number | boolean | null | undefined>
 }
 
 export class ApiClient {
   private readonly fetcher: typeof fetch
+  private readonly uploader: Uploader
 
-  constructor(fetcher: typeof fetch = (...args) => fetch(...args)) {
+  constructor(fetcher: typeof fetch = (...args) => fetch(...args), uploader: Uploader = xhrUpload) {
     this.fetcher = fetcher
+    this.uploader = uploader
   }
 
-  private async call<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, request: Request = {}): Promise<T> {
+  private url(path: string, query: Request['query'] = {}): string {
     let url = `${API_PREFIX}${path}`
     const params = new URLSearchParams()
-    for (const [key, value] of Object.entries(request.query ?? {})) {
+    for (const [key, value] of Object.entries(query)) {
       if (value !== null && value !== undefined) params.set(key, String(value))
     }
     if (params.size > 0) url += `?${params}`
+    return url
+  }
 
+  private async call<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, request: Request = {}): Promise<T> {
+    const url = this.url(path, request.query)
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (method !== 'GET') headers[MUTATION_HEADER] = '1'
     let body: string | undefined
@@ -92,20 +155,7 @@ export class ApiClient {
       throw new ApiRequestError(0, UNREACHABLE, 'OdHive is not reachable. Is the service running?')
     }
     const text = await response.text().catch(() => '')
-    let parsed: unknown = null
-    if (text !== '') {
-      try {
-        parsed = JSON.parse(text)
-      } catch {
-        parsed = null
-      }
-    }
-    if (response.ok) return parsed as T
-    if (response.status === 401) {
-      throw new ApiRequestError(401, 'unauthorized', 'Not signed in. Run `odhive` in a terminal to open a signed-in tab.')
-    }
-    if (isErrorBody(parsed)) throw new ApiRequestError(response.status, parsed.error, parsed.message)
-    throw new ApiRequestError(response.status, 'http_error', `Request failed (HTTP ${response.status}).`)
+    return answer<T>(response.status, text)
   }
 
   private get<T>(path: string, query?: Request['query']): Promise<T> {
@@ -262,6 +312,105 @@ export class ApiClient {
     query: Query<'instance_logs'> = {},
   ): Promise<Ok<'instance_logs', 200>> {
     return this.get(`${this.instancePath(project, instance)}/logs`, query)
+  }
+
+  // Databases
+
+  private projectPath(project: string): string {
+    return `/projects/${segment(project)}`
+  }
+
+  checkProjectPostgres(project: string): Promise<Ok<'check_project_postgres', 200>> {
+    return this.get(`${this.projectPath(project)}/postgres`)
+  }
+
+  listDatabases(project: string): Promise<Ok<'list_project_databases', 200>> {
+    return this.get(`${this.projectPath(project)}/databases`)
+  }
+
+  createDatabase(project: string, body: Body<'create_project_database'>): Promise<Ok<'create_project_database', 202>> {
+    return this.post(`${this.projectPath(project)}/databases`, body)
+  }
+
+  /** Uploads a dump (Odoo zip, pg_dump archive or SQL script) and starts restoring it. */
+  async restoreDatabase(
+    project: string,
+    file: Blob,
+    query: Query<'restore_project_database'>,
+    options: { onprogress?: (progress: UploadProgress) => void; signal?: AbortSignal } = {},
+  ): Promise<Ok<'restore_project_database', 202>> {
+    const { status, text } = await this.uploader({
+      url: this.url(`${this.projectPath(project)}/databases/restore`, query),
+      headers: { Accept: 'application/json', [MUTATION_HEADER]: '1', 'Content-Type': 'application/octet-stream' },
+      body: file,
+      ...options,
+    })
+    return answer(status, text)
+  }
+
+  deleteDatabase(
+    project: string,
+    database: string,
+    body: Body<'delete_project_database'>,
+  ): Promise<Ok<'delete_project_database', 202>> {
+    return this.call('DELETE', `${this.projectPath(project)}/databases/${segment(database)}`, { body })
+  }
+
+  duplicateDatabase(
+    project: string,
+    database: string,
+    body: Body<'duplicate_project_database'>,
+  ): Promise<Ok<'duplicate_project_database', 202>> {
+    return this.post(`${this.projectPath(project)}/databases/${segment(database)}/duplicate`, body)
+  }
+
+  backupDatabase(
+    project: string,
+    database: string,
+    body: Body<'backup_project_database'>,
+  ): Promise<Ok<'backup_project_database', 202>> {
+    return this.post(`${this.projectPath(project)}/databases/${segment(database)}/backup`, body)
+  }
+
+  snapshotDatabase(
+    project: string,
+    database: string,
+    body: Body<'snapshot_project_database'>,
+  ): Promise<Ok<'snapshot_project_database', 202>> {
+    return this.post(`${this.projectPath(project)}/databases/${segment(database)}/snapshot`, body)
+  }
+
+  // Backups
+
+  listBackups(project: string): Promise<Ok<'list_project_backups', 200>> {
+    return this.get(`${this.projectPath(project)}/backups`)
+  }
+
+  /** Where the browser downloads a backup (a plain link; the cookie signs it in). */
+  backupUrl(project: string, file: string): string {
+    return this.url(`${this.projectPath(project)}/backups/${segment(file)}`)
+  }
+
+  deleteBackup(project: string, file: string): Promise<void> {
+    return this.call('DELETE', `${this.projectPath(project)}/backups/${segment(file)}`)
+  }
+
+  // Snapshots
+
+  listSnapshots(project: string): Promise<Ok<'list_project_snapshots', 200>> {
+    return this.get(`${this.projectPath(project)}/snapshots`)
+  }
+
+  restoreSnapshot(
+    project: string,
+    snapshot: string,
+    body: Body<'restore_project_snapshot'>,
+  ): Promise<Ok<'restore_project_snapshot', 202>> {
+    return this.post(`${this.projectPath(project)}/snapshots/${segment(snapshot)}/restore`, body)
+  }
+
+  deleteSnapshot(project: string, snapshot: string): Promise<void> {
+    return this.call('DELETE', `${this.projectPath(project)}/snapshots/${segment(snapshot)}`)
   }
 
   // Jobs

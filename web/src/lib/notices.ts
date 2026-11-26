@@ -28,8 +28,27 @@ export function hintText(hint: Hint): string {
   return clip([...commands, hint.note ?? ''].filter((line) => line !== '').join('\n'))
 }
 
-function jobName(job: Job): string {
-  return job.kind === 'clone' ? `Clone of Odoo ${job.version}` : `Setup of ${job.project}`
+export function jobName(job: Job): string {
+  switch (job.kind) {
+    case 'clone':
+      return `Clone of Odoo ${job.version}`
+    case 'setup':
+      return `Setup of ${job.project}`
+    case 'create_database':
+      return `Creation of database ${job.database}`
+    case 'restore_database':
+      return `Restore of database ${job.database}`
+    case 'delete_database':
+      return `Deletion of database ${job.database}`
+    case 'duplicate_database':
+      return `Copy of ${job.source} to ${job.database}`
+    case 'backup_database':
+      return `Backup of ${job.database}`
+    case 'snapshot_database':
+      return `Snapshot of ${job.database}`
+    case 'restore_snapshot':
+      return `Snapshot restore of ${job.database}`
+  }
 }
 
 export function jobToast(job: Job): ToastInput | null {

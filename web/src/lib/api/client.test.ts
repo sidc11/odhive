@@ -148,4 +148,62 @@ describe('ApiClient', () => {
     expectTypeOf(api.cloneSource).returns.resolves.toEqualTypeOf<Job>()
     expectTypeOf(api.createProject).parameter(0).toEqualTypeOf<CreateProject>()
   })
+
+  it('sends database requests to their routes', async () => {
+    const job = { id: 1 }
+    const { fetcher, calls } = routedFetch({
+      'GET /projects/a%20b/databases': [200, { databases: [] }],
+      'POST /projects/a%20b/databases': [202, job],
+      'DELETE /projects/a%20b/databases/shop.main': [202, job],
+      'POST /projects/a%20b/databases/shop.main/duplicate': [202, job],
+      'POST /projects/a%20b/databases/shop.main/backup': [202, job],
+      'POST /projects/a%20b/databases/shop.main/snapshot': [202, job],
+      'GET /projects/a%20b/backups': [200, []],
+      'DELETE /projects/a%20b/backups/x.zip': [204],
+      'GET /projects/a%20b/snapshots': [200, []],
+      'POST /projects/a%20b/snapshots/s__snap_1/restore': [202, job],
+      'DELETE /projects/a%20b/snapshots/s__snap_1': [204],
+    })
+    const api = new ApiClient(fetcher)
+    await api.listDatabases('a b')
+    await api.createDatabase('a b', { name: 'shop.main', password: 'pw' })
+    await api.deleteDatabase('a b', 'shop.main', { confirm: 'shop.main' })
+    await api.duplicateDatabase('a b', 'shop.main', { name: 'shop_copy' })
+    await api.backupDatabase('a b', 'shop.main', { format: 'dump' })
+    await api.snapshotDatabase('a b', 'shop.main', {})
+    await api.listBackups('a b')
+    expect(await api.deleteBackup('a b', 'x.zip')).toBeNull()
+    await api.listSnapshots('a b')
+    await api.restoreSnapshot('a b', 's__snap_1', { stop_instances: true })
+    await api.deleteSnapshot('a b', 's__snap_1')
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'GET /projects/a%20b/databases',
+      'POST /projects/a%20b/databases',
+      'DELETE /projects/a%20b/databases/shop.main',
+      'POST /projects/a%20b/databases/shop.main/duplicate',
+      'POST /projects/a%20b/databases/shop.main/backup',
+      'POST /projects/a%20b/databases/shop.main/snapshot',
+      'GET /projects/a%20b/backups',
+      'DELETE /projects/a%20b/backups/x.zip',
+      'GET /projects/a%20b/snapshots',
+      'POST /projects/a%20b/snapshots/s__snap_1/restore',
+      'DELETE /projects/a%20b/snapshots/s__snap_1',
+    ])
+    expect(calls[2]).toMatchObject({ headers: { 'X-OdHive': '1' }, body: { confirm: 'shop.main' } })
+    expect(calls[4]?.body).toEqual({ format: 'dump' })
+    expect(api.backupUrl('a b', 'x y.zip')).toBe('/api/v1/projects/a%20b/backups/x%20y.zip')
+  })
+
+  it('reads the answer of an upload like any other', async () => {
+    const refused = async () => ({ status: 409, text: JSON.stringify({ error: 'database_exists', message: 'taken' }) })
+    const api = new ApiClient(routedFetch({}).fetcher, refused)
+    const error = await api.restoreDatabase('shop', new Blob(['x']), { name: 'shop_main' }).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ApiRequestError)
+    expect(error).toMatchObject({ status: 409, code: 'database_exists', message: 'taken' })
+
+    const unauthorized = new ApiClient(routedFetch({}).fetcher, async () => ({ status: 401, text: '' }))
+    await expect(unauthorized.restoreDatabase('shop', new Blob(['x']), { name: 'shop_main' })).rejects.toMatchObject({
+      code: 'unauthorized',
+    })
+  })
 })

@@ -23,6 +23,11 @@
     class="mt-4 inline-flex min-h-9 items-center rounded-md border border-line px-3 text-sm font-medium hover:bg-surface-sunken"
     onclick={router.link}>Odoo options</a
   >
+  <a
+    href={routeHref({ name: 'databases', project: name })}
+    class="mt-4 ml-2 inline-flex min-h-9 items-center rounded-md border border-line px-3 text-sm font-medium hover:bg-surface-sunken"
+    onclick={router.link}>Databases</a
+  >
   <h2 class="mt-6 text-lg font-semibold">Instances</h2>
   {#if project.instances.length === 0}
     <p class="mt-2 text-sm text-fg-muted">No instances.</p>

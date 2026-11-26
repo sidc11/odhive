@@ -69,5 +69,17 @@ export type JobStep = Schemas['JobStep']
 export type CloneSource = Schemas['CloneSource']
 export type SetupRequest = Schemas['SetupRequest']
 
+/** Databases of a project, their backups and snapshots. */
+export type Database = Schemas['Database']
+export type DatabaseList = Schemas['DatabaseList']
+export type CreateDatabase = Schemas['CreateDatabase']
+export type DeleteDatabase = Schemas['DeleteDatabase']
+export type DuplicateDatabase = Schemas['DuplicateDatabase']
+export type BackupFormat = Schemas['BackupFormat']
+export type Backup = Schemas['Backup']
+export type Snapshot = Schemas['Snapshot']
+export type JobKind = Schemas['JobKind']
+export type JobResult = Schemas['JobResult']
+
 /** One-time code that signs a browser in at `path` (`/login?t=…`). */
 export type LoginCode = Schemas['LoginCode']
