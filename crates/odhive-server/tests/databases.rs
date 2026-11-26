@@ -385,8 +385,10 @@ async fn restore_is_refused_before_anything_runs() {
 }
 
 /// Gives project `shop` a venv and points it (and the fake odoo-bin) at `pg`.
-async fn point_at(env: &Env, api: &common::Api, pg: &TempPg) {
-    env.make_runnable("shop", 18_269, 18_272);
+/// `http` is the pinned HTTP port of instance `main` (gevent = `http + 3`):
+/// tests that start it run in parallel, so each needs its own.
+async fn point_at(env: &Env, api: &common::Api, pg: &TempPg, http: u16) {
+    env.make_runnable("shop", http, http + 3);
     let dir = env.project_dir("shop");
     let mut p = ProjectConfig::load(&dir).expect("load");
     let socket = pg.socket_dir.to_str().expect("utf-8").to_owned();
@@ -452,7 +454,7 @@ async fn an_uploaded_dump_is_restored_and_listed() {
     let api = env.app();
     let source = api.add_source(&env.source_dir()).await;
     api.create_project("shop", &source).await;
-    point_at(&env, &api, &pg).await;
+    point_at(&env, &api, &pg, 18_269).await;
     odoo_like_db(&pg, "prod");
     let work = tempfile::tempdir().expect("tempdir");
     let dump = work.path().join("prod.dump");
@@ -562,7 +564,7 @@ async fn uploads_without_a_length_are_cut_at_the_limit_and_stalls_time_out() {
     let mut api = env.app();
     let source = api.add_source(&env.source_dir()).await;
     api.create_project("shop", &source).await;
-    point_at(&env, &api, &pg).await;
+    point_at(&env, &api, &pg, 18_279).await;
     let limits = RequestLimits {
         upload: UploadLimits {
             max_bytes: 1000,
@@ -717,7 +719,7 @@ async fn a_listed_database_is_deleted_with_its_filestore() {
     let api = env.app();
     let source = api.add_source(&env.source_dir()).await;
     api.create_project("shop", &source).await;
-    point_at(&env, &api, &pg).await;
+    point_at(&env, &api, &pg, 18_289).await;
     odoo_like_db(&pg, "old");
     let filestore = env.project_dir("shop").join("data/filestore/old");
     std::fs::create_dir_all(filestore.join("ab")).expect("mkdir");
@@ -801,7 +803,7 @@ async fn a_database_an_instance_runs_on_is_not_deleted() {
     let api = env.app();
     let source = api.add_source(&env.source_dir()).await;
     api.create_project("shop", &source).await;
-    point_at(&env, &api, &pg).await;
+    point_at(&env, &api, &pg, 18_299).await;
     // Instance `main` uses database `shop_main`.
     odoo_like_db(&pg, "shop_main");
     let (status, body) = api
@@ -937,7 +939,7 @@ async fn a_listed_database_is_copied_with_its_filestore() {
     let api = env.app();
     let source = api.add_source(&env.source_dir()).await;
     api.create_project("shop", &source).await;
-    point_at(&env, &api, &pg).await;
+    point_at(&env, &api, &pg, 18_309).await;
     odoo_like_db(&pg, "prod");
     pg.psql(
         "prod",
@@ -1041,7 +1043,7 @@ async fn instances_on_the_source_are_stopped_only_when_asked() {
     let api = env.app();
     let source = api.add_source(&env.source_dir()).await;
     api.create_project("shop", &source).await;
-    point_at(&env, &api, &pg).await;
+    point_at(&env, &api, &pg, 18_319).await;
     // Instance `main` uses database `shop_main`.
     odoo_like_db(&pg, "shop_main");
     let (status, body) = api
@@ -1177,7 +1179,7 @@ async fn a_listed_database_is_backed_up_downloaded_and_restored() {
     let api = env.app();
     let source = api.add_source(&env.source_dir()).await;
     api.create_project("shop", &source).await;
-    point_at(&env, &api, &pg).await;
+    point_at(&env, &api, &pg, 18_329).await;
     odoo_like_db(&pg, "shop_main");
     let dir = env.project_dir("shop");
     let filestore = dir.join("data/filestore/shop_main");
@@ -1415,7 +1417,7 @@ async fn a_snapshot_is_taken_restored_and_undoes_a_delete() {
     let api = env.app();
     let source = api.add_source(&env.source_dir()).await;
     api.create_project("shop", &source).await;
-    point_at(&env, &api, &pg).await;
+    point_at(&env, &api, &pg, 18_339).await;
     odoo_like_db(&pg, "shop_main");
     let dir = env.project_dir("shop");
     let filestore = dir.join("data/filestore/shop_main");
