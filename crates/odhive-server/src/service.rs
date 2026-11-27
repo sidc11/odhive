@@ -10,6 +10,7 @@ use odhive_core::config::{AppPaths, GlobalConfig};
 use odhive_core::envcheck::CheckOptions;
 use odhive_core::launch::{self, LoadedProject, Target};
 use odhive_core::manager::{InstanceInfo, Manager, StopOutcome};
+use odhive_core::pglog::{self, SearchDir};
 use odhive_core::pidfile::{self, PidRecord, RecordState, RunDir};
 use odhive_core::ports::PortOwner;
 use odhive_core::project::ProjectConfig;
@@ -24,6 +25,7 @@ use crate::api::error::{ApiError, ApiResult};
 use crate::api::ws::WsLimits;
 use crate::auth::Auth;
 use crate::jobs::{JobKind, Jobs};
+use crate::pglogs::PgLogs;
 
 /// Shared state of the API. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -52,6 +54,10 @@ struct Inner {
     quit: watch::Sender<bool>,
     /// CPU and memory samples of running instances.
     usage: Arc<std::sync::Mutex<UsageMonitor>>,
+    /// Where PostgreSQL log files are looked for.
+    pg_log_dirs: Vec<SearchDir>,
+    /// PostgreSQL log files being followed.
+    pg_logs: PgLogs,
 }
 
 /// Tunables of a [`Service`].
@@ -67,6 +73,8 @@ pub struct ServiceOptions {
     /// `requirements` are replaced per check (by [`Self::discover`] and the
     /// registered sources).
     pub env: CheckOptions,
+    /// Where PostgreSQL log files are looked for.
+    pub pg_log_dirs: Vec<SearchDir>,
 }
 
 impl Default for ServiceOptions {
@@ -78,6 +86,7 @@ impl Default for ServiceOptions {
             clone: CloneOptions::default(),
             discover: DiscoverOptions::from_env(),
             env: CheckOptions::from_env(DiscoverOptions::from_env()),
+            pg_log_dirs: pglog::default_search_dirs(),
         }
     }
 }
@@ -148,6 +157,8 @@ impl Service {
                 shutdown: watch::Sender::new(false),
                 quit: watch::Sender::new(false),
                 usage: Arc::default(),
+                pg_log_dirs: opts.pg_log_dirs,
+                pg_logs: PgLogs::default(),
             }),
         }
     }
@@ -317,6 +328,14 @@ impl Service {
     /// Turns `true` once [`Service::begin_shutdown`] was called.
     pub(crate) fn shutdown_signal(&self) -> watch::Receiver<bool> {
         self.inner.shutdown.subscribe()
+    }
+
+    pub(crate) fn pg_log_dirs(&self) -> &[SearchDir] {
+        &self.inner.pg_log_dirs
+    }
+
+    pub(crate) fn pg_logs(&self) -> &PgLogs {
+        &self.inner.pg_logs
     }
 
     pub(crate) fn ws_limits(&self) -> WsLimits {

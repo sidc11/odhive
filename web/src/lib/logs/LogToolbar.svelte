@@ -28,7 +28,10 @@
     oncopyvisible,
     oncopyselection,
     onexport,
+    showSources = true,
   }: {
+    /** Show the source chips. */
+    showSources?: boolean
     levels: Set<LevelChip>
     sources: Set<SourceChip>
     loggers: string
@@ -199,22 +202,24 @@
     {/each}
   </div>
 
-  <div class="flex flex-wrap gap-1" role="group" aria-label="Sources">
-    {#each SOURCE_CHIPS as chip (chip)}
-      {@const on = sources.has(chip)}
-      <button
-        type="button"
-        class={`inline-flex min-h-8 items-center rounded-full border px-2.5 text-xs ${
-          on ? 'border-line bg-surface-raised text-fg' : 'border-dashed border-line text-fg-muted line-through'
-        }`}
-        aria-pressed={on}
-        title={chip === 'sql' ? 'SQL queries: turn on “Log SQL queries” in the instance settings' : undefined}
-        onclick={() => toggleSource(chip)}
-      >
-        {SOURCE_CHIP_LABELS[chip]}
-      </button>
-    {/each}
-  </div>
+  {#if showSources}
+    <div class="flex flex-wrap gap-1" role="group" aria-label="Sources">
+      {#each SOURCE_CHIPS as chip (chip)}
+        {@const on = sources.has(chip)}
+        <button
+          type="button"
+          class={`inline-flex min-h-8 items-center rounded-full border px-2.5 text-xs ${
+            on ? 'border-line bg-surface-raised text-fg' : 'border-dashed border-line text-fg-muted line-through'
+          }`}
+          aria-pressed={on}
+          title={chip === 'sql' ? 'SQL queries: turn on “Log SQL queries” in the instance settings' : undefined}
+          onclick={() => toggleSource(chip)}
+        >
+          {SOURCE_CHIP_LABELS[chip]}
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   <label class="flex min-w-0 flex-1 basis-40 items-center gap-1.5 text-sm">
     <span class="text-fg-muted">Logger</span>

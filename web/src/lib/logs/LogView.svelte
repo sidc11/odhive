@@ -12,11 +12,10 @@
     type LevelChip,
     type SourceChip,
   } from './filter'
-  import { LogLines } from './lines'
+  import { LogLines, type LogFeed } from './lines'
   import LogRowView from './LogRowView.svelte'
   import LogToolbar from './LogToolbar.svelte'
   import type { LogRow } from './rows'
-  import type { LogStream } from './stream.svelte'
   import { foldable, tracebackText, type FileLink } from './traceback'
 
   let {
@@ -24,9 +23,15 @@
     label,
     source,
     onopen,
+    showSources = true,
+    idle = 'No log yet. Entries appear here when the instance runs in OdHive.',
   }: {
-    stream: LogStream
+    stream: LogFeed
     label: string
+    /** Show the Odoo/SQL source chips. */
+    showSources?: boolean
+    /** Shown while `stream.running` is false and nothing is there. */
+    idle?: string
     /** Instance of the log, for export file names (no export without it). */
     source?: { project: string; instance: string }
     /** Opens a `file:line` of a traceback (no links without it). */
@@ -388,6 +393,7 @@
   oncopyvisible={copyVisible}
   oncopyselection={copySelection}
   onexport={source ? exportRows : undefined}
+  {showSources}
 />
 <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-line bg-surface-raised">
   <!-- Focusable so the keyboard can scroll it. -->
@@ -428,7 +434,7 @@
         {:else if stream.running}
           Waiting for log output…
         {:else}
-          No log yet. Entries appear here when the instance runs in OdHive.
+          {idle}
         {/if}
       </p>
     {/if}

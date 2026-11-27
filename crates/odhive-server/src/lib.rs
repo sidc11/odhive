@@ -6,6 +6,7 @@ mod assets;
 pub mod auth;
 pub mod jobs;
 mod listen;
+mod pglogs;
 pub mod security;
 pub mod service;
 

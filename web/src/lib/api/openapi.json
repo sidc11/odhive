@@ -2230,6 +2230,159 @@
         }
       }
     },
+    "/api/v1/projects/{name}/postgres/log": {
+      "get": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "The PostgreSQL server log of a project's server: the newest entries, or\nthose from `from` on. A log that cannot be read is answered with its\n`status` and a `hint`, not an error.",
+        "operationId": "postgres_log",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First sequence number wanted (`next` of the previous answer, same\n`stream`); omitted = the newest `limit` entries.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Most entries sent, 0–5000 (default 1000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostgresLog"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Chooses the log file shown for a project, saved as `postgres_log` in\nits `odhive.toml`; `null` goes back to the first one found. The path\nmust be absolute, without `.`/`..` parts, and lead (links resolved) to a\nregular `*.log` file. Answers like `GET` without entries.",
+        "operationId": "put_postgres_log",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostgresLogSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostgresLog"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A setup of the project runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a readable *.log file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{name}/schema": {
       "get": {
         "tags": [
@@ -7221,6 +7374,109 @@
             "description": "Project name."
           }
         }
+      },
+      "PostgresLog": {
+        "type": "object",
+        "description": "The PostgreSQL server log.",
+        "required": [
+          "found",
+          "status",
+          "stream",
+          "records",
+          "skipped",
+          "next"
+        ],
+        "properties": {
+          "configured": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file set for the project (`postgres_log`), as written there;\n`null` = the first one found is shown."
+          },
+          "found": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "PostgreSQL log files found on this machine, the most recently\nwritten first."
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to do about it."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What went wrong, when `status` is not `ok`."
+          },
+          "next": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`from` of the next request.",
+            "minimum": 0
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file shown (links resolved); `null` when none was found."
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Record"
+            },
+            "description": "Entries in log order."
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Entries asked for that were already dropped from memory.",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresLogStatus",
+            "description": "Whether the log could be read."
+          },
+          "stream": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Changes when the log is read anew: its sequence numbers start over,\nso `from` of an older stream must not be used.",
+            "minimum": 0
+          }
+        }
+      },
+      "PostgresLogSource": {
+        "type": "object",
+        "description": "The file to show for a project.",
+        "properties": {
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absolute path of a `*.log` file; `null` = the first one found.",
+            "example": "/var/log/postgresql/postgresql-16-main.log"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PostgresLogStatus": {
+        "type": "string",
+        "description": "Whether the log could be read.",
+        "enum": [
+          "ok",
+          "not_found",
+          "permission_denied",
+          "unreadable"
+        ]
       },
       "Project": {
         "type": "object",

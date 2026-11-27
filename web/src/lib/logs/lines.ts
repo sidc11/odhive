@@ -10,6 +10,14 @@ export interface RowSource {
   readonly firstId: number
 }
 
+/** What a log view shows: rows, and whether entries can come. */
+export interface LogFeed extends RowSource {
+  /** Bumped whenever `rows` changes. */
+  readonly version: number
+  /** Entries can arrive; `null` while that is not known yet. */
+  readonly running: boolean | null
+}
+
 export interface SyncResult {
   /** Rows added to the view. */
   added: number

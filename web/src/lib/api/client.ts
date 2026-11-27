@@ -324,6 +324,14 @@ export class ApiClient {
     return this.get(`${this.projectPath(project)}/postgres`)
   }
 
+  postgresLog(project: string, query: Query<'postgres_log'> = {}): Promise<Ok<'postgres_log', 200>> {
+    return this.get(`${this.projectPath(project)}/postgres/log`, query)
+  }
+
+  putPostgresLog(project: string, body: Body<'put_postgres_log'>): Promise<Ok<'put_postgres_log', 200>> {
+    return this.call('PUT', `${this.projectPath(project)}/postgres/log`, { body })
+  }
+
   listDatabases(project: string): Promise<Ok<'list_project_databases', 200>> {
     return this.get(`${this.projectPath(project)}/databases`)
   }

@@ -50,6 +50,10 @@ export type ConfPreview = Schemas['ConfPreview']
 export type ImportedOptions = Schemas['ImportedOptions']
 export type LogPage = Schemas['LogPage']
 export type LogRecord = Schemas['Record']
+/** The PostgreSQL server log of a project's server. */
+export type PostgresLog = Schemas['PostgresLog']
+export type PostgresLogStatus = Schemas['PostgresLogStatus']
+export type PostgresLogSource = Schemas['PostgresLogSource']
 
 /** WebSocket of live logs and instance events (below the API prefix). */
 export const WS_PATH = `${API_PREFIX}/ws`

@@ -3,6 +3,7 @@
   import DatabaseDialog from '../lib/databases/DatabaseDialog.svelte'
   import { isDatabaseJob, TITLES } from '../lib/databases/progress'
   import { formatBytes, formatTime } from '../lib/format'
+  import PostgresLogPanel, { type PostgresLogApi } from '../lib/logs/PostgresLogPanel.svelte'
   import type { JobsStore } from '../lib/jobs.svelte'
   import { routeHref, router } from '../lib/router.svelte'
   import { api as defaultApi, jobs as defaultJobs } from '../lib/stores'
@@ -13,7 +14,7 @@
     jobs = defaultJobs,
   }: {
     project: string
-    api?: DatabasesApi
+    api?: DatabasesApi & PostgresLogApi
     jobs?: Pick<JobsStore, 'jobs' | 'get' | 'upsert' | 'finished'>
   } = $props()
 
@@ -31,6 +32,9 @@
   const list = $derived(store.databases.status === 'ready' ? store.databases.value : null)
   const pgError = $derived(list?.error ?? null)
   const running = $derived(store.running)
+
+  /** The server log is read only while it is shown. */
+  let showLog = $state(false)
 
   function open(dialog: Dialog): void {
     store.open(dialog)
@@ -244,6 +248,23 @@
     {/if}
   </section>
 {/if}
+
+<section aria-labelledby="pglog-heading" class="mt-8 pb-4">
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <div>
+      <h2 id="pglog-heading" class="text-lg font-semibold">PostgreSQL server log</h2>
+      <p class="text-sm text-fg-muted">Read-only. Errors, slow queries and connection problems of the server.</p>
+    </div>
+    <button type="button" class={button} aria-expanded={showLog} onclick={() => (showLog = !showLog)}>
+      {showLog ? 'Hide log' : 'Show log'}
+    </button>
+  </div>
+  {#if showLog}
+    <div class="mt-2">
+      <PostgresLogPanel {project} {api} />
+    </div>
+  {/if}
+</section>
 
 {#if store.dialog}
   {#key store.dialog}

@@ -43,6 +43,33 @@ async function mockDatabases(page: Page): Promise<void> {
   )
   await page.route('**/api/v1/projects/shop/snapshots', (route) => route.fulfill(json(snapshots)))
   await page.route('**/api/v1/projects/shop/backups', (route) => route.fulfill(json(backups)))
+  await page.route('**/api/v1/projects/shop/postgres/log*', (route) => route.fulfill(json(pgLog)))
+}
+
+const pgLog = {
+  path: '/var/log/postgresql/postgresql-16-main.log',
+  configured: null,
+  found: ['/var/log/postgresql/postgresql-16-main.log'],
+  status: 'ok',
+  message: null,
+  hint: null,
+  stream: 1,
+  records: [
+    {
+      seq: 1,
+      timestamp: '2026-11-27T10:15:01.123Z',
+      pid: 42,
+      level: 'error',
+      db: 'shop_main',
+      logger: 'postgresql',
+      message: 'relation "x" does not exist\nSTATEMENT:  SELECT * FROM x',
+      locations: [],
+      exceptions: [],
+      truncated: false,
+    },
+  ],
+  skipped: 0,
+  next: 2,
 }
 
 test('the database page lists databases and opens dialogs that keep focus', async ({ page, signIn }) => {
@@ -92,6 +119,20 @@ for (const scheme of ['light', 'dark'] as const) {
   })
 }
 
+for (const scheme of ['light', 'dark'] as const) {
+  test(`the PostgreSQL server log has no serious accessibility violations (${scheme})`, async ({ page, signIn }) => {
+    await page.emulateMedia({ colorScheme: scheme })
+    await mockDatabases(page)
+    await signIn()
+    await page.goto('/projects/shop/databases')
+    await page.getByRole('button', { name: 'Show log' }).click()
+    await expect(page.getByText('relation "x" does not exist')).toBeVisible()
+    await page.getByRole('button', { name: 'Change…' }).click()
+    await expect(page.getByRole('combobox', { name: 'Log file' })).toBeVisible()
+    expect(await seriousViolations(page)).toEqual([])
+  })
+}
+
 test('the database page fits a phone screen', async ({ page, signIn }) => {
   await page.setViewportSize({ width: 360, height: 800 })
   await mockDatabases(page)
@@ -100,6 +141,9 @@ test('the database page fits a phone screen', async ({ page, signIn }) => {
   await expect(page.getByRole('row', { name: /^shop_main/ })).toBeVisible()
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
   expect(overflow).toBeLessThanOrEqual(0)
+  await page.getByRole('button', { name: 'Show log' }).click()
+  await expect(page.getByTestId('postgres-log-path')).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0)
   await page.getByRole('button', { name: 'Restore a backup…' }).click()
   const dialog = page.getByRole('dialog', { name: 'Restore a backup' })
   await expect(dialog).toBeInViewport()
