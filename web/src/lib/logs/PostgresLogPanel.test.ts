@@ -9,6 +9,8 @@ const FOUND = '/var/log/postgresql/postgresql-16-main.log'
 
 function log(extra: Partial<PostgresLog> = {}): PostgresLog {
   return {
+    source: 'file',
+    unit: null,
     path: FOUND,
     configured: null,
     found: [FOUND, '/var/log/postgresql/postgresql-15-main.log'],
@@ -41,6 +43,13 @@ describe('PostgresLogPanel', () => {
     expect(api.postgresLog).toHaveBeenCalledWith('shop', { limit: 1000 })
     // No Odoo/SQL chips on the server log.
     expect(screen.queryByRole('group', { name: 'Sources' })).not.toBeInTheDocument()
+  })
+
+  it('shows the journal unit when the server logs to journald', async () => {
+    setup(log({ source: 'journal', unit: 'postgresql.service', path: null, found: [] }))
+    expect(await screen.findByTestId('postgres-log-path')).toHaveTextContent('postgresql.service')
+    expect(screen.getByText('Journal')).toBeInTheDocument()
+    expect(screen.getByText('(systemd journal)')).toBeInTheDocument()
   })
 
   it('explains a log it may not read', async () => {

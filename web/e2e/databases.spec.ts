@@ -47,6 +47,8 @@ async function mockDatabases(page: Page): Promise<void> {
 }
 
 const pgLog = {
+  source: 'file',
+  unit: null,
   path: '/var/log/postgresql/postgresql-16-main.log',
   configured: null,
   found: ['/var/log/postgresql/postgresql-16-main.log'],

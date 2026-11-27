@@ -18,11 +18,19 @@ use common::{Api, Env, PORT};
 const URL: &str = "/api/v1/projects/shop/postgres/log";
 
 async fn app(env: &Env, logs: &Path) -> Api {
+    app_with_journal(env, logs, None).await
+}
+
+/// With the fake journalctl in `journal` (and the unit file
+/// `postgresql.service` there), when given.
+async fn app_with_journal(env: &Env, logs: &Path, journal: Option<&Path>) -> Api {
     let opts = ServiceOptions {
         pg_log_dirs: vec![SearchDir {
             dir: logs.to_path_buf(),
             prefix: "postgresql",
         }],
+        pg_journalctl: journal.map(|d| d.join("journalctl")),
+        pg_unit_dirs: journal.map(Path::to_path_buf).into_iter().collect(),
         ..ServiceOptions::default()
     };
     let api = env.app_with(ManagerOptions::default(), opts, PORT);
@@ -192,4 +200,92 @@ async fn limit_is_checked_and_unknown_projects_are_404() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let (status, _) = api.get("/api/v1/projects/nope/postgres/log").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// A folder with the fake journalctl, a `postgresql.service` unit file and
+/// a journal of `messages` (by the postgres process, pid 42).
+fn fake_journal(messages: &[&str]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/fake-journalctl");
+    fs::copy(src, dir.path().join("journalctl")).expect("copy fixture");
+    fs::write(dir.path().join("postgresql.service"), "[Unit]\n").expect("unit");
+    let mut text = String::new();
+    for (i, m) in messages.iter().enumerate() {
+        let line = json!({
+            "__CURSOR": format!("c{i}"),
+            "__REALTIME_TIMESTAMP": "1795288154894026",
+            "_PID": "42",
+            "PRIORITY": "6",
+            "SYSLOG_IDENTIFIER": "postgres",
+            "_SYSTEMD_UNIT": "postgresql.service",
+            "MESSAGE": m,
+        });
+        text.push_str(&line.to_string());
+        text.push('\n');
+    }
+    fs::write(dir.path().join("journal.jsonl"), text).expect("journal");
+    dir
+}
+
+#[tokio::test]
+async fn without_log_files_the_journal_is_read() {
+    let env = Env::new();
+    let logs = tempfile::tempdir().expect("tempdir");
+    let journal = fake_journal(&[
+        "2026-11-27 10:15:01.123 UTC [42] odoo@shop_main ERROR:  boom",
+        "2026-11-27 10:15:01.123 UTC [42] odoo@shop_main STATEMENT:  SELECT 1",
+    ]);
+    let api = app_with_journal(&env, logs.path(), Some(journal.path())).await;
+
+    let (status, body) = api.get(URL).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "ok", "{body}");
+    assert_eq!(body["source"], "journal");
+    assert_eq!(body["unit"], "postgresql.service");
+    assert_eq!(body["path"], Value::Null);
+    assert_eq!(messages(&body), ["boom\nSTATEMENT:  SELECT 1"]);
+    let rec = &body["records"][0];
+    assert_eq!(rec["db"], "shop_main");
+    assert_eq!(rec["level"], "error");
+
+    // A log file, once there, is shown instead.
+    let file = logs.path().join("postgresql-16-main.log");
+    fs::write(&file, "2026-01-01 00:00:00.000 UTC [1] LOG:  from file\n").expect("write");
+    let (_, body) = api.get(URL).await;
+    assert_eq!(body["source"], "file");
+    assert_eq!(body["unit"], Value::Null);
+    assert_eq!(messages(&body), ["from file"]);
+}
+
+#[tokio::test]
+async fn a_journal_the_user_may_not_read_gets_a_hint() {
+    let env = Env::new();
+    let logs = tempfile::tempdir().expect("tempdir");
+    let journal = fake_journal(&["2026-11-27 10:15:01.123 UTC [42] LOG:  hidden"]);
+    fs::write(journal.path().join("denied"), "").expect("denied");
+    let api = app_with_journal(&env, logs.path(), Some(journal.path())).await;
+
+    let (status, body) = api.get(URL).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "permission_denied", "{body}");
+    assert_eq!(body["source"], "journal");
+    assert!(
+        body["hint"]
+            .as_str()
+            .is_some_and(|h| h.contains("systemd-journal")),
+        "{body}"
+    );
+    assert_eq!(body["records"], json!([]));
+}
+
+#[tokio::test]
+async fn no_unit_file_means_no_journal() {
+    let env = Env::new();
+    let logs = tempfile::tempdir().expect("tempdir");
+    let journal = fake_journal(&["2026-11-27 10:15:01.123 UTC [42] LOG:  x"]);
+    fs::remove_file(journal.path().join("postgresql.service")).expect("rm");
+    let api = app_with_journal(&env, logs.path(), Some(journal.path())).await;
+    let (_, body) = api.get(URL).await;
+    assert_eq!(body["status"], "not_found", "{body}");
+    assert!(!journal.path().join("calls.txt").exists());
 }

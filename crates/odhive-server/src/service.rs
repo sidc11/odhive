@@ -4,6 +4,7 @@
 //! a lock and written back at once.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use odhive_core::config::{AppPaths, GlobalConfig};
@@ -56,7 +57,11 @@ struct Inner {
     usage: Arc<std::sync::Mutex<UsageMonitor>>,
     /// Where PostgreSQL log files are looked for.
     pg_log_dirs: Vec<SearchDir>,
-    /// PostgreSQL log files being followed.
+    /// journalctl, for servers that log to journald.
+    pg_journalctl: Option<PathBuf>,
+    /// Where the PostgreSQL server's systemd unit is looked for.
+    pg_unit_dirs: Vec<PathBuf>,
+    /// PostgreSQL logs being followed.
     pg_logs: PgLogs,
 }
 
@@ -75,6 +80,10 @@ pub struct ServiceOptions {
     pub env: CheckOptions,
     /// Where PostgreSQL log files are looked for.
     pub pg_log_dirs: Vec<SearchDir>,
+    /// journalctl, for servers that log to journald; `None` = no journal.
+    pub pg_journalctl: Option<PathBuf>,
+    /// Where the PostgreSQL server's systemd unit is looked for.
+    pub pg_unit_dirs: Vec<PathBuf>,
 }
 
 impl Default for ServiceOptions {
@@ -87,6 +96,8 @@ impl Default for ServiceOptions {
             discover: DiscoverOptions::from_env(),
             env: CheckOptions::from_env(DiscoverOptions::from_env()),
             pg_log_dirs: pglog::default_search_dirs(),
+            pg_journalctl: pglog::journal::default_journalctl(),
+            pg_unit_dirs: pglog::journal::default_unit_dirs(),
         }
     }
 }
@@ -158,6 +169,8 @@ impl Service {
                 quit: watch::Sender::new(false),
                 usage: Arc::default(),
                 pg_log_dirs: opts.pg_log_dirs,
+                pg_journalctl: opts.pg_journalctl,
+                pg_unit_dirs: opts.pg_unit_dirs,
                 pg_logs: PgLogs::default(),
             }),
         }
@@ -332,6 +345,14 @@ impl Service {
 
     pub(crate) fn pg_log_dirs(&self) -> &[SearchDir] {
         &self.inner.pg_log_dirs
+    }
+
+    /// The journal of the PostgreSQL server, when journalctl and the
+    /// server's unit are there. Looks at the file system.
+    pub(crate) fn pg_journal(&self) -> Option<pglog::Journal> {
+        let journalctl = self.inner.pg_journalctl.clone()?;
+        let unit = pglog::journal::detect_unit(&self.inner.pg_unit_dirs)?;
+        Some(pglog::Journal { journalctl, unit })
     }
 
     pub(crate) fn pg_logs(&self) -> &PgLogs {

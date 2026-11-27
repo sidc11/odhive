@@ -7379,6 +7379,7 @@
         "type": "object",
         "description": "The PostgreSQL server log.",
         "required": [
+          "source",
           "found",
           "status",
           "stream",
@@ -7426,7 +7427,7 @@
               "string",
               "null"
             ],
-            "description": "The file shown (links resolved); `null` when none was found."
+            "description": "The file shown (links resolved); `null` when none was found or the\njournal is shown."
           },
           "records": {
             "type": "array",
@@ -7441,6 +7442,10 @@
             "description": "Entries asked for that were already dropped from memory.",
             "minimum": 0
           },
+          "source": {
+            "$ref": "#/components/schemas/PostgresLogKind",
+            "description": "Where the log shown comes from; `file` also when none was found."
+          },
           "status": {
             "$ref": "#/components/schemas/PostgresLogStatus",
             "description": "Whether the log could be read."
@@ -7450,8 +7455,24 @@
             "format": "int64",
             "description": "Changes when the log is read anew: its sequence numbers start over,\nso `from` of an older stream must not be used.",
             "minimum": 0
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The systemd unit whose journal is shown, when `source` is\n`journal`.",
+            "example": "postgresql.service"
           }
         }
+      },
+      "PostgresLogKind": {
+        "type": "string",
+        "description": "Where the log shown comes from.",
+        "enum": [
+          "file",
+          "journal"
+        ]
       },
       "PostgresLogSource": {
         "type": "object",
