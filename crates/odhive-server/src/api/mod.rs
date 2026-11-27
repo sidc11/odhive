@@ -14,6 +14,7 @@ pub mod error;
 pub mod instances;
 mod jobs;
 pub mod options;
+pub mod postgres_log;
 pub mod projects;
 pub mod pythons;
 pub mod settings;
@@ -93,6 +94,7 @@ fn api_router() -> OpenApiRouter<Service> {
         .routes(routes!(databases::list_snapshots))
         .routes(routes!(databases::restore_snapshot))
         .routes(routes!(databases::delete_snapshot))
+        .routes(routes!(postgres_log::get, postgres_log::put))
         .routes(routes!(jobs::list))
         .routes(routes!(jobs::get))
         .routes(routes!(jobs::cancel))

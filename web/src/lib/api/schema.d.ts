@@ -687,6 +687,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{name}/postgres/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The PostgreSQL server log of a project's server: the newest entries, or
+         *     those from `from` on. A log that cannot be read is answered with its
+         *     `status` and a `hint`, not an error.
+         */
+        get: operations["postgres_log"];
+        /**
+         * Chooses the log file shown for a project, saved as `postgres_log` in
+         *     its `odhive.toml`; `null` goes back to the first one found. The path
+         *     must be absolute, without `.`/`..` parts, and lead (links resolved) to a
+         *     regular `*.log` file. Answers like `GET` without entries.
+         */
+        put: operations["put_postgres_log"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{name}/schema": {
         parameters: {
             query?: never;
@@ -2425,6 +2452,58 @@ export interface components {
             /** @description Project name. */
             project: string;
         };
+        /** @description The PostgreSQL server log. */
+        PostgresLog: {
+            /**
+             * @description The file set for the project (`postgres_log`), as written there;
+             *     `null` = the first one found is shown.
+             */
+            configured?: string | null;
+            /**
+             * @description PostgreSQL log files found on this machine, the most recently
+             *     written first.
+             */
+            found: string[];
+            /** @description What to do about it. */
+            hint?: string | null;
+            /** @description What went wrong, when `status` is not `ok`. */
+            message?: string | null;
+            /**
+             * Format: int64
+             * @description `from` of the next request.
+             */
+            next: number;
+            /** @description The file shown (links resolved); `null` when none was found. */
+            path?: string | null;
+            /** @description Entries in log order. */
+            records: components["schemas"]["Record"][];
+            /**
+             * Format: int64
+             * @description Entries asked for that were already dropped from memory.
+             */
+            skipped: number;
+            /** @description Whether the log could be read. */
+            status: components["schemas"]["PostgresLogStatus"];
+            /**
+             * Format: int64
+             * @description Changes when the log is read anew: its sequence numbers start over,
+             *     so `from` of an older stream must not be used.
+             */
+            stream: number;
+        };
+        /** @description The file to show for a project. */
+        PostgresLogSource: {
+            /**
+             * @description Absolute path of a `*.log` file; `null` = the first one found.
+             * @example /var/log/postgresql/postgresql-16-main.log
+             */
+            path?: string | null;
+        };
+        /**
+         * @description Whether the log could be read.
+         * @enum {string}
+         */
+        PostgresLogStatus: "ok" | "not_found" | "permission_denied" | "unreadable";
         /** @description A registered project. */
         Project: {
             /** @description Custom addons folders, as configured. */
@@ -4661,6 +4740,118 @@ export interface operations {
             };
             /** @description No such project */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    postgres_log: {
+        parameters: {
+            query?: {
+                /**
+                 * @description First sequence number wanted (`next` of the previous answer, same
+                 *     `stream`); omitted = the newest `limit` entries.
+                 */
+                from?: number;
+                /** @description Most entries sent, 0–5000 (default 1000). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostgresLog"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    put_postgres_log: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PostgresLogSource"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostgresLog"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such project */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A setup of the project runs */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not a readable *.log file */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

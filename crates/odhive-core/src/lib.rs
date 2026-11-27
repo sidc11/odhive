@@ -15,6 +15,7 @@ pub mod logs;
 pub mod manager;
 pub mod names;
 pub mod paths;
+pub mod pglog;
 pub mod pidfile;
 pub mod platform;
 pub mod ports;

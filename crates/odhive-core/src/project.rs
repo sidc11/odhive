@@ -162,6 +162,9 @@ pub enum ProjectError {
     /// An argument or env value contains a NUL byte or is empty.
     #[error("{0}: contains a NUL byte or is empty")]
     InvalidValue(String),
+    /// `postgres_log` is not an absolute `*.log` path.
+    #[error("postgres_log: {0}")]
+    PostgresLog(#[from] crate::pglog::LogPathError),
     /// A `[logs]` value is out of range.
     #[error("[logs]: {0}")]
     LogSettings(String),
@@ -337,6 +340,10 @@ pub struct ProjectConfig {
     /// Custom addons folders: relative to the project folder, or absolute.
     #[serde(default)]
     pub addons_paths: Vec<PathBuf>,
+    /// The PostgreSQL server log to show; `None` = the first one found
+    /// ([`crate::pglog::detect`]). An absolute path to a `*.log` file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postgres_log: Option<PathBuf>,
     /// Odoo sources.
     pub sources: ProjectSources,
     /// Environment variables for every instance.
@@ -364,6 +371,7 @@ impl ProjectConfig {
             name: name.into(),
             python: None,
             addons_paths: vec![PathBuf::from(DEFAULT_ADDONS_DIR)],
+            postgres_log: None,
             sources: ProjectSources {
                 community: community.into(),
                 enterprise: None,
@@ -396,6 +404,9 @@ impl ProjectConfig {
         validate_env(&self.env, "env")?;
         conf::validate_model(&self.odoo_options, &self.odoo_sections)?;
         self.logs.validate().map_err(ProjectError::LogSettings)?;
+        if let Some(log) = &self.postgres_log {
+            crate::pglog::validate_log_path(log)?;
+        }
         self.validate_instances()
     }
 
@@ -633,6 +644,7 @@ mod tests {
         qj.0.insert("channels".into(), "root:2".into());
         p.odoo_sections.insert("queue_job".into(), qj);
         p.logs.file_keep = 9;
+        p.postgres_log = Some("/var/log/postgresql/postgresql-16-main.log".into());
         let main = &mut p.instances[0];
         main.http_port = Some(8069);
         main.gevent_port = Some(8072);
@@ -753,6 +765,28 @@ mod tests {
         assert!(matches!(err(&p), ProjectError::LogSettings(m) if m.contains("buffer_entries")));
         let text = "version = 1\nname = \"acme\"\n[sources]\ncommunity = \"odoo-19.0\"\n[logs]\nkeep = 3\n[[instances]]\nid = \"main\"\n";
         assert!(ProjectConfig::from_toml(text, Path::new("t")).is_err());
+    }
+
+    #[test]
+    fn rejects_bad_postgres_log() {
+        let mut p = ProjectConfig::new("shop", "odoo-20.0");
+        for (path, want) in [
+            ("pg.log", crate::pglog::LogPathError::Relative),
+            (
+                "/var/log/../../etc/x.log",
+                crate::pglog::LogPathError::Traversal,
+            ),
+            ("/etc/shadow", crate::pglog::LogPathError::NotLogName),
+        ] {
+            p.postgres_log = Some(path.into());
+            assert!(
+                matches!(err(&p), ProjectError::PostgresLog(e) if e == want),
+                "{path}"
+            );
+        }
+        p.postgres_log = Some("/var/log/postgresql/postgresql-16-main.log".into());
+        p.validate().expect("valid");
+        assert!(p.to_toml().expect("toml").contains("postgres_log = "));
     }
 
     #[test]

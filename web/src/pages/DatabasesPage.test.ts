@@ -25,6 +25,29 @@ const row = (name: string) => screen.getByRole('row', { name: new RegExp(`^${nam
 const dialog = () => screen.getByRole('dialog')
 
 describe('DatabasesPage', () => {
+  it('reads the PostgreSQL server log only while it is shown', async () => {
+    const pgLog = {
+      path: '/var/log/postgresql/postgresql-16-main.log',
+      configured: null,
+      found: ['/var/log/postgresql/postgresql-16-main.log'],
+      status: 'ok',
+      message: null,
+      hint: null,
+      stream: 1,
+      records: [],
+      skipped: 0,
+      next: 1,
+    }
+    const { calls } = renderPage({ 'GET /projects/shop/postgres/log?limit=1000': [200, pgLog] })
+    const toggle = screen.getByRole('button', { name: 'Show log' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(calls.some((c) => c.path.includes('postgres/log'))).toBe(false)
+    await fireEvent.click(toggle)
+    expect(await screen.findByTestId('postgres-log-path')).toHaveTextContent('postgresql-16-main.log')
+    await fireEvent.click(screen.getByRole('button', { name: 'Hide log' }))
+    expect(screen.queryByTestId('postgres-log-path')).not.toBeInTheDocument()
+  })
+
   it('lists the databases, snapshots and backups', async () => {
     renderPage()
     const main = await vi.waitFor(() => row('shop_main'))
