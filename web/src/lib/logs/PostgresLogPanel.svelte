@@ -74,8 +74,11 @@
 
 <div class="flex flex-col gap-2">
   <div class="flex flex-wrap items-center gap-2 text-sm">
-    <span class="text-fg-muted">File</span>
-    {#if info?.path}
+    <span class="text-fg-muted">{info?.source === 'journal' ? 'Journal' : 'File'}</span>
+    {#if info?.source === 'journal' && info.unit}
+      <span class="min-w-0 font-mono text-xs break-all" data-testid="postgres-log-path">{info.unit}</span>
+      <span class="text-xs text-fg-muted">(systemd journal)</span>
+    {:else if info?.path}
       <span class="min-w-0 font-mono text-xs break-all" data-testid="postgres-log-path">{info.path}</span>
       <span class="text-xs text-fg-muted">{info.configured ? '(chosen)' : '(found)'}</span>
     {:else if info}

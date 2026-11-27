@@ -1,8 +1,9 @@
 //! `/projects/{name}/postgres/log`: the PostgreSQL server log, read-only.
 //!
-//! The file is the project's `postgres_log`, else the most recently written
-//! one OdHive finds ([`odhive_core::pglog::detect`]). Clients poll: each
-//! request reads what was written since the last one.
+//! The log is the project's `postgres_log` file, else the most recently
+//! written file OdHive finds ([`odhive_core::pglog::detect`]), else the
+//! server unit's lines in the journal ([`odhive_core::pglog::journal`]).
+//! Clients poll: each request reads what was written since the last one.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -11,13 +12,14 @@ use std::sync::{Arc, PoisonError};
 use axum::Json;
 use axum::extract::State;
 use odhive_core::logs::store::Record;
-use odhive_core::pglog::{self, LogPathError};
+use odhive_core::pglog::{self, JournalError, LogPathError};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use super::error::{ApiError, ApiResult, ErrorBody};
 use super::instances::MAX_LOG_LIMIT;
 use super::{Body, Params, QueryArgs};
+use crate::pglogs::{ReadError, Tail};
 use crate::service::Service;
 
 /// Entries sent by default when `from` is not given.
@@ -49,11 +51,28 @@ pub enum PostgresLogStatus {
     Unreadable,
 }
 
+/// Where the log shown comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PostgresLogKind {
+    /// A log file (`path`).
+    File,
+    /// The server unit's lines in the systemd journal (`unit`).
+    Journal,
+}
+
 /// The PostgreSQL server log.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PostgresLog {
-    /// The file shown (links resolved); `null` when none was found.
+    /// Where the log shown comes from; `file` also when none was found.
+    pub source: PostgresLogKind,
+    /// The file shown (links resolved); `null` when none was found or the
+    /// journal is shown.
     pub path: Option<String>,
+    /// The systemd unit whose journal is shown, when `source` is
+    /// `journal`.
+    #[schema(example = "postgresql.service")]
+    pub unit: Option<String>,
     /// The file set for the project (`postgres_log`), as written there;
     /// `null` = the first one found is shown.
     pub configured: Option<String>,
@@ -92,7 +111,9 @@ fn text(p: &Path) -> String {
 
 fn failed(status: PostgresLogStatus, message: String, hint: Option<String>) -> PostgresLog {
     PostgresLog {
+        source: PostgresLogKind::File,
         path: None,
+        unit: None,
         configured: None,
         found: Vec::new(),
         status,
@@ -126,9 +147,10 @@ fn read(svc: &Service, configured: Option<&Path>, q: &PostgresLogQuery) -> Postg
             }
             Err(e) => return failed(PostgresLogStatus::Unreadable, e.to_string(), None),
         },
-        None => match found.first() {
-            Some(c) => c.path.clone(),
-            None => {
+        None => match (found.first(), svc.pg_journal()) {
+            (Some(c), _) => c.path.clone(),
+            (None, Some(journal)) => return read_journal(svc, &journal, q),
+            (None, None) => {
                 return failed(
                     PostgresLogStatus::NotFound,
                     "no PostgreSQL log file was found".to_owned(),
@@ -137,19 +159,21 @@ fn read(svc: &Service, configured: Option<&Path>, q: &PostgresLogQuery) -> Postg
             }
         },
     };
-    let mut out = match open(svc, &path, q) {
+    let opened = svc.pg_logs().get(&path).map_err(ReadError::File);
+    let mut out = match opened.and_then(|t| entries(&t, q)) {
         Ok(log) => log,
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => failed(
+        Err(ReadError::Journal(e)) => journal_failed(&e),
+        Err(ReadError::File(e)) if e.kind() == io::ErrorKind::PermissionDenied => failed(
             PostgresLogStatus::PermissionDenied,
             format!("cannot read {}: permission denied", path.display()),
             Some(pglog::permission_hint(&path)),
         ),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => failed(
+        Err(ReadError::File(e)) if e.kind() == io::ErrorKind::NotFound => failed(
             PostgresLogStatus::NotFound,
             format!("the PostgreSQL log {} does not exist", path.display()),
             None,
         ),
-        Err(e) => failed(
+        Err(ReadError::File(e)) => failed(
             PostgresLogStatus::Unreadable,
             format!("cannot read {}: {e}", path.display()),
             None,
@@ -161,16 +185,47 @@ fn read(svc: &Service, configured: Option<&Path>, q: &PostgresLogQuery) -> Postg
     out
 }
 
+/// The server unit's lines in the journal.
+fn read_journal(svc: &Service, journal: &pglog::Journal, q: &PostgresLogQuery) -> PostgresLog {
+    let opened = svc
+        .pg_logs()
+        .get_journal(journal)
+        .map_err(ReadError::Journal);
+    let mut out = match opened.and_then(|t| entries(&t, q)) {
+        Ok(log) => log,
+        Err(ReadError::Journal(e)) => journal_failed(&e),
+        Err(ReadError::File(e)) => failed(PostgresLogStatus::Unreadable, e.to_string(), None),
+    };
+    out.source = PostgresLogKind::Journal;
+    out.unit = Some(journal.unit.clone());
+    out
+}
+
+fn journal_failed(e: &JournalError) -> PostgresLog {
+    match e {
+        JournalError::PermissionDenied => failed(
+            PostgresLogStatus::PermissionDenied,
+            "cannot read the PostgreSQL server's journal: permission denied".to_owned(),
+            Some(pglog::journal::permission_hint()),
+        ),
+        other => failed(
+            PostgresLogStatus::Unreadable,
+            format!("cannot read the PostgreSQL server's journal: {other}"),
+            None,
+        ),
+    }
+}
+
 fn not_found_hint() -> String {
     if cfg!(target_os = "macos") {
         "Homebrew's PostgreSQL logs to $(brew --prefix)/var/log/postgresql@<version>.log. Choose the log file of your server.".to_owned()
     } else {
-        "Debian and Ubuntu log to /var/log/postgresql/. If your server logs elsewhere (its log_directory), choose that file; logs kept only by journald cannot be shown yet.".to_owned()
+        "Debian and Ubuntu log to /var/log/postgresql/; servers run by a postgresql.service unit are read from the journal. If your server logs elsewhere (its log_directory), choose that file.".to_owned()
     }
 }
 
-fn open(svc: &Service, path: &Path, q: &PostgresLogQuery) -> io::Result<PostgresLog> {
-    let shared = svc.pg_logs().get(path)?;
+/// The entries `q` asks for, after reading what is new.
+fn entries(shared: &Tail, q: &PostgresLogQuery) -> Result<PostgresLog, ReadError> {
     let mut tail = shared.tail.lock().unwrap_or_else(PoisonError::into_inner);
     tail.poll()?;
     let limit = q.limit.unwrap_or(DEFAULT_TAIL);
@@ -182,7 +237,9 @@ fn open(svc: &Service, path: &Path, q: &PostgresLogQuery) -> io::Result<Postgres
         None => (tail.tail(limit), 0, tail.next_seq()),
     };
     Ok(PostgresLog {
+        source: PostgresLogKind::File,
         path: None,
+        unit: None,
         configured: None,
         found: Vec::new(),
         status: PostgresLogStatus::Ok,

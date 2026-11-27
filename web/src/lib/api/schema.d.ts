@@ -2473,7 +2473,10 @@ export interface components {
              * @description `from` of the next request.
              */
             next: number;
-            /** @description The file shown (links resolved); `null` when none was found. */
+            /**
+             * @description The file shown (links resolved); `null` when none was found or the
+             *     journal is shown.
+             */
             path?: string | null;
             /** @description Entries in log order. */
             records: components["schemas"]["Record"][];
@@ -2482,6 +2485,8 @@ export interface components {
              * @description Entries asked for that were already dropped from memory.
              */
             skipped: number;
+            /** @description Where the log shown comes from; `file` also when none was found. */
+            source: components["schemas"]["PostgresLogKind"];
             /** @description Whether the log could be read. */
             status: components["schemas"]["PostgresLogStatus"];
             /**
@@ -2490,7 +2495,18 @@ export interface components {
              *     so `from` of an older stream must not be used.
              */
             stream: number;
+            /**
+             * @description The systemd unit whose journal is shown, when `source` is
+             *     `journal`.
+             * @example postgresql.service
+             */
+            unit?: string | null;
         };
+        /**
+         * @description Where the log shown comes from.
+         * @enum {string}
+         */
+        PostgresLogKind: "file" | "journal";
         /** @description The file to show for a project. */
         PostgresLogSource: {
             /**

@@ -178,6 +178,14 @@ impl PgParser {
 
     /// Feeds one line (without its `\n`).
     pub fn push(&mut self, line: &str) -> Option<Entry> {
+        self.push_with(line, None)
+    }
+
+    /// Like [`PgParser::push`], with the header a line that starts an entry
+    /// gets when it has none of its own, e.g. from the journal fields of a
+    /// line PostgreSQL wrote without `log_line_prefix`, or of a line by
+    /// systemd.
+    pub fn push_with(&mut self, line: &str, fallback: Option<Header>) -> Option<Entry> {
         let line = line.trim_end_matches(['\r', '\n']);
         if let Some(parsed) = parse_line(line, &self.zones) {
             let continues = level_of(parsed.severity).is_none()
@@ -222,7 +230,7 @@ impl PgParser {
             return None;
         }
         let done = self.current.take().map(Builder::finish);
-        self.current = Some(Builder::new(None, line));
+        self.current = Some(Builder::new(fallback, line));
         done
     }
 

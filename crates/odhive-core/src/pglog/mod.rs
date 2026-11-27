@@ -13,6 +13,8 @@
 //!   named `*.log`.
 //! - [`PgLogTail`] reads its last lines and follows it, across rotation,
 //!   parsing each record with [`parse::PgParser`].
+//! - Servers that log to journald (Arch, Fedora) are read through
+//!   `journalctl` instead ([`journal`]).
 //!
 //! A file that cannot be read for lack of permission is reported with a
 //! hint ([`permission_hint`]) instead of an error.
@@ -30,12 +32,14 @@ use crate::logs::parse::Entry;
 use crate::logs::store::{Limits, LogBuffer, Page, Record};
 use crate::logs::{Follower, read_tail};
 
+pub mod journal;
 pub mod parse;
 pub mod tz;
 
 #[cfg(test)]
 mod tests;
 
+pub use journal::{Journal, JournalError, JournalTail};
 pub use parse::{LOGGER, PgParser};
 pub use tz::Zones;
 

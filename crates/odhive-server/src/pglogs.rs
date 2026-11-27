@@ -1,6 +1,7 @@
-//! The PostgreSQL log files being followed, shared by every request.
+//! The PostgreSQL logs being followed (files and journal units), shared by
+//! every request.
 //!
-//! A file is opened on its first request and then polled by each request
+//! A log is opened on its first request and then polled by each request
 //! for it: no task runs in the background. Tails nobody asked for within
 //! [`IDLE`] are closed, and at most [`MAX_TAILS`] stay open.
 
@@ -11,20 +12,78 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use odhive_core::pglog::{PgLogTail, Zones};
+use odhive_core::logs::store::{Page, Record};
+use odhive_core::pglog::{Journal, JournalError, JournalTail, PgLogTail, Zones};
 
 /// A tail nobody read for this long is closed.
 pub const IDLE: Duration = Duration::from_secs(300);
 
-/// Most files followed at once.
+/// Most logs followed at once.
 pub const MAX_TAILS: usize = 8;
 
-/// One followed file. `id` changes when the file is opened again, as its
+/// A log being followed.
+#[derive(Debug)]
+pub(crate) enum Source {
+    /// A log file.
+    File(PgLogTail),
+    /// A unit's lines in the journal.
+    Journal(JournalTail),
+}
+
+/// Why a log could not be read.
+#[derive(Debug)]
+pub(crate) enum ReadError {
+    File(io::Error),
+    Journal(JournalError),
+}
+
+impl Source {
+    /// Reads what was written since the last call.
+    pub fn poll(&mut self) -> Result<(), ReadError> {
+        match self {
+            Self::File(t) => t.poll().map_err(ReadError::File),
+            Self::Journal(t) => t.poll().map_err(ReadError::Journal),
+        }
+    }
+
+    /// Up to `limit` entries from sequence number `from`.
+    pub fn read_from(&self, from: u64, limit: usize) -> Page {
+        match self {
+            Self::File(t) => t.read_from(from, limit),
+            Self::Journal(t) => t.read_from(from, limit),
+        }
+    }
+
+    /// The last `n` entries.
+    pub fn tail(&self, n: usize) -> Vec<Arc<Record>> {
+        match self {
+            Self::File(t) => t.tail(n),
+            Self::Journal(t) => t.tail(n),
+        }
+    }
+
+    /// The sequence number of the next entry.
+    pub fn next_seq(&self) -> u64 {
+        match self {
+            Self::File(t) => t.next_seq(),
+            Self::Journal(t) => t.next_seq(),
+        }
+    }
+}
+
+/// One followed log. `id` changes when the log is opened again, as its
 /// sequence numbers then start over.
 #[derive(Debug)]
 pub(crate) struct Tail {
     pub id: u64,
-    pub tail: Mutex<PgLogTail>,
+    pub tail: Mutex<Source>,
+}
+
+/// What a tail follows.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Key {
+    File(PathBuf),
+    Journal(Journal),
 }
 
 #[derive(Debug)]
@@ -33,39 +92,56 @@ struct Slot {
     used: Instant,
 }
 
-/// The open tails, by file.
+/// The open tails, by log.
 #[derive(Debug, Default)]
 pub(crate) struct PgLogs {
-    slots: Mutex<HashMap<PathBuf, Slot>>,
+    slots: Mutex<HashMap<Key, Slot>>,
     ids: AtomicU64,
 }
 
 impl PgLogs {
-    /// The tail of `path`, opened if needed. Blocks on file I/O.
+    /// The tail of file `path`, opened if needed. Blocks on file I/O.
     pub fn get(&self, path: &Path) -> io::Result<Arc<Tail>> {
+        self.get_or_open(Key::File(path.to_path_buf()), || {
+            PgLogTail::open(path, Zones::system()).map(Source::File)
+        })
+    }
+
+    /// The tail of `journal`, opened if needed. Blocks on journalctl.
+    pub fn get_journal(&self, journal: &Journal) -> Result<Arc<Tail>, JournalError> {
+        self.get_or_open(Key::Journal(journal.clone()), || {
+            JournalTail::open(journal.clone(), Zones::system()).map(Source::Journal)
+        })
+    }
+
+    fn get_or_open<E>(
+        &self,
+        key: Key,
+        open: impl FnOnce() -> Result<Source, E>,
+    ) -> Result<Arc<Tail>, E> {
         let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
         slots.retain(|_, s| now.duration_since(s.used) < IDLE);
-        if let Some(slot) = slots.get_mut(path) {
+        if let Some(slot) = slots.get_mut(&key) {
             slot.used = now;
             return Ok(slot.tail.clone());
         }
         let tail = Arc::new(Tail {
             id: self.ids.fetch_add(1, Ordering::Relaxed) + 1,
-            tail: Mutex::new(PgLogTail::open(path, Zones::system())?),
+            tail: Mutex::new(open()?),
         });
         while slots.len() >= MAX_TAILS {
             let oldest = slots
                 .iter()
                 .min_by_key(|(_, s)| s.used)
-                .map(|(p, _)| p.clone());
+                .map(|(k, _)| k.clone());
             match oldest {
                 Some(p) => slots.remove(&p),
                 None => break,
             };
         }
         slots.insert(
-            path.to_path_buf(),
+            key,
             Slot {
                 tail: tail.clone(),
                 used: now,

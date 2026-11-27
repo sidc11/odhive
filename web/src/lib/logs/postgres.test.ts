@@ -6,6 +6,8 @@ import { record, records } from './test-fixtures'
 
 function log(extra: Partial<PostgresLog> = {}): PostgresLog {
   return {
+    source: 'file',
+    unit: null,
     path: '/var/log/postgresql/postgresql-16-main.log',
     configured: null,
     found: ['/var/log/postgresql/postgresql-16-main.log'],
