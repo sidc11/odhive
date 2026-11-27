@@ -32,6 +32,18 @@ describe('SettingsForm', () => {
     expect(form.overridden).toEqual(['STAGE'])
     expect(form.dirty).toBe(false)
     expect(form.canSave).toBe(false)
+    expect(form.sqlLog).toBe(false)
+  })
+
+  it('toggles the SQL log and treats a missing flag as off', async () => {
+    const { form, api } = await loaded()
+    form.sqlLog = true
+    expect(form.dirty).toBe(true)
+    expect(await form.save()).toBe(true)
+    expect(api.putInstanceSettings).toHaveBeenCalledWith('shop', 'main', expect.objectContaining({ sql_log: true }))
+    expect(form.sqlLog).toBe(true)
+    form.sqlLog = false
+    expect(form.dirty).toBe(true)
   })
 
   it('is dirty only while it differs from what is saved', async () => {
@@ -56,6 +68,7 @@ describe('SettingsForm', () => {
     expect(api.putInstanceSettings).toHaveBeenCalledWith('shop', 'main', {
       reload_mode: 'auto',
       autofix_mode: 'ask',
+      sql_log: false,
       extra_args: ['--log-level=debug', '-u', 'sale'],
       env: { STAGE: 'dev', TOKEN: 's3cret' },
     })

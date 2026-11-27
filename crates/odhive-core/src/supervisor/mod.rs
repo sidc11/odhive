@@ -99,6 +99,13 @@ pub enum SupervisorError {
     Gone(PortOwner),
 }
 
+/// Argument that makes Odoo log every SQL query it runs (at DEBUG, logger
+/// [`SQL_LOGGER`]); the same in Odoo 19 and 20.
+pub const SQL_LOG_HANDLER: &str = "--log-handler=odoo.sql_db:DEBUG";
+
+/// Logger of Odoo's SQL query log.
+pub const SQL_LOGGER: &str = "odoo.sql_db";
+
 /// What to run for one instance. Ports come from the [`Reservation`].
 #[derive(Debug, Clone)]
 pub struct LaunchSpec {
@@ -114,6 +121,8 @@ pub struct LaunchSpec {
     pub db: Option<String>,
     /// `--workers` (0 = threaded).
     pub workers: u32,
+    /// Log every SQL query: adds [`SQL_LOG_HANDLER`] before `extra_args`.
+    pub sql_log: bool,
     /// Extra arguments, appended as separate argv entries.
     pub extra_args: Vec<String>,
     /// Environment variables set on top of OdHive's own environment.
@@ -131,6 +140,7 @@ impl LaunchSpec {
             cwd,
             db: None,
             workers: 0,
+            sql_log: false,
             extra_args: Vec::new(),
             env: EnvVars::default(),
         }
@@ -187,6 +197,10 @@ impl LaunchSpec {
         }
         args.push("--workers".into());
         args.push(self.workers.to_string().into());
+        if self.sql_log {
+            // Odoo adds CLI log handlers to the ones of odoo.conf.
+            args.push(SQL_LOG_HANDLER.into());
+        }
         args.extend(self.extra_args.iter().map(OsString::from));
         args.extend(once.iter().cloned());
         args

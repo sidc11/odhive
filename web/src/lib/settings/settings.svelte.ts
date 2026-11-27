@@ -38,6 +38,7 @@ function sameSettings(a: InstanceSettings, b: InstanceSettings): boolean {
   return (
     a.reload_mode === b.reload_mode &&
     a.autofix_mode === b.autofix_mode &&
+    (a.sql_log ?? false) === (b.sql_log ?? false) &&
     JSON.stringify(a.extra_args) === JSON.stringify(b.extra_args) &&
     env(a) === env(b)
   )
@@ -52,6 +53,7 @@ export class SettingsForm {
 
   reloadMode = $state<ReloadMode>('auto')
   autofixMode = $state<AutofixMode>('auto')
+  sqlLog = $state(false)
   /** Extra arguments, one per line. */
   argsText = $state('')
   envRows = $state<EnvRow[]>([])
@@ -79,6 +81,7 @@ export class SettingsForm {
     return {
       reload_mode: this.reloadMode,
       autofix_mode: this.autofixMode,
+      sql_log: this.sqlLog,
       extra_args: parseArgs(this.argsText),
       env: envFromRows(this.envRows),
     }
@@ -138,6 +141,7 @@ export class SettingsForm {
     const s = info.settings
     this.reloadMode = s.reload_mode
     this.autofixMode = s.autofix_mode
+    this.sqlLog = s.sql_log ?? false
     this.argsText = formatArgs(s.extra_args)
     this.envRows = Object.entries(s.env).map(([key, value]) => ({ id: this.nextRow++, key, value }))
     this.projectEnv = info.project_env

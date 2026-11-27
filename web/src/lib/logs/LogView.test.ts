@@ -177,11 +177,36 @@ describe('LogView', () => {
     expect([...scroller.querySelectorAll('[data-seq]')].map((row) => row.getAttribute('data-seq'))).toEqual(['3'])
 
     await fireEvent.click(screen.getByRole('button', { name: 'ERROR' }))
-    expect(await screen.findByText('No entries match the level and logger filters.')).toBeInTheDocument()
+    expect(await screen.findByText('No entries match the level, source and logger filters.')).toBeInTheDocument()
     // New entries go through the filter too.
     connection.receive(msg.logs([record(4, 'later', { level: 'critical' })]))
     await tick()
     expect(scroller.querySelector('[data-seq="4"]')).not.toBeNull()
+  })
+
+  it('shows SQL queries as their own source, whatever the level chips', async () => {
+    const { connection, scroller } = setup()
+    connection.receive(msg.subscribed(1))
+    connection.receive(
+      msg.logs([
+        record(1, 'ready'),
+        record(2, '[0.412 ms] query: SELECT 1', { level: 'debug', logger: 'odoo.sql_db' }),
+        record(3, 'boot', { level: 'debug' }),
+      ]),
+    )
+    await tick()
+    const seqs = (): (string | null)[] => [...scroller.querySelectorAll('[data-seq]')].map((row) => row.getAttribute('data-seq'))
+    const sources = screen.getByRole('group', { name: 'Sources' })
+    expect(sources).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'DEBUG' }))
+    expect(seqs()).toEqual(['1', '2'])
+    const sql = screen.getByRole('button', { name: 'SQL' })
+    await fireEvent.click(sql)
+    expect(sql).toHaveAttribute('aria-pressed', 'false')
+    expect(seqs()).toEqual(['1'])
+    await fireEvent.click(sql)
+    await fireEvent.click(screen.getByRole('button', { name: 'Odoo' }))
+    expect(seqs()).toEqual(['2'])
   })
 
   it('filters by logger after a typing pause', async () => {

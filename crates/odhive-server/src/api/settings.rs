@@ -22,6 +22,10 @@ pub struct InstanceSettings {
     pub reload_mode: ReloadMode,
     /// What happens when Odoo misses a Python package.
     pub autofix_mode: AutofixMode,
+    /// Log every SQL query Odoo runs (`--log-handler=odoo.sql_db:DEBUG`).
+    /// Left out = off.
+    #[serde(default)]
+    pub sql_log: bool,
     /// Extra `odoo-bin` arguments, one argv entry each (never split or
     /// passed through a shell). Options OdHive sets itself are refused.
     #[schema(example = json!(["--dev=xml", "--log-level=debug"]))]
@@ -36,6 +40,7 @@ impl InstanceSettings {
         Self {
             reload_mode: i.reload_mode,
             autofix_mode: i.autofix_mode,
+            sql_log: i.sql_log,
             extra_args: i.extra_args.clone(),
             env: i.env.0.clone(),
         }
@@ -44,6 +49,7 @@ impl InstanceSettings {
     fn apply(self, i: &mut Instance) {
         i.reload_mode = self.reload_mode;
         i.autofix_mode = self.autofix_mode;
+        i.sql_log = self.sql_log;
         i.extra_args = self.extra_args;
         i.env = EnvVars(self.env);
     }

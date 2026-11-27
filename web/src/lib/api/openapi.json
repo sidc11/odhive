@@ -5036,6 +5036,10 @@
           "reload_mode": {
             "$ref": "#/components/schemas/ReloadMode",
             "description": "What happens when files of the project's modules change."
+          },
+          "sql_log": {
+            "type": "boolean",
+            "description": "Log every SQL query Odoo runs (`--log-handler=odoo.sql_db:DEBUG`).\nLeft out = off."
           }
         },
         "additionalProperties": false
@@ -5104,7 +5108,8 @@
           "db",
           "workers",
           "reload_mode",
-          "autofix_mode"
+          "autofix_mode",
+          "sql_log"
         ],
         "properties": {
           "autofix_mode": {
@@ -5162,6 +5167,10 @@
           "reload_mode": {
             "$ref": "#/components/schemas/ReloadMode",
             "description": "Smart Reload mode."
+          },
+          "sql_log": {
+            "type": "boolean",
+            "description": "Odoo logs every SQL query it runs (applies at the next start)."
           },
           "workers": {
             "type": "integer",

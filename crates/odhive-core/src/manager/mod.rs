@@ -194,6 +194,7 @@ impl InstancePlan {
         spec.conf = conf;
         spec.db = Some(instance.db_name(&project.name));
         spec.workers = instance.workers;
+        spec.sql_log = instance.sql_log;
         spec.extra_args.clone_from(&instance.extra_args);
         spec.env = instance.merged_env(&project.env);
         Ok(Self {

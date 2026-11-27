@@ -58,6 +58,7 @@ const project: Project = {
       workers: 0,
       reload_mode: 'auto',
       autofix_mode: 'auto',
+      sql_log: false,
       live: running,
       external: null,
     },

@@ -104,6 +104,8 @@ pub struct InstanceView {
     pub reload_mode: ReloadMode,
     /// Dependency auto-fix mode.
     pub autofix_mode: AutofixMode,
+    /// Odoo logs every SQL query it runs (applies at the next start).
+    pub sql_log: bool,
     /// State while this service runs it (also after it ended, until it is
     /// stopped or started again).
     pub live: Option<InstanceInfo>,
@@ -171,6 +173,7 @@ fn view(svc: &Service, cfg: &GlobalConfig, p: &LoadedProject) -> ApiResult<Proje
             workers: i.workers,
             reload_mode: i.reload_mode,
             autofix_mode: i.autofix_mode,
+            sql_log: i.sql_log,
             live: svc.manager().get(&owner),
             external,
         });

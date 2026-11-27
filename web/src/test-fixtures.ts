@@ -21,7 +21,7 @@ import type { DatabaseJob } from './lib/databases/progress'
 import type { SocketLike } from './lib/live.svelte'
 
 export function instanceView(id: string, extra: Partial<InstanceView> = {}): InstanceView {
-  return { id, db: `db_${id}`, workers: 0, reload_mode: 'auto', autofix_mode: 'ask', ...extra }
+  return { id, db: `db_${id}`, workers: 0, reload_mode: 'auto', autofix_mode: 'ask', sql_log: false, ...extra }
 }
 
 export function live(project: string, instance: string, status: Status): InstanceInfo {

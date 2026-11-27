@@ -180,3 +180,17 @@ async fn a_self_connected_socket_is_detected() {
     let stream = socket.connect(addr).await.expect("self-connect");
     assert!(connected_to_itself(&stream));
 }
+
+#[test]
+fn sql_log_adds_the_sql_handler_before_extra_args() {
+    let mut s = spec();
+    s.extra_args = vec!["--dev=xml".into()];
+    assert!(!s.odoo_args(8069, 8072).contains(&SQL_LOG_HANDLER.into()));
+    s.sql_log = true;
+    let args = s.odoo_args(8069, 8072);
+    let at = |a: &str| args.iter().position(|x| x == a).expect("present");
+    assert_eq!(args.iter().filter(|a| *a == SQL_LOG_HANDLER).count(), 1);
+    assert!(at("--workers") < at(SQL_LOG_HANDLER));
+    assert_eq!(at(SQL_LOG_HANDLER) + 1, at("--dev=xml"));
+    assert_eq!(SQL_LOG_HANDLER, format!("--log-handler={SQL_LOGGER}:DEBUG"));
+}

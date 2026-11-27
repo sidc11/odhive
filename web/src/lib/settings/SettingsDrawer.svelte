@@ -176,6 +176,20 @@
               {/each}
             </fieldset>
 
+            <fieldset class="flex flex-col gap-2">
+              <legend class="mb-2 text-sm font-medium">SQL log</legend>
+              <label class={option}>
+                <input type="checkbox" name="sql_log" class="mt-1 accent-accent" bind:checked={f.sqlLog} />
+                <span class="min-w-0">
+                  <span class="block text-sm font-medium">Log SQL queries</span>
+                  <span class="block text-sm text-fg-muted">
+                    Odoo logs every query it runs (<code>odoo.sql_db:DEBUG</code>), shown as the SQL source in the log viewer.
+                    Busy servers log a lot.
+                  </span>
+                </span>
+              </label>
+            </fieldset>
+
             <div class="flex flex-col gap-2">
               <label for="settings-args" class="text-sm font-medium">Extra odoo-bin arguments</label>
               <textarea
