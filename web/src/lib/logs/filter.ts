@@ -24,6 +24,25 @@ export function chipOf(level: LogRecord['level']): LevelChip {
   return level === null || level === undefined || level === 'runbot' ? 'info' : level
 }
 
+/**
+ * Source chips: Odoo's own log and its SQL query log (DEBUG entries of
+ * `odoo.sql_db`, written when the instance's SQL log is on).
+ */
+export const SOURCE_CHIPS = ['odoo', 'sql'] as const
+export type SourceChip = (typeof SOURCE_CHIPS)[number]
+
+export const SOURCE_CHIP_LABELS: Record<SourceChip, string> = {
+  odoo: 'Odoo',
+  sql: 'SQL',
+}
+
+/** Logger of Odoo's SQL query log. */
+export const SQL_LOGGER = 'odoo.sql_db'
+
+export function sourceOf(record: Pick<LogRecord, 'level' | 'logger'>): SourceChip {
+  return record.logger === SQL_LOGGER && record.level === 'debug' ? 'sql' : 'odoo'
+}
+
 export interface LoggerFilter {
   include: string[]
   exclude: string[]
@@ -47,14 +66,25 @@ export function parseLoggers(text: string): LoggerFilter {
   return { include, exclude }
 }
 
-/** Rows shown with these levels and logger filter; markers and OdHive's events always are. */
-export function rowFilter(levels: ReadonlySet<LevelChip>, loggers: LoggerFilter): (row: LogRow) => boolean {
+/**
+ * Rows shown with these levels, logger filter and sources; markers and
+ * OdHive's events always are. Level chips apply to the Odoo source only (SQL
+ * queries are all DEBUG).
+ */
+export function rowFilter(
+  levels: ReadonlySet<LevelChip>,
+  loggers: LoggerFilter,
+  sources: ReadonlySet<SourceChip> = new Set(SOURCE_CHIPS),
+): (row: LogRow) => boolean {
   const all = LEVEL_CHIPS.every((chip) => levels.has(chip))
-  if (all && loggers.include.length === 0 && loggers.exclude.length === 0) return () => true
+  const allSources = SOURCE_CHIPS.every((chip) => sources.has(chip))
+  if (all && allSources && loggers.include.length === 0 && loggers.exclude.length === 0) return () => true
   return (row) => {
     if (row.kind !== 'entry' || alwaysShown(row.record)) return true
     const { level, logger } = row.record
-    if (!all && !levels.has(chipOf(level))) return false
+    const source = sourceOf(row.record)
+    if (!allSources && !sources.has(source)) return false
+    if (!all && source === 'odoo' && !levels.has(chipOf(level))) return false
     const name = (logger ?? '').toLowerCase()
     if (loggers.exclude.some((word) => name.includes(word))) return false
     return loggers.include.length === 0 || loggers.include.some((word) => name.includes(word))

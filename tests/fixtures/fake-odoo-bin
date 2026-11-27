@@ -23,6 +23,8 @@ Simulation flags (not real Odoo options):
   --odoo-version VERSION         version reported in logs (default: 19.0)
   --flood N                      after startup, log N INFO lines as fast as possible
   --log-env NAME                 log the value of environment variable NAME at startup
+  --log-handler LOGGER:LEVEL     with odoo.sql_db:DEBUG (or --log-sql): log a few SQL
+                                 queries (odoo.sql_db DEBUG) after the registry loads
 
 Database commands (need PostgreSQL client tools; `FAKE_PG_BIN` names their
 folder, libpq `PG*` variables say where the server is):
@@ -139,6 +141,8 @@ def parse_args(argv):
     p.add_argument("--odoo-version", default="19.0")
     p.add_argument("--flood", type=int, default=0)
     p.add_argument("--log-env", action="append", default=[])
+    p.add_argument("--log-handler", action="append", default=[])
+    p.add_argument("--log-sql", dest="log_handler", action="append_const", const="odoo.sql_db:DEBUG")
     p.add_argument("--stop-after-init", action="store_true")
     p.add_argument("--no-http", action="store_true")
     args, _unknown = p.parse_known_args(argv)
@@ -485,6 +489,13 @@ def main(argv):
                 log("INFO", "odoo.modules.loading", f"Loading module {mod} (2/42)", db=db)
         log("INFO", "odoo.modules.loading", "42 modules loaded in 0.52s, 0 queries (+0 extra)", db=db)
         log("INFO", "odoo.registry", "Registry loaded in 0.734s", db=db)
+
+    if "odoo.sql_db:DEBUG" in args.log_handler:
+        for ms, query in [
+            (0.412, 'SELECT "res_users"."id" FROM "res_users" WHERE "res_users"."active" IS TRUE'),
+            (1.250, 'SELECT "ir_module_module"."name" FROM "ir_module_module" WHERE "ir_module_module"."state" = \'installed\''),
+        ]:
+            log("DEBUG", "odoo.sql_db", f"[{ms:.3f} ms] query: {query}", db=db)
 
     for i in range(args.flood):
         log("INFO", "odoo.flood", f"flood line {i + 1}", db=db)

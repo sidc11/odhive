@@ -2,7 +2,16 @@
   import { tick, untrack } from 'svelte'
   import { entryCount, rowsText, selectedRowIds } from './copy'
   import { buildExport, download, type ExportFormat } from './export'
-  import { compileSearch, LEVEL_CHIPS, parseLoggers, rowFilter, rowMatcher, type LevelChip } from './filter'
+  import {
+    compileSearch,
+    LEVEL_CHIPS,
+    parseLoggers,
+    rowFilter,
+    rowMatcher,
+    SOURCE_CHIPS,
+    type LevelChip,
+    type SourceChip,
+  } from './filter'
   import { LogLines } from './lines'
   import LogRowView from './LogRowView.svelte'
   import LogToolbar from './LogToolbar.svelte'
@@ -48,6 +57,7 @@
 
   // Filters and search, as typed and as applied (after a typing pause).
   let levels = $state.raw(new Set<LevelChip>(LEVEL_CHIPS))
+  let sources = $state.raw(new Set<SourceChip>(SOURCE_CHIPS))
   let loggers = $state('')
   let query = $state('')
   let regex = $state(false)
@@ -80,7 +90,7 @@
   })
 
   $effect(() => {
-    const filter = rowFilter(levels, parseLoggers(appliedLoggers))
+    const filter = rowFilter(levels, parseLoggers(appliedLoggers), sources)
     untrack(() => applyFilter(filter))
   })
 
@@ -214,6 +224,7 @@
           rows,
           filter: {
             levels,
+            sources,
             loggers: appliedLoggers,
             search: pattern ? appliedQuery : '',
             regex,
@@ -361,6 +372,7 @@
 <div class="flex min-h-0 flex-1 flex-col gap-2" {onkeydown}>
 <LogToolbar
   bind:levels
+  bind:sources
   bind:loggers
   bind:query
   bind:regex
@@ -410,7 +422,7 @@
     {#if empty}
       <p class="absolute inset-0 flex items-center justify-center p-4 text-center font-sans text-sm text-fg-muted">
         {#if filteredOut}
-          No entries match the level and logger filters.
+          No entries match the level, source and logger filters.
         {:else if stream.running === null}
           Connecting to the log…
         {:else if stream.running}

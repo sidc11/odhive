@@ -63,6 +63,7 @@ describe('filterLines', () => {
     expect(
       filterLines({
         levels: new Set<LevelChip>(['warning', 'error']),
+        sources: new Set(['sql']),
         loggers: ' odoo.addons -werkzeug ',
         search: 'sale\\.order',
         regex: true,
@@ -71,9 +72,11 @@ describe('filterLines', () => {
       }),
     ).toEqual([
       'Levels: WARN ERROR',
+      'Sources: SQL',
       'Loggers: odoo.addons -werkzeug',
       'Search (regex, match case, matching entries only): sale\\.order',
     ])
+    expect(filterLines({ ...NO_FILTER, sources: new Set(['odoo', 'sql']) })).toEqual([])
     expect(filterLines({ ...NO_FILTER, levels: new Set(), search: 'x' })).toEqual([
       'Levels: none',
       'Search (text): x',
@@ -125,6 +128,7 @@ describe('buildExport', () => {
       exported_at: NOW.toISOString(),
       filter: {
         levels: ['error'],
+        sources: ['odoo', 'sql'],
         loggers: '',
         search: 'boom',
         regex: false,

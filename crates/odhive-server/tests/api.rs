@@ -609,7 +609,7 @@ async fn instance_settings_are_saved_and_used_at_the_next_start() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body["settings"],
-        json!({ "reload_mode": "auto", "autofix_mode": "auto", "extra_args": [], "env": {} })
+        json!({ "reload_mode": "auto", "autofix_mode": "auto", "sql_log": false, "extra_args": [], "env": {} })
     );
     assert_eq!(body["project_env"], json!(["SHARED", "STAGE"]));
     assert!(
@@ -624,6 +624,7 @@ async fn instance_settings_are_saved_and_used_at_the_next_start() {
     let valid = json!({
         "reload_mode": "restart",
         "autofix_mode": "ask",
+        "sql_log": true,
         "extra_args": ["--log-env=STAGE", "--log-env=SHARED"],
         "env": { "STAGE": "instance" },
     });
@@ -660,6 +661,11 @@ async fn instance_settings_are_saved_and_used_at_the_next_start() {
         ),
         (
             json!({ "workers": 4 }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_body",
+        ),
+        (
+            json!({ "sql_log": "yes" }),
             StatusCode::UNPROCESSABLE_ENTITY,
             "bad_body",
         ),
@@ -704,6 +710,7 @@ async fn instance_settings_are_saved_and_used_at_the_next_start() {
     let main = &project["instances"][0];
     assert_eq!(main["reload_mode"], "restart");
     assert_eq!(main["autofix_mode"], "ask");
+    assert_eq!(main["sql_log"], true);
     // Env values stay out of the project view.
     assert!(!project.to_string().contains("STAGE"), "{project}");
     let saved = odhive_core::project::ProjectConfig::load(&dir).expect("load");
@@ -727,7 +734,12 @@ async fn instance_settings_are_saved_and_used_at_the_next_start() {
             .iter()
             .filter_map(|r| r["message"].as_str())
             .collect();
-        if lines.contains(&"env STAGE=instance") && lines.contains(&"env SHARED=project") {
+        let sql = page["records"]
+            .as_array()
+            .expect("records")
+            .iter()
+            .any(|r| r["logger"] == "odoo.sql_db" && r["level"] == "debug");
+        if lines.contains(&"env STAGE=instance") && lines.contains(&"env SHARED=project") && sql {
             break;
         }
         assert!(Instant::now() < deadline, "env not logged: {lines:?}");
@@ -742,6 +754,7 @@ async fn instance_settings_are_saved_and_used_at_the_next_start() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["settings"]["sql_log"], false, "left out = off");
     let (status, _) = api
         .post("/api/v1/projects/shop/instances/main/stop", None)
         .await;

@@ -1,9 +1,18 @@
 <script lang="ts">
   import { EXPORT_FORMATS, type ExportFormat } from './export'
-  import { LEVEL_CHIP_LABELS, LEVEL_CHIPS, MAX_QUERY, type LevelChip } from './filter'
+  import {
+    LEVEL_CHIP_LABELS,
+    LEVEL_CHIPS,
+    MAX_QUERY,
+    SOURCE_CHIP_LABELS,
+    SOURCE_CHIPS,
+    type LevelChip,
+    type SourceChip,
+  } from './filter'
 
   let {
     levels = $bindable(),
+    sources = $bindable(),
     loggers = $bindable(),
     query = $bindable(),
     regex = $bindable(),
@@ -21,6 +30,7 @@
     onexport,
   }: {
     levels: Set<LevelChip>
+    sources: Set<SourceChip>
     loggers: string
     query: string
     regex: boolean
@@ -141,6 +151,10 @@
     levels = levels.has(chip) ? new Set([...levels].filter((other) => other !== chip)) : new Set([...levels, chip])
   }
 
+  function toggleSource(chip: SourceChip): void {
+    sources = sources.has(chip) ? new Set([...sources].filter((other) => other !== chip)) : new Set([...sources, chip])
+  }
+
   function onkeydown(event: KeyboardEvent): void {
     if (event.key === 'Enter') {
       event.preventDefault()
@@ -181,6 +195,23 @@
         onclick={() => toggle(chip)}
       >
         {LEVEL_CHIP_LABELS[chip]}
+      </button>
+    {/each}
+  </div>
+
+  <div class="flex flex-wrap gap-1" role="group" aria-label="Sources">
+    {#each SOURCE_CHIPS as chip (chip)}
+      {@const on = sources.has(chip)}
+      <button
+        type="button"
+        class={`inline-flex min-h-8 items-center rounded-full border px-2.5 text-xs ${
+          on ? 'border-line bg-surface-raised text-fg' : 'border-dashed border-line text-fg-muted line-through'
+        }`}
+        aria-pressed={on}
+        title={chip === 'sql' ? 'SQL queries: turn on “Log SQL queries” in the instance settings' : undefined}
+        onclick={() => toggleSource(chip)}
+      >
+        {SOURCE_CHIP_LABELS[chip]}
       </button>
     {/each}
   </div>

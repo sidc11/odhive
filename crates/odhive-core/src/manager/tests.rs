@@ -12,6 +12,7 @@ fn project() -> ProjectConfig {
     test.db = Some("shop_tests".into());
     test.workers = 2;
     test.extra_args = vec!["--dev=xml".into()];
+    test.sql_log = true;
     test.env.0.insert("PGHOST".into(), "/run/pg-test".into());
     test.env.0.insert("STAGE".into(), "test".into());
     p.instances.push(test);
@@ -38,6 +39,7 @@ fn plan_takes_ports_db_and_args_from_the_instance() {
     assert!(main.ports_automatic());
     assert_eq!(main.spec.workers, 0);
     assert!(main.spec.extra_args.is_empty());
+    assert!(!main.spec.sql_log);
 
     let test = plan(&p, "test").expect("test");
     assert_eq!(test.http_port, Some(9069));
@@ -45,6 +47,7 @@ fn plan_takes_ports_db_and_args_from_the_instance() {
     assert_eq!(test.spec.db.as_deref(), Some("shop_tests"));
     assert_eq!(test.spec.workers, 2);
     assert_eq!(test.spec.extra_args, ["--dev=xml"]);
+    assert!(test.spec.sql_log);
     assert_eq!(test.spec.cwd, Path::new("/w/projects/shop"));
     assert_eq!(
         test.spec.conf.as_deref(),

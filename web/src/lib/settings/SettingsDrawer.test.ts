@@ -52,6 +52,9 @@ describe('SettingsDrawer', () => {
     const { drawer, api, projects } = setup()
     const dialog = await open(drawer)
     await fireEvent.click(within(dialog).getByRole('radio', { name: /^Off Files are not watched/ }))
+    const sql = within(dialog).getByRole('checkbox', { name: /^Log SQL queries/ })
+    expect(sql).not.toBeChecked()
+    await fireEvent.click(sql)
     await fireEvent.input(within(dialog).getByRole('textbox', { name: 'Extra odoo-bin arguments' }), {
       target: { value: '--dev=xml\n--log-level=debug' },
     })
@@ -63,6 +66,7 @@ describe('SettingsDrawer', () => {
     expect(api.putInstanceSettings).toHaveBeenCalledWith('shop', 'main', {
       reload_mode: 'off',
       autofix_mode: 'auto',
+      sql_log: true,
       extra_args: ['--dev=xml', '--log-level=debug'],
       env: { STAGE: 'dev' },
     })

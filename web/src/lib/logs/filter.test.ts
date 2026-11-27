@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { chipOf, compileSearch, highlight, LEVEL_CHIPS, parseLoggers, rowFilter, rowMatcher, type LevelChip } from './filter'
+import {
+  chipOf,
+  compileSearch,
+  highlight,
+  LEVEL_CHIPS,
+  parseLoggers,
+  rowFilter,
+  rowMatcher,
+  sourceOf,
+  type LevelChip,
+  type SourceChip,
+} from './filter'
 import type { LogRow } from './rows'
 import { marked, record } from './test-fixtures'
 
@@ -31,6 +42,32 @@ describe('level filter', () => {
     expect(filter(entry(4, { level: 'runbot' }))).toBe(false)
     expect(filter({ id: 5, kind: 'gap', skipped: 3, lines: 1 })).toBe(true)
     expect(filter({ id: 6, kind: 'reset', lines: 1 })).toBe(true)
+  })
+})
+
+describe('source filter', () => {
+  const sql = (id: number): LogRow => entry(id, { level: 'debug', logger: 'odoo.sql_db' }, '[0.412 ms] query: SELECT 1')
+
+  it('puts DEBUG entries of odoo.sql_db in the SQL source, everything else in Odoo', () => {
+    expect(sourceOf({ level: 'debug', logger: 'odoo.sql_db' })).toBe('sql')
+    expect(sourceOf({ level: 'info', logger: 'odoo.sql_db' })).toBe('odoo')
+    expect(sourceOf({ level: 'debug', logger: 'odoo.sql_db.extra' })).toBe('odoo')
+    expect(sourceOf({ level: null, logger: null })).toBe('odoo')
+  })
+
+  it('hides sources that are off', () => {
+    const onlyOdoo = rowFilter(ALL, NONE, new Set<SourceChip>(['odoo']))
+    expect(onlyOdoo(sql(1))).toBe(false)
+    expect(onlyOdoo(entry(2))).toBe(true)
+    const onlySql = rowFilter(ALL, NONE, new Set<SourceChip>(['sql']))
+    expect(onlySql(sql(1))).toBe(true)
+    expect(onlySql(entry(2))).toBe(false)
+    expect(onlySql({ id: 3, kind: 'gap', skipped: 3, lines: 1 })).toBe(true)
+  })
+
+  it('shows SQL queries whatever the level chips; the logger filter still applies', () => {
+    expect(rowFilter(new Set<LevelChip>(['error']), NONE)(sql(1))).toBe(true)
+    expect(rowFilter(ALL, parseLoggers('-sql_db'))(sql(1))).toBe(false)
   })
 })
 

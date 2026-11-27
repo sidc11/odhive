@@ -431,3 +431,50 @@ test('the shown entries export as .log, .txt and .json', async ({ page, signIn, 
     await client.put(SETTINGS, saved.settings)
   }
 })
+
+test('the SQL log is turned on in the settings and shown as its own source', async ({ page, signIn, request, e2e }) => {
+  const client = api(request, e2e)
+  const saved = (await (await client.get(SETTINGS)).json()) as { settings: Record<string, unknown> }
+
+  try {
+    await signIn()
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Settings of shop / main' }).click()
+    const drawer = page.getByRole('dialog', { name: 'Instance settings' })
+    const toggle = drawer.getByRole('checkbox', { name: /^Log SQL queries/ })
+    await expect(toggle).not.toBeChecked()
+    await toggle.check()
+    await drawer.getByRole('button', { name: 'Save' }).click()
+    await expect(drawer.getByText(/^Saved/)).toBeVisible()
+    const after = (await (await client.get(SETTINGS)).json()) as { settings: { sql_log: boolean } }
+    expect(after.settings.sql_log).toBe(true)
+    for (const scheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: scheme })
+      expect(await seriousViolations(page), `settings, ${scheme}`).toEqual([])
+    }
+    await drawer.getByRole('button', { name: 'Close' }).click()
+
+    await page.goto('/projects/shop/instances/main')
+    const log = page.getByRole('region', { name: 'Log of shop/main' })
+    const start = await client.post('/api/v1/projects/shop/instances/main/start')
+    expect(start.status(), await start.text()).toBe(200)
+    const query = log.getByText('query: SELECT "res_users"."id"', { exact: false })
+    await expect(query).toBeVisible({ timeout: 30_000 })
+
+    // Hiding DEBUG keeps the queries; the SQL chip hides them.
+    await page.getByRole('button', { name: 'DEBUG' }).click()
+    await expect(query).toBeVisible()
+    const sql = page.getByRole('group', { name: 'Sources' }).getByRole('button', { name: 'SQL' })
+    await sql.click()
+    await expect(sql).toHaveAttribute('aria-pressed', 'false')
+    await expect(query).toHaveCount(0)
+    await expect(log.getByText('Registry loaded', { exact: false })).toBeVisible()
+    for (const scheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: scheme })
+      expect(await seriousViolations(page), `sources, ${scheme}`).toEqual([])
+    }
+  } finally {
+    await client.post('/api/v1/projects/shop/instances/main/stop')
+    await client.put(SETTINGS, saved.settings)
+  }
+})

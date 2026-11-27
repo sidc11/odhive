@@ -3,7 +3,7 @@
 // or `.json` (the records themselves).
 import type { LogRecord } from '../api'
 import { entryText } from './copy'
-import { LEVEL_CHIP_LABELS, LEVEL_CHIPS, type LevelChip } from './filter'
+import { LEVEL_CHIP_LABELS, LEVEL_CHIPS, SOURCE_CHIP_LABELS, SOURCE_CHIPS, type LevelChip, type SourceChip } from './filter'
 import { eventOf } from './marks'
 import { LEVEL_LABELS, type LogRow } from './rows'
 
@@ -19,6 +19,8 @@ const MIME: Record<ExportFormat, string> = {
 /** What the view filtered by, as the user set it. */
 export interface ExportFilter {
   levels: ReadonlySet<LevelChip>
+  /** Shown sources; left out = all. */
+  sources?: ReadonlySet<SourceChip>
   loggers: string
   /** The applied search; `''` for none. */
   search: string
@@ -82,6 +84,11 @@ export function filterLines(filter: ExportFilter): string[] {
     const shown = LEVEL_CHIPS.filter((chip) => filter.levels.has(chip)).map((chip) => LEVEL_CHIP_LABELS[chip])
     lines.push(`Levels: ${shown.length > 0 ? shown.join(' ') : 'none'}`)
   }
+  const sources = filter.sources
+  if (sources && !SOURCE_CHIPS.every((chip) => sources.has(chip))) {
+    const shown = SOURCE_CHIPS.filter((chip) => sources.has(chip)).map((chip) => SOURCE_CHIP_LABELS[chip])
+    lines.push(`Sources: ${shown.length > 0 ? shown.join(' ') : 'none'}`)
+  }
   if (filter.loggers.trim() !== '') lines.push(`Loggers: ${filter.loggers.trim()}`)
   if (filter.search !== '') {
     const how = [filter.regex ? 'regex' : 'text', ...(filter.caseSensitive ? ['match case'] : [])].join(', ')
@@ -143,6 +150,7 @@ export function buildExport(input: ExportInput, format: ExportFormat): ExportFil
       exported_at: now.toISOString(),
       filter: {
         levels: LEVEL_CHIPS.filter((chip) => filter.levels.has(chip)),
+        sources: SOURCE_CHIPS.filter((chip) => filter.sources?.has(chip) ?? true),
         loggers: filter.loggers.trim(),
         search: filter.search,
         regex: filter.regex,

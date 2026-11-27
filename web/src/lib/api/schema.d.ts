@@ -1728,6 +1728,11 @@ export interface components {
             extra_args: string[];
             /** @description What happens when files of the project's modules change. */
             reload_mode: components["schemas"]["ReloadMode"];
+            /**
+             * @description Log every SQL query Odoo runs (`--log-handler=odoo.sql_db:DEBUG`).
+             *     Left out = off.
+             */
+            sql_log?: boolean;
         };
         /** @description An instance's settings and what they are checked against. */
         InstanceSettingsInfo: {
@@ -1777,6 +1782,8 @@ export interface components {
             live?: components["schemas"]["InstanceInfo"] | null;
             /** @description Smart Reload mode. */
             reload_mode: components["schemas"]["ReloadMode"];
+            /** @description Odoo logs every SQL query it runs (applies at the next start). */
+            sql_log: boolean;
             /**
              * Format: int32
              * @description Odoo `--workers`.

@@ -24,6 +24,7 @@
 //! extra_args = ["--dev=xml"]
 //! reload_mode = "auto"      # auto | restart | off
 //! autofix_mode = "auto"     # auto | ask | off
+//! sql_log = false           # true = log every SQL query (odoo.sql_db:DEBUG)
 //!
 //! [instances.env]           # on top of [env], for this instance only
 //! ODOO_STAGE = "dev"
@@ -277,6 +278,9 @@ pub struct Instance {
     /// Missing-dependency behavior.
     #[serde(default)]
     pub autofix_mode: AutofixMode,
+    /// Log every SQL query Odoo runs (`--log-handler=odoo.sql_db:DEBUG`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sql_log: bool,
     /// Environment variables for this instance only; they override the
     /// project's `[env]` key by key.
     #[serde(default, skip_serializing_if = "EnvVars::is_empty")]
@@ -296,6 +300,7 @@ impl Instance {
             extra_args: Vec::new(),
             reload_mode: ReloadMode::default(),
             autofix_mode: AutofixMode::default(),
+            sql_log: false,
             env: EnvVars::default(),
         }
     }
@@ -637,6 +642,7 @@ mod tests {
         test.workers = 2;
         test.reload_mode = ReloadMode::Restart;
         test.autofix_mode = AutofixMode::Ask;
+        test.sql_log = true;
         test.env.0.insert("PGHOST".into(), "/run/pg-test".into());
         test.env.0.insert("STAGE_TOKEN".into(), "s3cret".into());
         p.instances.push(test);
@@ -676,6 +682,8 @@ mod tests {
         assert!(text.contains("[[instances]]"));
         assert!(text.contains("reload_mode = \"restart\""));
         assert!(text.contains("autofix_mode = \"ask\""));
+        assert_eq!(text.matches("sql_log = true").count(), 1);
+        assert!(!text.contains("sql_log = false"));
         assert!(text.contains("[odoo_options]"));
         assert!(text.contains("[logs]") && text.contains("file_keep = 9"));
         assert!(text.contains("[odoo_sections.queue_job]"));
@@ -720,6 +728,7 @@ mod tests {
         assert_eq!(i.reload_mode, ReloadMode::Auto);
         assert_eq!(i.autofix_mode, AutofixMode::Auto);
         assert_eq!(i.workers, 0);
+        assert!(!i.sql_log);
         assert_eq!(i.http_port, None);
         assert_eq!(i.db_name("acme"), "acme_main");
         assert!(p.addons_paths.is_empty() && p.env.is_empty());
